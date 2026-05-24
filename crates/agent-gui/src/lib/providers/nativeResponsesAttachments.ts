@@ -30,6 +30,14 @@ type NativeAttachmentContentPart =
       file_data: string;
     };
 
+type OpenAIChatCompletionsNativeAttachmentContentPart = {
+  type: "image_url";
+  image_url: {
+    url: string;
+    detail: "auto";
+  };
+};
+
 type AnthropicNativeAttachmentContentPart =
   | {
       type: "image";
@@ -75,6 +83,11 @@ const WORKSPACE_UPLOAD_INSTRUCTION = [
 const NATIVE_UPLOAD_INSTRUCTION = [
   "Selected files are attached to this OpenAI Responses request as native inputs when supported, and are also available in the workspace paths below.",
   "Analyze the native attachments directly first. Use Read only when you need exact workspace file access, edits, or native attachment content is unavailable:",
+].join("\n");
+
+const OPENAI_CHAT_COMPLETIONS_NATIVE_UPLOAD_INSTRUCTION = [
+  "Selected images are attached to this OpenAI Chat Completions request as native image inputs when supported, and are also available in the workspace paths below.",
+  "Analyze the native image attachments directly first. Use Read only when you need exact workspace file access, edits, or native attachment content is unavailable:",
 ].join("\n");
 
 const ANTHROPIC_NATIVE_UPLOAD_INSTRUCTION = [
@@ -147,6 +160,10 @@ function normalizeMimeType(value: unknown) {
 
 function isOpenAIResponsesModel(model: Model<any>) {
   return model.api === "openai-responses";
+}
+
+function isOpenAICompletionsModel(model: Model<any>) {
+  return model.api === "openai-completions";
 }
 
 function isAnthropicMessagesModel(model: Model<any>) {
@@ -239,6 +256,29 @@ async function buildNativeAttachmentContentPart(params: {
   };
 }
 
+async function buildOpenAIChatCompletionsNativeAttachmentContentPart(params: {
+  workdir: string;
+  model: Model<any>;
+  file: PendingUploadedFile;
+}): Promise<OpenAIChatCompletionsNativeAttachmentContentPart | null> {
+  const { file, model, workdir } = params;
+  if (file.kind !== "image" || !modelSupportsImageInput(model)) return null;
+
+  const attachment = await readNativeAttachment({ workdir, file });
+  const mimeType = normalizeMimeType(attachment.mimeType);
+  if (!mimeType || !attachment.data || !NATIVE_IMAGE_MIME_TYPES.has(mimeType)) {
+    return null;
+  }
+
+  return {
+    type: "image_url",
+    image_url: {
+      url: buildDataUrl(mimeType, attachment.data),
+      detail: "auto",
+    },
+  };
+}
+
 function normalizeUserContent(content: unknown): unknown[] {
   if (Array.isArray(content)) return content.slice();
   if (typeof content === "string") return [{ type: "input_text", text: content }];
@@ -261,6 +301,33 @@ function applyNativeUploadInstruction(content: unknown[]) {
     return next;
   }
   return [{ type: "input_text", text: NATIVE_UPLOAD_INSTRUCTION }, ...next];
+}
+
+function normalizeOpenAIChatCompletionsUserContent(content: unknown): unknown[] {
+  if (Array.isArray(content)) return content.slice();
+  if (typeof content === "string") return [{ type: "text", text: content }];
+  return [];
+}
+
+function applyOpenAIChatCompletionsNativeUploadInstruction(content: unknown[]) {
+  const next = content.slice();
+  for (let index = 0; index < next.length; index += 1) {
+    const part = next[index];
+    if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") {
+      continue;
+    }
+    next[index] = {
+      ...part,
+      text: part.text.includes(WORKSPACE_UPLOAD_INSTRUCTION)
+        ? part.text.replace(
+            WORKSPACE_UPLOAD_INSTRUCTION,
+            OPENAI_CHAT_COMPLETIONS_NATIVE_UPLOAD_INSTRUCTION,
+          )
+        : `${part.text}\n\n${OPENAI_CHAT_COMPLETIONS_NATIVE_UPLOAD_INSTRUCTION}`,
+    };
+    return next;
+  }
+  return [{ type: "text", text: OPENAI_CHAT_COMPLETIONS_NATIVE_UPLOAD_INSTRUCTION }, ...next];
 }
 
 function normalizeAnthropicUserContent(content: unknown): unknown[] {
@@ -324,6 +391,22 @@ function isOpenAIToolOutputTurn(item: Record<string, unknown>) {
   );
 }
 
+function isOpenAIChatSyntheticToolImageTurn(message: Record<string, unknown>) {
+  if (!Array.isArray(message.content)) return false;
+  let hasToolImageLabel = false;
+  let hasImageUrl = false;
+  for (const part of message.content) {
+    if (!isRecord(part)) continue;
+    if (part.type === "text" && typeof part.text === "string") {
+      hasToolImageLabel = part.text.trim() === "Attached image(s) from tool result:";
+    }
+    if (part.type === "image_url") {
+      hasImageUrl = true;
+    }
+  }
+  return hasToolImageLabel && hasImageUrl;
+}
+
 function isAnthropicToolResultTurn(message: Record<string, unknown>) {
   return hasContentPartType(message.content, "tool_result");
 }
@@ -345,6 +428,30 @@ async function buildNativeContentParts(params: {
     } catch (error) {
       console.warn(
         `[native-responses-attachments] skipped ${file.relativePath}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+  return parts;
+}
+
+async function buildOpenAIChatCompletionsNativeContentParts(params: {
+  workdir: string;
+  model: Model<any>;
+  files: PendingUploadedFile[];
+}) {
+  const parts: OpenAIChatCompletionsNativeAttachmentContentPart[] = [];
+  for (const file of params.files) {
+    try {
+      const part = await buildOpenAIChatCompletionsNativeAttachmentContentPart({
+        workdir: params.workdir,
+        model: params.model,
+        file,
+      });
+      if (part) parts.push(part);
+    } catch (error) {
+      console.warn(
+        `[openai-chat-completions-native-attachments] skipped ${file.relativePath}:`,
         error instanceof Error ? error.message : String(error),
       );
     }
@@ -569,6 +676,64 @@ async function applyNativeAttachmentsToResponsesPayload(params: {
   return changed ? { ...payload, input: nextInput } : payload;
 }
 
+async function applyNativeAttachmentsToOpenAICompletionsPayload(params: {
+  payload: unknown;
+  context: Context;
+  model: Model<any>;
+  workdir: string;
+}) {
+  const payload = params.payload;
+  if (!isRecord(payload) || !Array.isArray(payload.messages)) return payload;
+  if (!params.workdir.trim() || !isOpenAICompletionsModel(params.model)) return payload;
+
+  const attachmentBatches = getUserMessageNativeAttachmentBatches(params.context);
+  if (!attachmentBatches.some((files) => files.length > 0)) return payload;
+
+  let userIndex = 0;
+  let changed = false;
+  const nextMessages = [];
+  for (const message of payload.messages) {
+    if (
+      !isRecord(message) ||
+      message.role !== "user" ||
+      isOpenAIChatSyntheticToolImageTurn(message)
+    ) {
+      nextMessages.push(message);
+      continue;
+    }
+
+    const files = attachmentBatches[userIndex] ?? [];
+    userIndex += 1;
+    if (files.length === 0) {
+      nextMessages.push(message);
+      continue;
+    }
+
+    const nativeParts = await buildOpenAIChatCompletionsNativeContentParts({
+      workdir: params.workdir,
+      model: params.model,
+      files,
+    });
+    if (nativeParts.length === 0) {
+      nextMessages.push(message);
+      continue;
+    }
+
+    nextMessages.push({
+      ...message,
+      content: [
+        ...applyOpenAIChatCompletionsNativeUploadInstruction(
+          normalizeOpenAIChatCompletionsUserContent(message.content),
+        ),
+        ...nativeParts,
+      ],
+    });
+    changed = true;
+  }
+
+  return changed ? { ...payload, messages: nextMessages } : payload;
+}
+
 async function applyNativeAttachmentsToAnthropicPayload(params: {
   payload: unknown;
   context: Context;
@@ -721,6 +886,45 @@ export function attachOpenAIResponsesNativeAttachments<TOptions extends StreamOp
   };
 }
 
+export function attachOpenAICompletionsNativeAttachments<TOptions extends StreamOptionsWithPayloadHook>(
+  options: TOptions,
+  params: {
+    context?: Context;
+    model: Model<any>;
+    providerId: string;
+    workdir?: string;
+  },
+): TOptions {
+  if (
+    params.providerId !== "codex" ||
+    !params.context ||
+    !isOpenAICompletionsModel(params.model) ||
+    !params.workdir?.trim()
+  ) {
+    return options;
+  }
+
+  const previousOnPayload = options.onPayload;
+  return {
+    ...options,
+    onPayload: async (payload, model) => {
+      let nextPayload = payload;
+      if (previousOnPayload) {
+        const overridden = await previousOnPayload(nextPayload, model);
+        if (overridden !== undefined) {
+          nextPayload = overridden;
+        }
+      }
+      return applyNativeAttachmentsToOpenAICompletionsPayload({
+        payload: nextPayload,
+        context: params.context as Context,
+        model,
+        workdir: params.workdir ?? "",
+      });
+    },
+  };
+}
+
 export function attachAnthropicMessagesNativeAttachments<TOptions extends StreamOptionsWithPayloadHook>(
   options: TOptions,
   params: {
@@ -802,9 +1006,11 @@ export function attachGeminiGenerativeAINativeAttachments<TOptions extends Strea
 export const __nativeResponsesAttachmentsTest = {
   WORKSPACE_UPLOAD_INSTRUCTION,
   NATIVE_UPLOAD_INSTRUCTION,
+  OPENAI_CHAT_COMPLETIONS_NATIVE_UPLOAD_INSTRUCTION,
   ANTHROPIC_NATIVE_UPLOAD_INSTRUCTION,
   GEMINI_NATIVE_UPLOAD_INSTRUCTION,
   applyNativeAttachmentsToResponsesPayload,
+  applyNativeAttachmentsToOpenAICompletionsPayload,
   applyNativeAttachmentsToAnthropicPayload,
   applyNativeAttachmentsToGeminiPayload,
 };

@@ -8,9 +8,14 @@ export function resolveProviderNativeWebSearchStatus(params: {
   providerId: ProviderId;
   api: string | undefined;
   enabled?: boolean;
+  baseUrl?: string;
+  modelId?: string;
 }) {
   if (!params.enabled) return null;
-  return providerSupportsNativeWebSearch(params.providerId, params.api)
+  return providerSupportsNativeWebSearch(params.providerId, params.api, {
+    baseUrl: params.baseUrl,
+    modelId: params.modelId,
+  })
     ? PROVIDER_NATIVE_WEB_SEARCH_STATUS
     : null;
 }

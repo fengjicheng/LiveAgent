@@ -385,7 +385,9 @@ function toAssistantThinkingLevel(params: {
     if (!params.reasoning || params.reasoning === "off") return "off";
     return params.reasoning === "xhigh" ? "high" : params.reasoning;
   }
-  if (params.api !== "openai-responses") return "off";
+  if (params.api !== "openai-responses" && params.api !== "openai-completions") {
+    return "off";
+  }
   return params.reasoning && params.reasoning !== "off" ? params.reasoning : "off";
 }
 
@@ -641,11 +643,14 @@ export async function runAssistantWithTools(params: {
       proxyRequest.baseUrl,
       params.runtime.requestFormat,
       params.runtime.modelConfig,
+      params.runtime.baseUrl.trim(),
     );
     const nativeWebSearchStatus = resolveProviderNativeWebSearchStatus({
       providerId: params.providerId,
       api: model.api,
       enabled: params.nativeWebSearch,
+      baseUrl: params.runtime.baseUrl,
+      modelId,
     });
     const nativeWebSearchStatusController = createDeferredProviderNativeWebSearchStatus({
       status: nativeWebSearchStatus,
@@ -964,7 +969,7 @@ export async function runAssistantWithTools(params: {
     const fallbackReasoning =
       params.providerId === "claude_code" || params.providerId === "gemini"
         ? toSimpleStreamReasoning(params.runtime.reasoning)
-        : streamModel.api === "openai-responses"
+        : streamModel.api === "openai-responses" || streamModel.api === "openai-completions"
           ? toSimpleStreamReasoning(params.runtime.reasoning)
           : undefined;
     const shouldProbeHostedSearch = Boolean(nativeWebSearchStatus);

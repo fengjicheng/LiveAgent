@@ -4,6 +4,7 @@ import type {
   CacheRetention,
   Context,
   Model,
+  OpenAICompletionsCompat,
   SimpleStreamOptions,
 } from "@mariozechner/pi-ai";
 import { streamAnthropic } from "@mariozechner/pi-ai/anthropic";
@@ -44,6 +45,7 @@ import { prepareProxyRequest } from "./proxy";
 import {
   attachAnthropicMessagesNativeAttachments,
   attachGeminiGenerativeAINativeAttachments,
+  attachOpenAICompletionsNativeAttachments,
   attachOpenAIResponsesNativeAttachments,
 } from "./nativeResponsesAttachments";
 import {
@@ -827,6 +829,10 @@ function hasOpenAIResponsesWebSearchTool(tool: unknown) {
   );
 }
 
+function hasOpenAIChatCompletionsWebSearchOptions(payload: Record<string, unknown>) {
+  return isRecord(payload.web_search_options);
+}
+
 function hasAnthropicWebSearchTool(tool: unknown) {
   if (!isRecord(tool)) return false;
   const type = tool.type;
@@ -873,6 +879,82 @@ function appendGeminiGoogleSearchTool(payload: Record<string, unknown>) {
   };
 }
 
+function appendOpenAIChatCompletionsWebSearchOptions(payload: Record<string, unknown>) {
+  if (hasOpenAIChatCompletionsWebSearchOptions(payload)) return payload;
+  return {
+    ...payload,
+    web_search_options: {
+      search_context_size: "medium",
+    },
+  };
+}
+
+function hasOpenAIChatCompletionsWebSearchFunctionTool(tool: unknown) {
+  if (!isRecord(tool) || tool.type !== "function") return false;
+  const fn = isRecord(tool.function) ? tool.function : {};
+  const name = typeof fn.name === "string" ? fn.name.trim().toLowerCase() : "";
+  return name === "web_search" || name === "web_search_preview";
+}
+
+function hasOpenAIChatCompletionsNativeWebSearchTool(tool: unknown) {
+  return hasOpenAIResponsesWebSearchTool(tool) ||
+    hasOpenAIChatCompletionsWebSearchFunctionTool(tool);
+}
+
+function buildOpenAIChatCompletionsWebSearchFunctionTool() {
+  return {
+    type: "function",
+    function: {
+      name: "web_search",
+      description: "Search the web for current information when the answer needs recent or external context.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "The web search query.",
+          },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
+  };
+}
+
+function supportsOpenAIChatCompletionsWebSearchOptions(params: {
+  baseUrl?: string;
+  modelId: string;
+}) {
+  return (
+    isOfficialOpenAIBaseUrl(params.baseUrl) &&
+    params.modelId.trim().toLowerCase().includes("search-preview")
+  );
+}
+
+function appendOpenAIChatCompletionsNativeWebSearch(
+  payload: Record<string, unknown>,
+  params: {
+    baseUrl?: string;
+    model: Model<any>;
+  },
+) {
+  if (
+    supportsOpenAIChatCompletionsWebSearchOptions({
+      baseUrl: params.baseUrl,
+      modelId: params.model.id,
+    })
+  ) {
+    return appendOpenAIChatCompletionsWebSearchOptions(payload);
+  }
+
+  return appendUniqueTool(
+    payload,
+    buildOpenAIChatCompletionsWebSearchFunctionTool(),
+    hasOpenAIChatCompletionsNativeWebSearchTool,
+  );
+}
+
 function isOpenAIWebSearchMinimalReasoningUnsupportedModel(modelId: string) {
   const normalized = modelId.trim().toLowerCase();
   return normalized === "gpt-5" || normalized.startsWith("gpt-5-");
@@ -897,6 +979,9 @@ export function attachProviderNativeWebSearch(
   providerId: ProviderId,
   options: StreamOptionsEx,
   enabled?: boolean,
+  params?: {
+    baseUrl?: string;
+  },
 ): StreamOptionsEx {
   if (!enabled) return options;
 
@@ -913,11 +998,24 @@ export function attachProviderNativeWebSearch(
         }
       }
 
-      if (!isRecord(nextPayload) || !providerSupportsNativeWebSearch(providerId, model.api)) {
+      if (
+        !isRecord(nextPayload) ||
+        !providerSupportsNativeWebSearch(providerId, model.api, {
+          baseUrl: params?.baseUrl,
+          modelId: model.id,
+        })
+      ) {
         return nextPayload;
       }
 
       if (providerId === "codex") {
+        if (model.api === "openai-completions") {
+          return appendOpenAIChatCompletionsNativeWebSearch(nextPayload, {
+            baseUrl: params?.baseUrl,
+            model,
+          });
+        }
+
         return appendUniqueTool(
           normalizeOpenAIWebSearchReasoning(nextPayload, model),
           { type: "web_search" },
@@ -1034,9 +1132,17 @@ export function finalizeProviderStreamOptions(params: {
     params.options,
   );
   options = attachCodexResponsesStorage(params.providerId, options);
-  options = attachProviderNativeWebSearch(params.providerId, options, params.nativeWebSearch);
+  options = attachProviderNativeWebSearch(params.providerId, options, params.nativeWebSearch, {
+    baseUrl: params.baseUrl,
+  });
   if (params.context && params.model) {
     options = attachOpenAIResponsesNativeAttachments(options, {
+      context: params.context,
+      model: params.model,
+      providerId: params.providerId,
+      workdir: params.workdir,
+    });
+    options = attachOpenAICompletionsNativeAttachments(options, {
       context: params.context,
       model: params.model,
       providerId: params.providerId,
@@ -1181,6 +1287,128 @@ function supportsCodexReasoningModel(modelId: string) {
   );
 }
 
+function supportsOpenAICompletionsReasoningModel(modelId: string) {
+  const normalizedModelId = modelId.trim().toLowerCase();
+  return (
+    supportsCodexReasoningModel(normalizedModelId) ||
+    normalizedModelId.includes("deepseek") ||
+    normalizedModelId.includes("gpt-oss") ||
+    normalizedModelId.includes("qwen") ||
+    normalizedModelId.includes("reason") ||
+    normalizedModelId.includes("think")
+  );
+}
+
+function supportsOpenAICompletionsImageInputModel(modelId: string) {
+  const normalizedModelId = modelId.trim().toLowerCase();
+  if (normalizedModelId.includes("search-preview")) return false;
+  return (
+    normalizedModelId.startsWith("gpt-5") ||
+    normalizedModelId.startsWith("chat-latest") ||
+    normalizedModelId.startsWith("gpt-4o") ||
+    normalizedModelId.startsWith("chatgpt-4o") ||
+    normalizedModelId.startsWith("gpt-4.1") ||
+    normalizedModelId.startsWith("gpt-4.5") ||
+    normalizedModelId.startsWith("gpt-4-turbo") ||
+    normalizedModelId.startsWith("o3") ||
+    normalizedModelId.startsWith("o4") ||
+    normalizedModelId.includes("vision") ||
+    normalizedModelId.includes("qwen-vl") ||
+    normalizedModelId.includes("qwen2-vl") ||
+    normalizedModelId.includes("qwen2.5-vl") ||
+    normalizedModelId.includes("qwen3-vl") ||
+    normalizedModelId.includes("llava") ||
+    normalizedModelId.includes("pixtral")
+  );
+}
+
+function resolveCodexModelInput(api: CodexApi, modelId: string): Model<any>["input"] {
+  if (api === "openai-responses" || supportsOpenAICompletionsImageInputModel(modelId)) {
+    return ["text", "image"];
+  }
+  return ["text"];
+}
+
+function isOfficialOpenAIBaseUrl(baseUrl: string | undefined) {
+  if (!baseUrl?.trim()) return false;
+  try {
+    const url = new URL(baseUrl);
+    return url.hostname === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeCompatBaseUrl(baseUrl: string | undefined) {
+  return baseUrl?.trim().replace(/\/+$/, "").toLowerCase() ?? "";
+}
+
+function resolveCodexOpenAICompletionsCompat(params: {
+  baseUrl: string;
+  upstreamBaseUrl?: string;
+  modelId: string;
+}): OpenAICompletionsCompat | undefined {
+  const compatBaseUrl = normalizeCompatBaseUrl(params.upstreamBaseUrl ?? params.baseUrl);
+  if (isOfficialOpenAIBaseUrl(compatBaseUrl)) return undefined;
+
+  const normalizedModelId = params.modelId.trim().toLowerCase();
+  const isZai = compatBaseUrl.includes("api.z.ai");
+  const isXai = compatBaseUrl.includes("api.x.ai");
+  const isOpenRouter = compatBaseUrl.includes("openrouter.ai");
+  const isGroq = compatBaseUrl.includes("groq.com");
+  const isChutes = compatBaseUrl.includes("chutes.ai");
+  const isDeepSeek =
+    compatBaseUrl.includes("deepseek.com") ||
+    normalizedModelId.includes("deepseek");
+  const isKnownNonOpenAIModel =
+    isDeepSeek ||
+    normalizedModelId.includes("qwen") ||
+    normalizedModelId.includes("gpt-oss") ||
+    normalizedModelId.includes("glm") ||
+    normalizedModelId.includes("kimi") ||
+    normalizedModelId.includes("minimax");
+  const shouldUseCompatibleDefaults =
+    isKnownNonOpenAIModel ||
+    isZai ||
+    isXai ||
+    isOpenRouter ||
+    isGroq ||
+    isChutes ||
+    compatBaseUrl.includes("cerebras.ai") ||
+    compatBaseUrl.includes("opencode.ai") ||
+    !isOfficialOpenAIBaseUrl(compatBaseUrl);
+
+  if (!shouldUseCompatibleDefaults) return undefined;
+
+  const compat: OpenAICompletionsCompat = {
+    supportsStore: false,
+    supportsDeveloperRole: false,
+  };
+
+  if (isXai || isZai) {
+    compat.supportsReasoningEffort = false;
+  }
+  if (isChutes) {
+    compat.maxTokensField = "max_tokens";
+  }
+  if (isZai) {
+    compat.thinkingFormat = "zai";
+  } else if (isOpenRouter) {
+    compat.thinkingFormat = "openrouter";
+  }
+  if (isGroq && normalizedModelId === "qwen/qwen3-32b") {
+    compat.reasoningEffortMap = {
+      minimal: "default",
+      low: "default",
+      medium: "default",
+      high: "default",
+      xhigh: "default",
+    };
+  }
+
+  return compat;
+}
+
 function normalizeCodexBaseUrl(baseUrl: string): {
   baseUrl: string;
   preferredApi?: CodexApi;
@@ -1304,6 +1532,7 @@ export function createModelFromConfig(
   baseUrl: string,
   requestFormat?: CodexRequestFormat,
   modelConfig?: ProviderModelConfig,
+  upstreamBaseUrl?: string,
 ): Model<any> {
   const defaults = getProviderModelDefaults(providerId);
   const contextWindow = modelConfig?.contextWindow ?? defaults.contextWindow;
@@ -1330,12 +1559,25 @@ export function createModelFromConfig(
       api,
       provider: "openai",
       baseUrl: normalizedBaseUrl,
-      reasoning: supportsCodexReasoningModel(modelId),
-      input: api === "openai-responses" ? ["text", "image"] : ["text"],
+      reasoning:
+        api === "openai-completions"
+          ? supportsOpenAICompletionsReasoningModel(modelId)
+          : supportsCodexReasoningModel(modelId),
+      input: resolveCodexModelInput(api, modelId),
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow,
       maxTokens,
     };
+    if (api === "openai-completions") {
+      const compat = resolveCodexOpenAICompletionsCompat({
+        baseUrl: normalizedBaseUrl,
+        upstreamBaseUrl,
+        modelId,
+      });
+      if (compat) {
+        custom.compat = compat;
+      }
+    }
     return custom;
   }
 
@@ -1429,6 +1671,7 @@ export function streamSimpleByApi(
     case "openai-completions": {
       const openAIOptions: OpenAICompletionsOptions = {
         ...buildOpenAIBaseOptions(model, options),
+        reasoningEffort: options.reasoning,
         toolChoice: mapToolChoiceToOpenAI(options.toolChoice),
       };
       return streamOpenAICompletions(model as any, context, openAIOptions);
@@ -1491,7 +1734,15 @@ function buildTextOnlyStreamOptions(params: {
   const nativeWebSearch = providerSupportsNativeWebSearch(
     params.providerId,
     params.model.api,
+    {
+      baseUrl: params.runtime.baseUrl,
+      modelId: params.model.id,
+    },
   ) && params.nativeWebSearch;
+  const usesOpenAIChatNativeWebSearch =
+    nativeWebSearch &&
+    params.providerId === "codex" &&
+    params.model.api === "openai-completions";
   let options: StreamOptionsEx = {
     apiKey: params.runtime.apiKey,
     headers: withHostedSearchProbeHeader(params.headers, params.hostedSearchProbeId),
@@ -1504,14 +1755,20 @@ function buildTextOnlyStreamOptions(params: {
     ),
     metadata: buildProviderRequestMetadata(params.providerId, sessionId),
     reasoning:
-      (params.providerId === "codex" && params.model.api === "openai-responses") ||
+      (params.providerId === "codex" &&
+        (params.model.api === "openai-responses" ||
+          params.model.api === "openai-completions")) ||
       (params.providerId === "claude_code" && params.model.api === "anthropic-messages") ||
       (params.providerId === "gemini" && params.model.api === "google-generative-ai")
         ? toSimpleStreamReasoning(params.runtime.reasoning)
         : undefined,
     // Text-only mode cannot execute local tools. Provider-native web search is
     // hosted by the upstream provider, so it can stay on auto when explicitly enabled.
-    toolChoice: nativeWebSearch ? "auto" : "none",
+    toolChoice: usesOpenAIChatNativeWebSearch
+      ? undefined
+      : nativeWebSearch
+        ? "auto"
+        : "none",
   };
   return finalizeProviderStreamOptions({
     providerId: params.providerId,
@@ -1558,6 +1815,7 @@ export async function streamAssistantMessage(params: {
     proxyRequest.baseUrl,
     params.runtime.requestFormat,
     params.runtime.modelConfig,
+    params.runtime.baseUrl.trim(),
   );
 
   const callContext = buildTextOnlyCallContext(params.context, {
@@ -1565,7 +1823,10 @@ export async function streamAssistantMessage(params: {
   });
   const shouldProbeHostedSearch =
     Boolean(params.nativeWebSearch) &&
-    providerSupportsNativeWebSearch(params.providerId, m.api);
+    providerSupportsNativeWebSearch(params.providerId, m.api, {
+      baseUrl: params.runtime.baseUrl,
+      modelId: m.id,
+    });
   const hostedSearchProbeId = shouldProbeHostedSearch
     ? createHostedSearchProbeId(params.providerId)
     : undefined;
@@ -1721,6 +1982,7 @@ export async function completeAssistantMessage(params: {
     proxyRequest.baseUrl,
     params.runtime.requestFormat,
     params.runtime.modelConfig,
+    params.runtime.baseUrl.trim(),
   );
 
   const callContext = buildTextOnlyCallContext(params.context, {

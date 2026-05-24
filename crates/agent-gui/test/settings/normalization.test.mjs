@@ -157,7 +157,7 @@ test("chat runtime controls default and follow provider reasoning support", () =
       providerId: "codex",
       requestFormat: "openai-completions",
     }),
-    [],
+    ["minimal", "low", "medium", "high", "xhigh"],
   );
   assert.deepEqual(settings.getChatRuntimeReasoningLevelsForProvider({ providerId: "gemini" }), [
     "minimal",
@@ -185,7 +185,7 @@ test("chat runtime controls default and follow provider reasoning support", () =
       reasoningByProvider: {
         claude_code: "xhigh",
         codex_openai_responses: "xhigh",
-        codex_openai_completions: "high",
+        codex_openai_completions: "xhigh",
         gemini: "high",
       },
     },
@@ -205,11 +205,11 @@ test("chat runtime controls default and follow provider reasoning support", () =
     {
       thinkingEnabled: true,
       nativeWebSearchEnabled: true,
-      reasoning: "high",
+      reasoning: "xhigh",
       reasoningByProvider: {
         claude_code: "xhigh",
         codex_openai_responses: "xhigh",
-        codex_openai_completions: "high",
+        codex_openai_completions: "xhigh",
         gemini: "high",
       },
     },

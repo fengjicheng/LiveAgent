@@ -43,6 +43,26 @@ test("provider native search status resolves only for enabled hosted search prov
   assert.equal(
     searchStatus.resolveProviderNativeWebSearchStatus({
       providerId: "codex",
+      api: "openai-completions",
+      enabled: true,
+      baseUrl: "https://api.example.test/v1",
+      modelId: "deepseek-v4-flash",
+    }),
+    searchStatus.PROVIDER_NATIVE_WEB_SEARCH_STATUS,
+  );
+  assert.equal(
+    searchStatus.resolveProviderNativeWebSearchStatus({
+      providerId: "codex",
+      api: "openai-completions",
+      enabled: true,
+      baseUrl: "https://api.openai.com/v1",
+      modelId: "gpt-4o-search-preview",
+    }),
+    searchStatus.PROVIDER_NATIVE_WEB_SEARCH_STATUS,
+  );
+  assert.equal(
+    searchStatus.resolveProviderNativeWebSearchStatus({
+      providerId: "codex",
       api: "openai-responses",
       enabled: false,
     }),

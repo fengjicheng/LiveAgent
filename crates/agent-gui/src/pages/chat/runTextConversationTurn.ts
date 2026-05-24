@@ -301,6 +301,8 @@ export async function runTextConversationTurn(params: RunTextConversationTurnPar
       providerId,
       api: runtimeModel.api,
       enabled: nativeWebSearchEnabled,
+      baseUrl: runtime.baseUrl,
+      modelId: model,
     });
 
     while (!finalAssistant) {

@@ -72,6 +72,65 @@ test("OpenAI Responses native attachment adapter adds input_image and input_file
   assert.equal(result.input[0].content[2].file_data, "data:application/pdf;base64,cGRm");
 });
 
+test("OpenAI Chat Completions native attachment adapter adds image_url blocks", async () => {
+  const calls = [];
+  const loader = createLoader(async (command, args) => {
+    calls.push({ command, args });
+    if (args.kind === "image") {
+      return { mimeType: "image/png", data: "aW1hZ2U=", sizeBytes: 5 };
+    }
+    return { mimeType: "application/pdf", data: "cGRm", sizeBytes: 3 };
+  });
+  const uploadedFiles = loader.loadModule("src/lib/chat/messages/uploadedFiles.ts");
+  const nativeAttachments = loader.loadModule("src/lib/providers/nativeResponsesAttachments.ts");
+
+  const message = uploadedFiles.createUserMessageWithUploads("Inspect these", [
+    {
+      relativePath: "uploads/1/screenshot.png",
+      absolutePath: "/workspace/uploads/1/screenshot.png",
+      fileName: "screenshot.png",
+      kind: "image",
+      sizeBytes: 5,
+    },
+    {
+      relativePath: "uploads/1/report.pdf",
+      absolutePath: "/workspace/uploads/1/report.pdf",
+      fileName: "report.pdf",
+      kind: "pdf",
+      sizeBytes: 3,
+    },
+  ]);
+
+  const payload = {
+    messages: [
+      {
+        role: "user",
+        content: message.content,
+      },
+    ],
+  };
+  const result = await nativeAttachments.__nativeResponsesAttachmentsTest
+    .applyNativeAttachmentsToOpenAICompletionsPayload({
+      payload,
+      context: { messages: [message] },
+      model: { api: "openai-completions", input: ["text", "image"] },
+      workdir: "/workspace",
+    });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].args.kind, "image");
+  assert.equal(result.messages[0].content[0].type, "text");
+  assert.match(
+    result.messages[0].content[0].text,
+    /OpenAI Chat Completions request as native image inputs/,
+  );
+  assert.equal(result.messages[0].content[1].type, "image_url");
+  assert.deepEqual(result.messages[0].content[1].image_url, {
+    url: "data:image/png;base64,aW1hZ2U=",
+    detail: "auto",
+  });
+});
+
 test("OpenAI Responses native attachment adapter preserves Read fallback when native is unavailable", async () => {
   const loader = createLoader(async () => {
     throw new Error("too large");
@@ -782,6 +841,95 @@ test("text-mode OpenAI Responses stream forwards workdir for native attachments"
     capturedPayload.input[0].content.at(-1).image_url,
     "data:image/png;base64,aW1hZ2U=",
   );
+});
+
+test("text-mode OpenAI Chat Completions stream forwards workdir for native image attachments", async () => {
+  const attachmentReads = [];
+  let capturedPayload = null;
+  const loader = createTsModuleLoader({
+    mocks: {
+      "@tauri-apps/api/core": {
+        async invoke(command, args) {
+          if (command === "proxy_get_server_info") {
+            return { baseUrl: "http://127.0.0.1:18080", token: "proxy-token" };
+          }
+          if (
+            command === "system_begin_power_activity" ||
+            command === "system_end_power_activity"
+          ) {
+            return null;
+          }
+          if (command === "system_read_uploaded_native_attachment") {
+            attachmentReads.push(args);
+            return { mimeType: "image/png", data: "aW1hZ2U=", sizeBytes: 5 };
+          }
+          throw new Error(`unexpected invoke: ${command}`);
+        },
+      },
+      "@mariozechner/pi-ai/openai-completions": {
+        streamOpenAICompletions(model, context, options) {
+          return {
+            async *[Symbol.asyncIterator]() {
+              capturedPayload = await options.onPayload(
+                {
+                  messages: [
+                    {
+                      role: "user",
+                      content: context.messages[0].content,
+                    },
+                  ],
+                },
+                model,
+              );
+            },
+            async result() {
+              return {
+                role: "assistant",
+                content: [{ type: "text", text: "ok" }],
+                timestamp: 1,
+                api: "openai-completions",
+                provider: "openai",
+                model: model.id,
+                stopReason: "stop",
+              };
+            },
+          };
+        },
+      },
+    },
+  });
+  const uploadedFiles = loader.loadModule("src/lib/chat/messages/uploadedFiles.ts");
+  const providers = loader.loadModule("src/lib/providers/llm.ts");
+  const message = uploadedFiles.createUserMessageWithUploads("Inspect", [
+    {
+      relativePath: "uploads/1/screenshot.png",
+      absolutePath: "/workspace/uploads/1/screenshot.png",
+      fileName: "screenshot.png",
+      kind: "image",
+      sizeBytes: 5,
+    },
+  ]);
+
+  await providers.streamAssistantMessage({
+    providerId: "codex",
+    model: "gpt-5.5",
+    runtime: {
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-test",
+      requestFormat: "openai-completions",
+    },
+    context: { messages: [message] },
+    workdir: "/workspace",
+    onTextDelta() {},
+  });
+
+  assert.equal(attachmentReads.length, 1);
+  assert.equal(attachmentReads[0].workdir, "/workspace");
+  assert.equal(capturedPayload.messages[0].content.at(-1).type, "image_url");
+  assert.deepEqual(capturedPayload.messages[0].content.at(-1).image_url, {
+    url: "data:image/png;base64,aW1hZ2U=",
+    detail: "auto",
+  });
 });
 
 test("text-mode Anthropic stream forwards workdir for native attachments", async () => {

@@ -82,6 +82,27 @@ test("provider request helpers normalize auth, metadata, errors, and model value
     providers.providerSupportsNativeWebSearch("codex", "openai-completions"),
     false,
   );
+  assert.equal(
+    providers.providerSupportsNativeWebSearch("codex", "openai-completions", {
+      baseUrl: "https://api.openai.com/v1",
+      modelId: "gpt-4o-search-preview",
+    }),
+    true,
+  );
+  assert.equal(
+    providers.providerSupportsNativeWebSearch("codex", "openai-completions", {
+      baseUrl: "https://api.example.test/v1",
+      modelId: "gpt-4o-search-preview",
+    }),
+    true,
+  );
+  assert.equal(
+    providers.providerSupportsNativeWebSearch("codex", "openai-completions", {
+      baseUrl: "https://api.openai.com/v1",
+      modelId: "gpt-4o",
+    }),
+    false,
+  );
   assert.equal(providers.toModelValue("provider", "model::with::separator"), "provider::model::with::separator");
   assert.deepEqual(providers.parseModelValue("provider::model::with::separator"), {
     customProviderId: "provider",
@@ -133,6 +154,104 @@ test("custom Codex Chat Completions models keep text-only input metadata", () =>
 
   assert.equal(model.api, "openai-completions");
   assert.deepEqual(model.input, ["text"]);
+});
+
+test("custom Codex Chat Completions GPT vision models infer image input metadata", () => {
+  const model = providers.createModelFromConfig(
+    "codex",
+    "gpt-5.5",
+    "https://api.openai.com/v1",
+    "openai-completions",
+  );
+
+  assert.equal(model.api, "openai-completions");
+  assert.deepEqual(model.input, ["text", "image"]);
+});
+
+test("custom Codex Chat Completions search preview models stay text-only", () => {
+  const model = providers.createModelFromConfig(
+    "codex",
+    "gpt-4o-search-preview",
+    "https://api.openai.com/v1",
+    "openai-completions",
+  );
+
+  assert.equal(model.api, "openai-completions");
+  assert.deepEqual(model.input, ["text"]);
+});
+
+test("custom Codex Chat Completions models infer reasoning-capable IDs", () => {
+  const model = providers.createModelFromConfig(
+    "codex",
+    "deepseek-v4-flash",
+    "https://api.example.test/v1",
+    "openai-completions",
+  );
+
+  assert.equal(model.api, "openai-completions");
+  assert.equal(model.reasoning, true);
+  assert.equal(model.compat.supportsDeveloperRole, false);
+  assert.equal(model.compat.supportsStore, false);
+});
+
+test("custom Codex Chat Completions models behind proxy use upstream compat detection", () => {
+  const model = providers.createModelFromConfig(
+    "codex",
+    "deepseek-v4-flash",
+    "http://127.0.0.1:18080/proxy/codex/v1",
+    "openai-completions",
+    undefined,
+    "https://www.packyapi.com/v1",
+  );
+
+  assert.equal(model.api, "openai-completions");
+  assert.equal(model.compat.supportsDeveloperRole, false);
+  assert.equal(model.compat.supportsStore, false);
+});
+
+test("official OpenAI Chat Completions models behind proxy keep native compat", () => {
+  const model = providers.createModelFromConfig(
+    "codex",
+    "gpt-5.5",
+    "http://127.0.0.1:18080/proxy/codex/v1",
+    "openai-completions",
+    undefined,
+    "https://api.openai.com/v1",
+  );
+
+  assert.equal(model.api, "openai-completions");
+  assert.equal(model.compat, undefined);
+});
+
+test("Codex Chat Completions streams forward reasoning effort", () => {
+  let captured;
+  const localLoader = createTsModuleLoader({
+    mocks: {
+      "@mariozechner/pi-ai/openai-completions": {
+        streamOpenAICompletions(model, context, options) {
+          captured = { model, context, options };
+          return { mocked: true };
+        },
+      },
+    },
+  });
+  const localProviders = localLoader.loadModule("src/lib/providers/llm.ts");
+  const model = localProviders.createModelFromConfig(
+    "codex",
+    "deepseek-v4-flash",
+    "https://api.example.test/v1",
+    "openai-completions",
+  );
+
+  const result = localProviders.streamSimpleByApi(
+    model,
+    { messages: [] },
+    { reasoning: "high", toolChoice: "auto" },
+  );
+
+  assert.deepEqual(result, { mocked: true });
+  assert.equal(captured.options.reasoningEffort, "high");
+  assert.equal(captured.options.toolChoice, "auto");
 });
 
 test("gemini model base URL normalizes full generate endpoints", () => {
@@ -238,6 +357,59 @@ test("provider payload finalization enables native web search for hosted search 
   assert.equal(codexPayload.store, true);
   assert.deepEqual(codexPayload.tools, [{ type: "web_search" }]);
 
+  const codexChatOptions = providers.finalizeProviderStreamOptions({
+    providerId: "codex",
+    baseUrl: "https://api.openai.com/v1",
+    nativeWebSearch: true,
+    options: {},
+  });
+  const codexChatPayload = await codexChatOptions.onPayload(
+    { messages: [{ role: "user", content: "hello" }] },
+    { api: "openai-completions", provider: "openai", id: "gpt-4o-search-preview" },
+  );
+  assert.deepEqual(codexChatPayload.web_search_options, {
+    search_context_size: "medium",
+  });
+  assert.equal(codexChatPayload.tools, undefined);
+
+  const codexChatCompatiblePayload = await codexChatOptions.onPayload(
+    { messages: [{ role: "user", content: "hello" }] },
+    { api: "openai-completions", provider: "openai", id: "deepseek-v4-flash" },
+  );
+  assert.equal(codexChatCompatiblePayload.web_search_options, undefined);
+
+  const compatibleCodexChatOptions = providers.finalizeProviderStreamOptions({
+    providerId: "codex",
+    baseUrl: "https://api.example.test/v1",
+    nativeWebSearch: true,
+    options: {},
+  });
+  const compatibleCodexChatPayload = await compatibleCodexChatOptions.onPayload(
+    { messages: [{ role: "user", content: "hello" }] },
+    { api: "openai-completions", provider: "openai", id: "deepseek-v4-flash" },
+  );
+  assert.deepEqual(compatibleCodexChatPayload.tools, [
+    {
+      type: "function",
+      function: {
+        name: "web_search",
+        description: "Search the web for current information when the answer needs recent or external context.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: {
+              type: "string",
+              description: "The web search query.",
+            },
+          },
+          required: ["query"],
+          additionalProperties: false,
+        },
+      },
+    },
+  ]);
+  assert.equal(compatibleCodexChatPayload.web_search_options, undefined);
+
   const anthropicOptions = providers.finalizeProviderStreamOptions({
     providerId: "claude_code",
     baseUrl: "https://api.anthropic.com/v1",
@@ -299,6 +471,20 @@ test("provider native web search injection preserves existing search tools", asy
     { api: "openai-responses", provider: "openai", id: "gpt-5" },
   );
   assert.deepEqual(codexPayload.tools, [{ type: "web_search_2025_08_26" }]);
+
+  const compatibleCodexChatOptions = providers.finalizeProviderStreamOptions({
+    providerId: "codex",
+    baseUrl: "https://api.example.test/v1",
+    nativeWebSearch: true,
+    options: {},
+  });
+  const compatibleCodexChatPayload = await compatibleCodexChatOptions.onPayload(
+    { tools: [{ type: "function", function: { name: "web_search" } }] },
+    { api: "openai-completions", provider: "openai", id: "deepseek-v4-flash" },
+  );
+  assert.deepEqual(compatibleCodexChatPayload.tools, [
+    { type: "function", function: { name: "web_search" } },
+  ]);
 
   const anthropicOptions = providers.finalizeProviderStreamOptions({
     providerId: "claude_code",

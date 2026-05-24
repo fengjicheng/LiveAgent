@@ -457,7 +457,7 @@ function getChatRuntimeReasoningLevelsForProviderKey(
     return ["minimal", "low", "medium", "high"];
   }
   if (key === "codex_openai_completions") {
-    return [];
+    return ["minimal", "low", "medium", "high", "xhigh"];
   }
   return ["minimal", "low", "medium", "high", "xhigh"];
 }
