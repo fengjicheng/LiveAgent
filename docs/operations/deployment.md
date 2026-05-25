@@ -79,23 +79,44 @@ macOS signed/notarized release 需要这些 secrets：
 | `APPLE_TEAM_ID` | `UU94JSVAA9`。 |
 | `APPLE_APP_SPECIFIC_PASSWORD` | Apple app-specific password。 |
 
-脚本化写入：
+脚本化写入 GitHub 配置：
 
 ```bash
+BOOTSTRAP_APPLE_SECRETS=1 \
+APPLE_CERTIFICATE_PASSWORD=<p12-export-password> \
 RAILWAY_TOKEN=<railway-project-token> \
 RAILWAY_SERVICE=<railway-service> \
 RAILWAY_ENVIRONMENT=<railway-environment> \
   scripts/release/bootstrap-github-secrets.sh
 ```
 
-如果 `/Users/houhaixu/Personal/cert/developer_id_application.p12` 不存在，脚本会从本机 Keychain 中的 `Developer ID Application: wenlin fei (UU94JSVAA9)` 自动导出，并生成 `.p12` 密码写入 GitHub Secret。已有 `.p12` 时需要传入 `APPLE_CERTIFICATE_PASSWORD=<p12-password>`。
+只写入 Railway/Gateway 相关配置时可以跳过 Apple release secrets：
+
+```bash
+BOOTSTRAP_APPLE_SECRETS=0 \
+RAILWAY_TOKEN=<railway-project-token> \
+RAILWAY_SERVICE=<railway-service> \
+RAILWAY_ENVIRONMENT=<railway-environment> \
+LIVEAGENT_GATEWAY_TOKEN=<gateway-token> \
+  scripts/release/bootstrap-github-secrets.sh
+```
+
+如果 `CERT_DIR/developer_id_application.p12` 不存在，脚本会从本机 Keychain 中的 `Developer ID Application: wenlin fei (UU94JSVAA9)` 自动导出，并生成 `.p12` 密码写入 GitHub Secret。`CERT_DIR` 默认优先使用 `~/Personal/cert`，不存在时使用 `~/Downloads/cert`。已有 `.p12` 时需要传入 `APPLE_CERTIFICATE_PASSWORD=<p12-password>`。
+
+如果自动导出失败，先确认本机能看到可签名 identity：
+
+```bash
+security find-identity -v -p codesigning "$HOME/Library/Keychains/login.keychain-db"
+```
+
+Keychain 中必须是带私钥的 `Developer ID Application` identity。若 macOS 拒绝私钥导出，可以在 Keychain Access 中手动导出 `.p12` 到 `P12_PATH`，再用同一个 `APPLE_CERTIFICATE_PASSWORD` 重新运行脚本。
 
 脚本默认读取：
 
 | 文件 | 用途 |
 |---|---|
-| `/Users/houhaixu/Personal/cert/developer_id_application.p12` | CI 导入的签名 identity。 |
-| `/Users/houhaixu/Personal/cert/app key.md` | Apple app-specific password。 |
+| `CERT_DIR/developer_id_application.p12` | CI 导入的签名 identity。 |
+| `CERT_DIR/app key.md` | Apple app-specific password。 |
 
 如果同时传入 `RAILWAY_TOKEN`、`RAILWAY_SERVICE`、`RAILWAY_ENVIRONMENT`，脚本也会写入 Railway 自动部署所需的 secret/variables。
 
