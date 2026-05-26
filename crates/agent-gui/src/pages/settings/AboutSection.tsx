@@ -40,6 +40,7 @@ type CheckState =
   | { status: "ready"; result: AppUpdateCheckResult }
   | { status: "installing"; result: AppUpdateCheckResult }
   | { status: "installed"; result: AppUpdateCheckResult }
+  | { status: "restarting"; result: AppUpdateCheckResult }
   | { status: "error"; result?: AppUpdateCheckResult; message: string };
 
 function formatReleaseDate(value?: string | null) {
@@ -104,6 +105,22 @@ export function AboutSection(props: SettingsSectionProps) {
     }
   }
 
+  async function handleRestartApp() {
+    if (checkState.status !== "installed") return;
+
+    setCheckState({ status: "restarting", result: checkState.result });
+    try {
+      await invoke("app_restart");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCheckState({
+        status: "error",
+        result: checkState.result,
+        message: message || t("settings.aboutRestartFailed"),
+      });
+    }
+  }
+
   const latestResult = "result" in checkState ? checkState.result : undefined;
   const channelLabel =
     latestResult?.channel === "prerelease"
@@ -114,10 +131,44 @@ export function AboutSection(props: SettingsSectionProps) {
   const releaseDate = formatReleaseDate(latestResult?.date);
   const checking = checkState.status === "checking";
   const installing = checkState.status === "installing";
+  const installed = checkState.status === "installed";
+  const restarting = checkState.status === "restarting";
   const canInstall =
     checkState.status === "ready" &&
     checkState.result.configured &&
     checkState.result.available;
+  const statusTitle =
+    checkState.status === "error"
+      ? t("settings.aboutUpdateError")
+      : checking
+        ? t("settings.aboutChecking")
+        : installing
+          ? t("settings.aboutInstalling")
+          : restarting
+            ? t("settings.aboutRestarting")
+            : installed
+              ? t("settings.aboutInstalled")
+              : latestResult?.available
+                ? t("settings.aboutUpdateAvailable")
+                : latestResult?.configured
+                  ? t("settings.aboutUpToDate")
+                  : t("settings.aboutUpdaterNotConfigured");
+  const statusDescription =
+    checkState.status === "error"
+      ? checkState.message
+      : checking
+        ? t("settings.aboutCheckingDesc")
+        : installing
+          ? t("settings.aboutInstallingDesc")
+          : restarting
+            ? t("settings.aboutRestartingDesc")
+            : installed
+              ? t("settings.aboutInstalledDesc")
+              : latestResult?.available
+                ? t("settings.aboutUpdateAvailableDesc")
+                : latestResult?.configured
+                  ? t("settings.aboutUpToDateDesc")
+                  : latestResult?.message || t("settings.aboutUpdaterNotConfiguredDesc");
 
   return (
     <div className="space-y-6">
@@ -151,7 +202,7 @@ export function AboutSection(props: SettingsSectionProps) {
             variant="outline"
             size="sm"
             onClick={runCheck}
-            disabled={checking || installing}
+            disabled={checking || installing || restarting}
           >
             {checking ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -185,6 +236,8 @@ export function AboutSection(props: SettingsSectionProps) {
               <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
                 {checkState.status === "error" ? (
                   <AlertTriangle className="h-4 w-4 text-amber-500" />
+                ) : restarting ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
                 ) : latestResult?.available ? (
                   <Download className="h-4 w-4 text-primary" />
                 ) : checking ? (
@@ -194,36 +247,9 @@ export function AboutSection(props: SettingsSectionProps) {
                 )}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="text-sm font-semibold">
-                  {checkState.status === "error"
-                    ? t("settings.aboutUpdateError")
-                    : checking
-                      ? t("settings.aboutChecking")
-                      : installing
-                        ? t("settings.aboutInstalling")
-                        : checkState.status === "installed"
-                          ? t("settings.aboutInstalled")
-                          : latestResult?.available
-                            ? t("settings.aboutUpdateAvailable")
-                            : latestResult?.configured
-                              ? t("settings.aboutUpToDate")
-                              : t("settings.aboutUpdaterNotConfigured")}
-                </div>
+                <div className="text-sm font-semibold">{statusTitle}</div>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  {checkState.status === "error"
-                    ? checkState.message
-                    : checking
-                      ? t("settings.aboutCheckingDesc")
-                      : installing
-                        ? t("settings.aboutInstallingDesc")
-                        : checkState.status === "installed"
-                          ? t("settings.aboutInstalledDesc")
-                          : latestResult?.available
-                            ? t("settings.aboutUpdateAvailableDesc")
-                            : latestResult?.configured
-                              ? t("settings.aboutUpToDateDesc")
-                              : latestResult?.message ||
-                                t("settings.aboutUpdaterNotConfiguredDesc")}
+                  {statusDescription}
                 </p>
 
                 {nextVersion ? (
@@ -248,15 +274,17 @@ export function AboutSection(props: SettingsSectionProps) {
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <Button
                 type="button"
-                onClick={handleInstallUpdate}
-                disabled={!canInstall || installing}
+                onClick={installed ? handleRestartApp : handleInstallUpdate}
+                disabled={(installed ? false : !canInstall) || installing || restarting}
               >
-                {installing ? (
+                {installing || restarting ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
+                ) : installed ? (
+                  <RefreshCw className="h-4 w-4" />
                 ) : (
                   <Download className="h-4 w-4" />
                 )}
-                {t("settings.aboutInstallUpdate")}
+                {installed ? t("settings.aboutRestartApp") : t("settings.aboutInstallUpdate")}
               </Button>
               <div className="text-xs text-muted-foreground">
                 {latestResult?.repository || "Stack-Cairn/LiveAgent"}

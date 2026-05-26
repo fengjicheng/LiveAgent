@@ -1,6 +1,7 @@
 [package]
 name = "liveagent"
-version = "0.1.2"
+# Release builds override this dev placeholder from the Git tag workflow.
+version = "0.0.0-dev"
 description = "LiveAgent desktop application"
 authors = ["you"]
 edition = "2021"

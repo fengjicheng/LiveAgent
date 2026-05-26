@@ -516,6 +516,11 @@ pub async fn app_update_install(
     ))
 }
 
+#[tauri::command]
+pub fn app_restart(app: AppHandle) -> Result<(), String> {
+    app.restart();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

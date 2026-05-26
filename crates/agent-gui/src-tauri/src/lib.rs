@@ -106,6 +106,7 @@ macro_rules! app_invoke_handler {
             commands::settings::settings_save_memory,
             commands::update::app_update_check,
             commands::update::app_update_install,
+            commands::update::app_restart,
             // Hooks
             commands::hook::hook_run_script,
             commands::hook::hook_run_http_requests,
