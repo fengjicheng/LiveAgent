@@ -948,26 +948,6 @@ export function ChatPage(props: ChatPageProps) {
     [activateWorkspaceProject, checkWorkspaceProjectDirectory],
   );
 
-  const handleAddExistingWorkspaceProject = useCallback(async () => {
-    try {
-      const picked = await invoke<string | null>("system_pick_folder", {
-        initialWorkdir: activeWorkspaceProjectPath || workdir,
-      });
-      const path = picked?.trim();
-      if (!path) return;
-      activateWorkspaceProject(createWorkspaceProjectFromPath(path, "folder"));
-      void refreshHistoryWorkdirs();
-    } catch (error) {
-      setHistoryError(asErrorMessage(error, "选择项目目录失败"));
-    }
-  }, [
-    activateWorkspaceProject,
-    activeWorkspaceProjectPath,
-    refreshHistoryWorkdirs,
-    setHistoryError,
-    workdir,
-  ]);
-
   const handleOpenCreateWorkspaceProject = useCallback(async () => {
     try {
       const picked = await invoke<string | null>("system_pick_folder", {
@@ -3847,8 +3827,7 @@ export function ChatPage(props: ChatPageProps) {
         recentCollapsed={settings.customSettings.chatSidebar.recentCollapsed}
         onProjectsCollapsedChange={handleSidebarProjectsCollapsedChange}
         onRecentCollapsedChange={handleSidebarRecentCollapsedChange}
-        onCreateBlankProject={handleOpenCreateWorkspaceProject}
-        onAddExistingProject={handleAddExistingWorkspaceProject}
+        onCreateProject={handleOpenCreateWorkspaceProject}
         onSelectProject={handleSelectWorkspaceProject}
         onNewConversationForProject={handleNewConversationForProject}
         onStartRenamingProject={handleStartRenamingWorkspaceProject}

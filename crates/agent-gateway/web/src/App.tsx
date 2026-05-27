@@ -694,7 +694,7 @@ export default function App() {
     startedAt: number;
   } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [workdirPickerMode, setWorkdirPickerMode] = useState<"existing-project" | "blank-project" | null>(null);
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SectionId>("system");
   const [overlay, setOverlay] = useState<OverlayState>("closed");
   const [settings, setSettingsState] = useState<AppSettings>(() => loadWebSettings(loadToken()));
@@ -2165,29 +2165,18 @@ export default function App() {
     [activateWorkspaceProject, checkWorkspaceProjectDirectory],
   );
 
-  const handleAddExistingWorkspaceProject = useCallback(() => {
-    setWorkdirPickerMode("existing-project");
-  }, []);
-
   const handleOpenCreateWorkspaceProject = useCallback(() => {
-    setWorkdirPickerMode("blank-project");
+    setProjectPickerOpen(true);
   }, []);
 
   const handleWorkdirPickerSelect = useCallback(
     (path: string) => {
       const normalizedPath = path.trim();
       if (!normalizedPath) return;
-      if (workdirPickerMode === "existing-project") {
-        activateWorkspaceProject(createWorkspaceProjectFromPath(normalizedPath, "folder"));
-        void refreshHistoryWorkdirs(api);
-        return;
-      }
-      if (workdirPickerMode === "blank-project") {
-        activateWorkspaceProject(createWorkspaceProjectFromPath(normalizedPath, "managed"));
-        void refreshHistoryWorkdirs(api);
-      }
+      activateWorkspaceProject(createWorkspaceProjectFromPath(normalizedPath, "managed"));
+      void refreshHistoryWorkdirs(api);
     },
-    [activateWorkspaceProject, api, refreshHistoryWorkdirs, workdirPickerMode],
+    [activateWorkspaceProject, api, refreshHistoryWorkdirs],
   );
 
   const commitWorkspaceProjectRename = useCallback(
@@ -5614,8 +5603,7 @@ export default function App() {
           recentCollapsed={settings.customSettings.chatSidebar.recentCollapsed}
           onProjectsCollapsedChange={handleSidebarProjectsCollapsedChange}
           onRecentCollapsedChange={handleSidebarRecentCollapsedChange}
-          onCreateBlankProject={handleOpenCreateWorkspaceProject}
-          onAddExistingProject={handleAddExistingWorkspaceProject}
+          onCreateProject={handleOpenCreateWorkspaceProject}
           onSelectProject={handleSelectWorkspaceProject}
           onNewConversationForProject={handleNewConversationForProject}
           onStartRenamingProject={handleStartRenamingWorkspaceProject}
@@ -5746,13 +5734,13 @@ export default function App() {
           />
         ) : null}
 
-        {workdirPickerMode ? (
+        {projectPickerOpen ? (
           <WorkdirPickerModal
             initialWorkdir={
               activeWorkspaceProjectPath ||
               settings.system.workdir.trim()
             }
-            onClose={() => setWorkdirPickerMode(null)}
+            onClose={() => setProjectPickerOpen(false)}
             onSelect={handleWorkdirPickerSelect}
           />
         ) : null}

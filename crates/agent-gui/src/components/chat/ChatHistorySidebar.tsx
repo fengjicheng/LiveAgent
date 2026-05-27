@@ -62,8 +62,7 @@ type ChatHistorySidebarProps = {
   recentCollapsed?: boolean;
   onProjectsCollapsedChange?: (collapsed: boolean) => void;
   onRecentCollapsedChange?: (collapsed: boolean) => void;
-  onCreateBlankProject?: () => void;
-  onAddExistingProject?: () => void;
+  onCreateProject?: () => void;
   onSelectProject?: (project: WorkspaceProject) => void;
   onNewConversationForProject?: (project: WorkspaceProject) => void;
   onStartRenamingProject?: (project: WorkspaceProject) => void;
@@ -759,8 +758,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     recentCollapsed = false,
     onProjectsCollapsedChange,
     onRecentCollapsedChange,
-    onCreateBlankProject,
-    onAddExistingProject,
+    onCreateProject,
     onSelectProject,
     onNewConversationForProject,
     onStartRenamingProject,
@@ -1042,24 +1040,18 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                       variant="ghost"
                       size="icon"
                       className={PROJECT_ICON_BUTTON_CLASS}
-                      title="新增项目"
-                      aria-label="新增项目"
+                      title="新建项目"
+                      aria-label="新建项目"
                     />
                   }
                 >
                   <MoreHorizontal className="h-3.5 w-3.5" />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent side="right" align="start" sideOffset={6}>
-                  {onCreateBlankProject ? (
-                    <DropdownMenuItem onSelect={() => onCreateBlankProject()} className="gap-2">
+                  {onCreateProject ? (
+                    <DropdownMenuItem onSelect={() => onCreateProject()} className="gap-2">
                       <Plus className="h-3.5 w-3.5" />
                       新建项目
-                    </DropdownMenuItem>
-                  ) : null}
-                  {onAddExistingProject ? (
-                    <DropdownMenuItem onSelect={() => onAddExistingProject()} className="gap-2">
-                      <Folder className="h-3.5 w-3.5" />
-                      添加已有项目
                     </DropdownMenuItem>
                   ) : null}
                 </DropdownMenuContent>
