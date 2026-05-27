@@ -833,6 +833,75 @@ test("createLiveConversationStreamStore batches entries and clears tool status o
   unsubscribe();
 });
 
+test("createLiveConversationStreamStore commits background events without waiting for animation frames", () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  let rafScheduled = 0;
+  globalThis.window = {
+    requestAnimationFrame() {
+      rafScheduled += 1;
+      return 1;
+    },
+    cancelAnimationFrame() {},
+    setTimeout(callback) {
+      callback();
+      return 1;
+    },
+    clearTimeout() {},
+  };
+  globalThis.document = { visibilityState: "hidden" };
+
+  try {
+    const store = liveStore.createLiveConversationStreamStore();
+    store.appendEvent({ type: "token", text: "background", round: 1 });
+
+    assert.equal(rafScheduled, 0);
+    assert.equal(store.getSnapshot().entries.length, 1);
+    assert.equal(store.getSnapshot().entries[0].text, "background");
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
+
+test("createLiveConversationStreamStore falls back when a scheduled animation frame is paused", () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  let fallbackCallback = null;
+  let canceledFrame = null;
+  globalThis.window = {
+    requestAnimationFrame() {
+      return 7;
+    },
+    cancelAnimationFrame(id) {
+      canceledFrame = id;
+    },
+    setTimeout(callback) {
+      fallbackCallback = callback;
+      return 11;
+    },
+    clearTimeout() {},
+  };
+  globalThis.document = { visibilityState: "visible" };
+
+  try {
+    const store = liveStore.createLiveConversationStreamStore();
+    store.appendEvent({ type: "token", text: "queued", round: 1 });
+
+    assert.equal(store.getSnapshot().entries.length, 0);
+    assert.equal(typeof fallbackCallback, "function");
+
+    fallbackCallback();
+
+    assert.equal(canceledFrame, 7);
+    assert.equal(store.getSnapshot().entries.length, 1);
+    assert.equal(store.getSnapshot().entries[0].text, "queued");
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
+
 test("createLiveConversationStreamStore ignores replayed events with the same seq", () => {
   globalThis.window = undefined;
   globalThis.document = { visibilityState: "visible" };

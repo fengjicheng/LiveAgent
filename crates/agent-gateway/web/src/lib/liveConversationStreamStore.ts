@@ -30,6 +30,7 @@ const EMPTY_SNAPSHOT: LiveConversationStreamSnapshot = {
 const LIVE_STREAM_COMMIT_INTERVAL_MS = 48;
 const LIVE_STREAM_LONG_TEXT_COMMIT_INTERVAL_MS = 80;
 const LIVE_STREAM_BACKGROUND_COMMIT_INTERVAL_MS = 160;
+const LIVE_STREAM_RAF_FALLBACK_MS = 250;
 const LIVE_STREAM_LONG_TEXT_LENGTH = 6000;
 
 function normalizeOptionalStatus(value: string | null | undefined) {
@@ -51,6 +52,14 @@ function canUseTimeout() {
     typeof window.setTimeout === "function" &&
     typeof window.clearTimeout === "function"
   );
+}
+
+function isDocumentVisible() {
+  return typeof document === "undefined" || document.visibilityState === "visible";
+}
+
+function shouldUseAnimationFrameForCommit() {
+  return canUseAnimationFrame() && isDocumentVisible();
 }
 
 function getLatestLiveTextLength(snapshot: LiveConversationStreamSnapshot) {
@@ -90,6 +99,7 @@ export function createLiveConversationStreamStore(): LiveConversationStreamStore
   let snapshot = EMPTY_SNAPSHOT;
   let rafId: number | null = null;
   let timeoutId: number | null = null;
+  let rafFallbackTimeoutId: number | null = null;
   let lastCommitAt = 0;
   const seenEventSeqs = new Set<number>();
   const listeners = new Set<() => void>();
@@ -107,11 +117,16 @@ export function createLiveConversationStreamStore(): LiveConversationStreamStore
       window.clearTimeout(timeoutId);
     }
     timeoutId = null;
+    if (rafFallbackTimeoutId !== null && canUseTimeout()) {
+      window.clearTimeout(rafFallbackTimeoutId);
+    }
+    rafFallbackTimeoutId = null;
   };
 
   const commit = () => {
     rafId = null;
     timeoutId = null;
+    rafFallbackTimeoutId = null;
     if (snapshot === draft) {
       return;
     }
@@ -121,22 +136,41 @@ export function createLiveConversationStreamStore(): LiveConversationStreamStore
   };
 
   const scheduleCommit = () => {
-    if (rafId !== null || timeoutId !== null || snapshot === draft) {
+    if (
+      rafId !== null ||
+      timeoutId !== null ||
+      rafFallbackTimeoutId !== null ||
+      snapshot === draft
+    ) {
       return;
     }
-    if (!canUseAnimationFrame()) {
-      commit();
-      return;
-    }
+
     const elapsed = Date.now() - lastCommitAt;
     const delay = Math.max(0, resolveCommitInterval(draft) - elapsed);
     const scheduleFrame = () => {
       timeoutId = null;
-      if (!canUseAnimationFrame()) {
+      if (!shouldUseAnimationFrameForCommit()) {
         commit();
         return;
       }
-      rafId = window.requestAnimationFrame(commit);
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        if (rafFallbackTimeoutId !== null && canUseTimeout()) {
+          window.clearTimeout(rafFallbackTimeoutId);
+        }
+        rafFallbackTimeoutId = null;
+        commit();
+      });
+      if (canUseTimeout()) {
+        rafFallbackTimeoutId = window.setTimeout(() => {
+          rafFallbackTimeoutId = null;
+          if (rafId !== null && canUseAnimationFrame()) {
+            window.cancelAnimationFrame(rafId);
+          }
+          rafId = null;
+          commit();
+        }, LIVE_STREAM_RAF_FALLBACK_MS);
+      }
     };
     if (delay <= 0 || !canUseTimeout()) {
       scheduleFrame();
