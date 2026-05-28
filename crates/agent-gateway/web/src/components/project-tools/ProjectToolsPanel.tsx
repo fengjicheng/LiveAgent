@@ -28,12 +28,15 @@ import type {
   TerminalShellOption,
   TerminalSnapshot,
 } from "@/lib/terminal/types";
-import { Check, FolderTree, GripVertical, Plus, Terminal, X } from "../icons";
+import { Check, ChevronRight, FolderTree, GripVertical, Plus, Terminal, X } from "../icons";
 import { Button } from "../ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { ProjectFileTreePanel } from "./ProjectFileTreePanel";
@@ -526,7 +529,6 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
   const [pendingCloseSessionId, setPendingCloseSessionId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [shellOptions, setShellOptions] = useState<TerminalShellOption[]>([]);
-  const [selectedShell, setSelectedShell] = useState("");
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [shouldRenderContent, setShouldRenderContent] = useState(isOpen);
   const [widthCollapsed, setWidthCollapsed] = useState(!isOpen);
@@ -794,7 +796,6 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
   useEffect(() => {
     if (!projectReady) {
       setShellOptions([]);
-      setSelectedShell("");
       return;
     }
     let cancelled = false;
@@ -803,17 +804,10 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
       .then((response) => {
         if (cancelled) return;
         setShellOptions(response.options);
-        setSelectedShell((current) => {
-          if (current && response.options.some((option) => option.id === current)) {
-            return current;
-          }
-          return response.defaultShell || response.options[0]?.id || "";
-        });
       })
       .catch(() => {
         if (!cancelled) {
           setShellOptions([]);
-          setSelectedShell("");
         }
       });
     return () => {
@@ -878,42 +872,40 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
     }
   }, [pendingCloseSessionId, sessions]);
 
+  const createTerminal = useCallback(
+    (shell?: string) => {
+      if (!projectReady || creating) return;
+      setCreating(true);
+      setError(null);
+      void client
+        .create({
+          cwd,
+          projectPathKey,
+          shell: shell?.trim() || undefined,
+          cols: DEFAULT_TERMINAL_COLS,
+          rows: DEFAULT_TERMINAL_ROWS,
+        })
+        .then((snapshot) => {
+          setSessions((current) => {
+            const next = sortSessions([
+              ...current.filter((session) => session.id !== snapshot.session.id),
+              snapshot.session,
+            ]);
+            onSessionsChange?.(next);
+            return next;
+          });
+          setActiveSessionId(snapshot.session.id);
+          onActiveTabChange("terminal");
+        })
+        .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+        .finally(() => setCreating(false));
+    },
+    [client, creating, cwd, onActiveTabChange, onSessionsChange, projectPathKey, projectReady],
+  );
+
   const handleCreate = useCallback(() => {
-    if (!projectReady || creating) return;
-    setCreating(true);
-    setError(null);
-    void client
-      .create({
-        cwd,
-        projectPathKey,
-        shell: selectedShell || undefined,
-        cols: DEFAULT_TERMINAL_COLS,
-        rows: DEFAULT_TERMINAL_ROWS,
-      })
-      .then((snapshot) => {
-        setSessions((current) => {
-          const next = sortSessions([
-            ...current.filter((session) => session.id !== snapshot.session.id),
-            snapshot.session,
-          ]);
-          onSessionsChange?.(next);
-          return next;
-        });
-        setActiveSessionId(snapshot.session.id);
-        onActiveTabChange("terminal");
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setCreating(false));
-  }, [
-    client,
-    creating,
-    cwd,
-    onActiveTabChange,
-    onSessionsChange,
-    projectPathKey,
-    projectReady,
-    selectedShell,
-  ]);
+    createTerminal();
+  }, [createTerminal]);
 
   const closeSession = useCallback(
     (session: TerminalSession) => {
@@ -1255,6 +1247,45 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
     }
   }, [activeTab, onActiveTabChange, setFileTreeInitialized]);
 
+  const renderCreateTerminalMenuItem = () => {
+    if (shellOptions.length > 1) {
+      return (
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger disabled={!projectReady || creating} className="gap-2 text-xs">
+            <Terminal className="h-3.5 w-3.5" />
+            <span className="min-w-0 flex-1">{t("projectTools.newTerminal")}</span>
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="min-w-36">
+            {shellOptions.map((option) => (
+              <DropdownMenuItem
+                key={option.id}
+                onSelect={() => createTerminal(option.id)}
+                disabled={!projectReady || creating}
+                className="gap-2 text-xs"
+                title={option.command || option.label}
+              >
+                <Terminal className="h-3.5 w-3.5" />
+                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      );
+    }
+
+    return (
+      <DropdownMenuItem
+        onSelect={handleCreate}
+        disabled={!projectReady || creating}
+        className="gap-2 text-xs"
+      >
+        <Terminal className="h-3.5 w-3.5" />
+        {t("projectTools.newTerminal")}
+      </DropdownMenuItem>
+    );
+  };
+
   return (
     <aside
       aria-hidden={!isOpen}
@@ -1439,21 +1470,6 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                   />
                 </div>
               </div>
-              {shellOptions.length > 1 ? (
-                <select
-                  value={selectedShell}
-                  onChange={(event) => setSelectedShell(event.target.value)}
-                  disabled={creating}
-                  title={t("projectTools.shell")}
-                  className="project-tools-panel-shell-select h-8 max-w-[8rem] shrink-0 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none hover:bg-muted focus:ring-2 focus:ring-ring"
-                >
-                  {shellOptions.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              ) : null}
               <DropdownMenu open={createMenuOpen} onOpenChange={setCreateMenuOpen}>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -1467,14 +1483,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" sideOffset={6} className="min-w-40">
-                  <DropdownMenuItem
-                    onSelect={handleCreate}
-                    disabled={!projectReady || creating}
-                    className="gap-2 text-xs"
-                  >
-                    <Terminal className="h-3.5 w-3.5" />
-                    {t("projectTools.newTerminal")}
-                  </DropdownMenuItem>
+                  {renderCreateTerminalMenuItem()}
                   <DropdownMenuItem
                     onSelect={startFileTree}
                     disabled={!projectReady}

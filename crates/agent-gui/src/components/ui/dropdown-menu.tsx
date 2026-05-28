@@ -5,6 +5,7 @@ import { Check } from "../icons";
 
 export const DropdownMenu = Menu.Root;
 export const DropdownMenuTrigger = Menu.Trigger;
+export const DropdownMenuSub = Menu.SubmenuRoot;
 
 type DropdownMenuContentProps = React.ComponentPropsWithoutRef<typeof Menu.Popup> &
   Pick<
@@ -73,6 +74,48 @@ export const DropdownMenuCheckboxItem = React.forwardRef<
   </Menu.CheckboxItem>
 ));
 DropdownMenuCheckboxItem.displayName = "DropdownMenuCheckboxItem";
+
+export const DropdownMenuSubTrigger = React.forwardRef<
+  HTMLElement,
+  React.ComponentPropsWithoutRef<typeof Menu.SubmenuTrigger>
+>(({ className, ...props }, ref) => (
+  <Menu.SubmenuTrigger
+    ref={ref}
+    className={cn(
+      "relative flex cursor-default select-none items-center rounded-xs px-2 py-1.5 text-sm outline-hidden transition-colors data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50",
+      className,
+    )}
+    {...props}
+  />
+));
+DropdownMenuSubTrigger.displayName = "DropdownMenuSubTrigger";
+
+export const DropdownMenuSubContent = React.forwardRef<HTMLDivElement, DropdownMenuContentProps>(
+  (
+    { className, side = "right", align = "start", sideOffset = 6, collisionPadding, ...props },
+    ref,
+  ) => (
+    <Menu.Portal>
+      <Menu.Positioner
+        side={side}
+        align={align}
+        sideOffset={sideOffset}
+        collisionPadding={collisionPadding}
+        className="z-[9999]"
+      >
+        <Menu.Popup
+          ref={ref}
+          className={cn(
+            "min-w-48 overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md data-[open]:animate-in data-[closed]:animate-out data-[closed]:fade-out-0 data-[open]:fade-in-0 data-[closed]:zoom-out-95 data-[open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+            className,
+          )}
+          {...props}
+        />
+      </Menu.Positioner>
+    </Menu.Portal>
+  ),
+);
+DropdownMenuSubContent.displayName = "DropdownMenuSubContent";
 
 type DropdownMenuItemProps = React.ComponentPropsWithoutRef<typeof Menu.Item> & {
   onSelect?: () => void;
