@@ -18,7 +18,7 @@ export type GatewaySettingsSyncPayload = {
   agents: AppSettings["agents"];
   hooks: AppSettings["hooks"];
   cron: AppSettings["cron"];
-  remote?: Pick<AppSettings["remote"], "enableWebTerminal">;
+  remote?: Pick<AppSettings["remote"], "enableWebTerminal" | "enableWebGit">;
   memory: AppSettings["memory"];
   customSettings: Partial<AppSettings["customSettings"]>;
   skills: AppSettings["skills"];
@@ -246,12 +246,17 @@ function mergeSyncedRemoteSettings(
   incoming: unknown,
 ): AppSettings["remote"] {
   const source = asObject(incoming);
-  if (!Object.hasOwn(source, "enableWebTerminal")) {
+  if (!Object.hasOwn(source, "enableWebTerminal") && !Object.hasOwn(source, "enableWebGit")) {
     return current;
   }
   return {
     ...current,
-    enableWebTerminal: source.enableWebTerminal === true,
+    enableWebTerminal: Object.hasOwn(source, "enableWebTerminal")
+      ? source.enableWebTerminal === true
+      : current.enableWebTerminal,
+    enableWebGit: Object.hasOwn(source, "enableWebGit")
+      ? source.enableWebGit === true
+      : current.enableWebGit,
   };
 }
 
@@ -310,6 +315,7 @@ export function buildGatewaySettingsSyncPayload(
     cron: settings.cron,
     remote: {
       enableWebTerminal: settings.remote.enableWebTerminal,
+      enableWebGit: settings.remote.enableWebGit,
     },
     memory: settings.memory,
     customSettings: syncableCustomSettings(settings.customSettings),

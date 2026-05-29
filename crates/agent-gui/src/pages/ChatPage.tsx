@@ -76,6 +76,7 @@ import {
 import { createSubagentRuntimeManager } from "../lib/chat/subagent/subagentRuntimeManager";
 import { createStreamDebugLogger } from "../lib/debug/agentDebug";
 import { createConversationHookDispatcher } from "../lib/hooks/conversationHooks";
+import { tauriGitClient } from "../lib/git/tauriGitClient";
 import { createModelFromConfig, toModelValue } from "../lib/providers/llm";
 import {
   type AppSettings,
@@ -1335,9 +1336,9 @@ export function ChatPage(props: ChatPageProps) {
   const terminalProjectPath = isAgentMode ? activeWorkspaceProjectPath.trim() : "";
   const terminalProjectPathKey = terminalProjectPath ? workspaceProjectPathKey(terminalProjectPath) : "";
   const terminalDisabledMessage = !isAgentMode
-    ? "Terminal requires Agent project mode."
+    ? "Project tools require Agent project mode."
     : !terminalProjectPath
-      ? "Select a project to use Terminal."
+      ? "Select a project to use project tools."
       : undefined;
   useEffect(() => {
     if (!terminalProjectPathKey) {
@@ -4166,6 +4167,8 @@ export function ChatPage(props: ChatPageProps) {
               isAgentMode={isAgentMode}
               chatRuntimeControls={chatRuntimeControlsForCurrentProvider}
               reasoningOptions={chatRuntimeReasoningOptions}
+              gitClient={tauriGitClient}
+              onGitChanged={() => window.dispatchEvent(new Event("liveagent:git-changed"))}
               onSend={handleSend}
               onStop={handleStopSending}
               onComposerBusyChange={handleComposerBusyChange}
@@ -4262,6 +4265,8 @@ export function ChatPage(props: ChatPageProps) {
           terminalProjectPathKey,
         )}
         client={tauriTerminalClient}
+        gitClient={tauriGitClient}
+        gitWriteEnabled
         onWidthChange={(nextWidth) =>
           setSettings((prev) =>
             updateCustomSettings(prev, {

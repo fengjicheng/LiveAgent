@@ -142,7 +142,7 @@ export type ChatSidebarSettings = {
   recentCollapsed: boolean;
 };
 
-export type ProjectToolsPanelTab = "terminal" | "fileTree";
+export type ProjectToolsPanelTab = "terminal" | "fileTree" | "gitReview";
 
 export type ProjectToolsPanelSettings = {
   width: number;
@@ -260,6 +260,7 @@ export type RemoteSettings = {
   autoReconnect: boolean;
   heartbeatInterval: number;
   enableWebTerminal: boolean;
+  enableWebGit: boolean;
 };
 
 export type AppSettings = {
@@ -1047,6 +1048,7 @@ export function normalizeRemoteSettings(input: unknown): RemoteSettings {
     autoReconnect: obj.autoReconnect !== false,
     heartbeatInterval: normalizePositiveInteger(obj.heartbeatInterval, 30),
     enableWebTerminal: obj.enableWebTerminal === true,
+    enableWebGit: obj.enableWebGit === true,
   };
 }
 
@@ -1566,7 +1568,9 @@ export function normalizeCustomSettings(
     ? obj.projectToolsPanel
     : {}) as Record<string, unknown>;
   const projectToolsPanelActiveTab =
-    projectToolsPanel.activeTab === "terminal" || projectToolsPanel.activeTab === "fileTree"
+    projectToolsPanel.activeTab === "terminal" ||
+    projectToolsPanel.activeTab === "fileTree" ||
+    projectToolsPanel.activeTab === "gitReview"
       ? projectToolsPanel.activeTab
       : "fileTree";
   const projectToolsFileTree = (obj.projectToolsFileTree && typeof obj.projectToolsFileTree === "object"
@@ -1585,7 +1589,7 @@ export function normalizeCustomSettings(
       width: normalizeIntegerInRange(
         obj.terminalPanelWidth ?? projectToolsPanel.width ?? legacyTerminalPanel.width,
         320,
-        720,
+        1280,
         420,
       ),
       activeTab: projectToolsPanelActiveTab,
@@ -1625,6 +1629,7 @@ export function getDefaultSettings(): AppSettings {
       autoReconnect: true,
       heartbeatInterval: 30,
       enableWebTerminal: false,
+      enableWebGit: false,
     },
     memory: normalizeMemorySettings({}, customProviders),
     customSettings: normalizeCustomSettings({}, customProviders),

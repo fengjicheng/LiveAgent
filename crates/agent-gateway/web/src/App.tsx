@@ -83,6 +83,7 @@ import {
   getGatewayWebSocketClient,
   resetGatewayWebSocketClient,
 } from "./lib/gatewaySocket";
+import { createGatewayGitClient } from "./lib/git/gatewayGitClient";
 import { createGatewayTerminalClient } from "./lib/terminal/gatewayTerminalClient";
 import {
   applyTerminalEventToSessions,
@@ -681,6 +682,7 @@ export default function App() {
     [token],
   );
   const terminalClient = useMemo(() => (api ? createGatewayTerminalClient(api) : null), [api]);
+  const gitClient = useMemo(() => (api ? createGatewayGitClient(api) : null), [api]);
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatEntry[]>([]);
@@ -5294,15 +5296,21 @@ export default function App() {
   displayedConversationWorkdirRef.current = displayedConversationWorkdir;
   const terminalProjectPath = isAgentMode ? activeWorkspaceProjectPath.trim() : "";
   const terminalProjectPathKey = terminalProjectPath ? workspaceProjectPathKey(terminalProjectPath) : "";
-  const terminalDisabledMessage = !settingsSyncReady
+  const projectToolsDisabledMessage = !settingsSyncReady
     ? "Syncing desktop settings..."
     : !isAgentMode
-      ? "Terminal requires Agent project mode."
+      ? "Project tools require Agent project mode."
       : !terminalProjectPath
-        ? "Select a project to use Terminal."
-        : !settings.remote.enableWebTerminal
-          ? "Enable WebUI Terminal in desktop Remote settings."
-          : undefined;
+        ? "Select a project to use project tools."
+        : undefined;
+  const terminalDisabledMessage =
+    projectToolsDisabledMessage ??
+    (!settings.remote.enableWebTerminal
+      ? "Enable WebUI Terminal in desktop Remote settings."
+      : undefined);
+  const gitDisabledMessage = !settings.remote.enableWebGit
+    ? "WebUI Git is disabled in desktop Remote settings."
+    : undefined;
   const projectTerminalSessions = useMemo(
     () =>
       terminalProjectPathKey
@@ -6014,12 +6022,12 @@ export default function App() {
                     variant="ghost"
                     size="icon"
                     onClick={() => setProjectToolsPanelOpen((open) => !open)}
-                    disabled={Boolean(terminalDisabledMessage) && !projectToolsPanelOpen}
+                    disabled={Boolean(projectToolsDisabledMessage) && !projectToolsPanelOpen}
                     aria-expanded={projectToolsPanelOpen}
                     title={
                       projectToolsPanelOpen
                         ? "Collapse project tools panel"
-                        : (terminalDisabledMessage ?? "Expand project tools panel")
+                        : (projectToolsDisabledMessage ?? "Expand project tools panel")
                     }
                     className={`gateway-project-tools-panel-toggle relative h-8 w-8 rounded-lg text-muted-foreground transition-[background-color,color,transform] duration-150 hover:text-foreground active:scale-95 ${
                       projectToolsPanelOpen ? "bg-muted text-foreground" : ""
@@ -6134,6 +6142,10 @@ export default function App() {
                 isAgentMode={isAgentMode}
                 chatRuntimeControls={chatRuntimeControlsForCurrentProvider}
                 reasoningOptions={chatRuntimeReasoningOptions}
+                gitClient={gitClient}
+                gitWriteEnabled={settings.remote.enableWebGit}
+                gitDisabledMessage={gitDisabledMessage}
+                onGitChanged={() => window.dispatchEvent(new Event("liveagent:git-changed"))}
                 onSend={() => {
                   if (
                     submitInFlightRef.current ||
@@ -6296,7 +6308,8 @@ export default function App() {
             sessions={projectTerminalSessions}
             width={settings.customSettings.projectToolsPanel.width}
             theme={settings.theme}
-            disabledMessage={terminalDisabledMessage}
+            disabledMessage={projectToolsDisabledMessage}
+            terminalDisabledMessage={terminalDisabledMessage}
             activeTab={settings.customSettings.projectToolsPanel.activeTab}
             tabOrder={getProjectToolsPanelTabOrder(
               settings.customSettings,
@@ -6311,6 +6324,9 @@ export default function App() {
               terminalProjectPathKey,
             )}
             client={terminalClient}
+            gitClient={gitClient}
+            gitWriteEnabled={settings.remote.enableWebGit}
+            gitDisabledMessage={gitDisabledMessage}
             onWidthChange={(nextWidth) =>
               setSettings((prev) =>
                 updateCustomSettings(prev, {

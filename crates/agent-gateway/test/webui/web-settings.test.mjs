@@ -235,7 +235,10 @@ test("gateway settings sync keeps remote connection local and syncs web terminal
   assert.equal(synced.remote.token, "token");
 
   const payload = settingsSync.buildGatewaySettingsSyncPayload(synced);
-  assert.deepEqual(payload.remote, { enableWebTerminal: synced.remote.enableWebTerminal });
+  assert.deepEqual(payload.remote, {
+    enableWebTerminal: synced.remote.enableWebTerminal,
+    enableWebGit: synced.remote.enableWebGit,
+  });
   assert.deepEqual(payload.chatRuntimeControls, synced.chatRuntimeControls);
 });
 
