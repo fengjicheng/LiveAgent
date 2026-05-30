@@ -58,6 +58,7 @@ const GIT_REVIEW_TAB_ID = "__git_review__";
 
 type ProjectToolsPanelProps = {
   isOpen: boolean;
+  collapseImmediately?: boolean;
   projectPathKey: string;
   cwd: string;
   sessions?: TerminalSession[];
@@ -562,6 +563,7 @@ function clampScrollLeft(value: number, max: number) {
 export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
   const {
     isOpen,
+    collapseImmediately = false,
     projectPathKey,
     cwd,
     sessions: externalSessions,
@@ -627,6 +629,8 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
   } | null>(null);
   const panelWidth = clampPanelWidth(draftWidth, maxPanelWidth);
   const panelStyle = { "--project-tools-panel-width": `${panelWidth}px` } as CSSProperties;
+  const effectiveWidthCollapsed = !isOpen && collapseImmediately ? true : widthCollapsed;
+  const effectiveShouldRenderContent = !isOpen && collapseImmediately ? false : shouldRenderContent;
   const isControlled = externalSessions !== undefined;
   const fileTreeInitialized = Boolean(projectPathKey && fileTreeOpen);
   const gitReviewInitialized = Boolean(projectPathKey && gitReviewOpen);
@@ -916,12 +920,17 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
       setShouldRenderContent(true);
       return;
     }
+    if (collapseImmediately) {
+      setShouldRenderContent(false);
+      setWidthCollapsed(true);
+      return;
+    }
     const timer = window.setTimeout(() => {
       setShouldRenderContent(false);
       setWidthCollapsed(true);
     }, 220);
     return () => window.clearTimeout(timer);
-  }, [isOpen]);
+  }, [collapseImmediately, isOpen]);
 
   useEffect(() => {
     if (!terminalReady) {
@@ -1472,7 +1481,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
         isOpen
           ? "pointer-events-auto translate-y-0 border-t border-border opacity-100 md:w-[var(--project-tools-panel-width)] md:translate-x-0 md:border-l md:border-t-0"
           : "pointer-events-none translate-y-full border-t border-transparent opacity-0 md:translate-x-3 md:translate-y-0 md:border-l-0 md:border-t-0",
-        widthCollapsed ? "md:w-0" : "md:w-[var(--project-tools-panel-width)]",
+        effectiveWidthCollapsed ? "md:w-0" : "md:w-[var(--project-tools-panel-width)]",
       )}
       style={panelStyle}
     >
@@ -1484,7 +1493,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
             : "translate-y-3 opacity-0 md:translate-x-2 md:translate-y-0",
         )}
       >
-        {shouldRenderContent ? (
+        {effectiveShouldRenderContent ? (
           <>
             <button
               type="button"

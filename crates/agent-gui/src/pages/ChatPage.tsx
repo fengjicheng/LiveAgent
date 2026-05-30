@@ -4074,10 +4074,12 @@ export function ChatPage(props: ChatPageProps) {
         onCloseSidebar={handleCloseSidebar}
         onOpenSkillsHub={() => {
           cacheActiveComposerDraft();
+          setProjectToolsPanelOpen(false);
           setActiveView("skills-hub");
         }}
         onOpenMcpHub={() => {
           cacheActiveComposerDraft();
+          setProjectToolsPanelOpen(false);
           setActiveView("mcp-hub");
         }}
       />
@@ -4296,7 +4298,8 @@ export function ChatPage(props: ChatPageProps) {
         )}
       </div>
       <ProjectToolsPanel
-        isOpen={projectToolsPanelOpen}
+        isOpen={activeView === "chat" && projectToolsPanelOpen}
+        collapseImmediately={activeView !== "chat"}
         projectPathKey={terminalProjectPathKey}
         cwd={terminalProjectPath}
         sessions={projectTerminalSessions}
