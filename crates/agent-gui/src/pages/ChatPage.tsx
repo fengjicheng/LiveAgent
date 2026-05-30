@@ -1,4 +1,4 @@
-import type { Context, UserMessage } from "@mariozechner/pi-ai";
+import type { Context, UserMessage } from "@earendil-works/pi-ai";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";

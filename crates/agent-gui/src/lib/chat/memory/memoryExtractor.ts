@@ -1,4 +1,4 @@
-import type { Message } from "@mariozechner/pi-ai";
+import type { Message } from "@earendil-works/pi-ai";
 import { memoryApplyBatch, memoryTodayLocalDate } from "../../memory/api";
 import { assistantMessageToText } from "../../providers/llm";
 import type { ConversationViewState } from "../conversation/conversationState";

@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { CompactionStatus } from "../../lib/chat/compaction/contextCompaction";
 import type { ConversationViewState } from "../../lib/chat/conversation/conversationState";
 import type { ConversationHookWarning } from "../../lib/hooks/conversationHooks";

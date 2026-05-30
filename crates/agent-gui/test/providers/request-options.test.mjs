@@ -254,7 +254,7 @@ test("Codex Chat Completions streams forward reasoning effort", () => {
   let captured;
   const localLoader = createTsModuleLoader({
     mocks: {
-      "@mariozechner/pi-ai/openai-completions": {
+      "@earendil-works/pi-ai/openai-completions": {
         streamOpenAICompletions(model, context, options) {
           captured = { model, context, options };
           return { mocked: true };

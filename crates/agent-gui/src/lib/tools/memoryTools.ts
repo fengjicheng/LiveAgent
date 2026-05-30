@@ -1,5 +1,5 @@
-import type { Tool, ToolCall, ToolResultMessage } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import type { Tool, ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   MEMORY_MANAGER_ACTION_DESCRIPTION_RO,
   MEMORY_MANAGER_ACTION_DESCRIPTION_RW,

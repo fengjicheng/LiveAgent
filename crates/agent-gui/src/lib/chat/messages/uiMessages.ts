@@ -4,7 +4,7 @@ import type {
   ToolCall,
   ToolResultMessage,
   Usage,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { assistantMessageToText } from "../../providers/llm";
 import { GLOBAL_BASH_MAX_TIMEOUT_MS, MIN_BASH_TIMEOUT_MS } from "../../tools/bashTimeoutPolicy";
 import type {

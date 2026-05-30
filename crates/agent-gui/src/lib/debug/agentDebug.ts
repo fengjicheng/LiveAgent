@@ -1,4 +1,4 @@
-import type { Context } from "@mariozechner/pi-ai";
+import type { Context } from "@earendil-works/pi-ai";
 import { invoke } from "@tauri-apps/api/core";
 
 import type { CodexRequestFormat, ExecutionMode, ProviderId, ReasoningLevel } from "../settings";

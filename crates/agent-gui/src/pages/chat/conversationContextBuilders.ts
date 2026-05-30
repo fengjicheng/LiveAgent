@@ -1,4 +1,4 @@
-import type { Context, UserMessage } from "@mariozechner/pi-ai";
+import type { Context, UserMessage } from "@earendil-works/pi-ai";
 
 import {
   buildRequestContext,

@@ -1,4 +1,4 @@
-import type { AssistantMessage, Message, Model, Usage } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Message, Model, Usage } from "@earendil-works/pi-ai";
 
 import type { ExecutionMode } from "../../settings";
 import {

@@ -777,7 +777,7 @@ test("text-mode OpenAI Responses stream forwards workdir for native attachments"
           throw new Error(`unexpected invoke: ${command}`);
         },
       },
-      "@mariozechner/pi-ai/openai-responses": {
+      "@earendil-works/pi-ai/openai-responses": {
         streamOpenAIResponses(model, context, options) {
           return {
             async *[Symbol.asyncIterator]() {
@@ -866,7 +866,7 @@ test("text-mode OpenAI Chat Completions stream forwards workdir for native image
           throw new Error(`unexpected invoke: ${command}`);
         },
       },
-      "@mariozechner/pi-ai/openai-completions": {
+      "@earendil-works/pi-ai/openai-completions": {
         streamOpenAICompletions(model, context, options) {
           return {
             async *[Symbol.asyncIterator]() {
@@ -937,7 +937,7 @@ test("text-mode Anthropic stream forwards workdir for native attachments", async
   let capturedPayload = null;
   const loader = createTsModuleLoader({
     mocks: {
-      "@mariozechner/pi-ai": {
+      "@earendil-works/pi-ai": {
         getModel() {
           return null;
         },
@@ -960,7 +960,7 @@ test("text-mode Anthropic stream forwards workdir for native attachments", async
           throw new Error(`unexpected invoke: ${command}`);
         },
       },
-      "@mariozechner/pi-ai/anthropic": {
+      "@earendil-works/pi-ai/anthropic": {
         streamAnthropic(model, context, options) {
           return {
             async *[Symbol.asyncIterator]() {
@@ -1032,7 +1032,7 @@ test("text-mode Gemini stream forwards workdir for native attachments", async ()
   let capturedPayload = null;
   const loader = createTsModuleLoader({
     mocks: {
-      "@mariozechner/pi-ai": {
+      "@earendil-works/pi-ai": {
         getModel() {
           return null;
         },
@@ -1055,7 +1055,7 @@ test("text-mode Gemini stream forwards workdir for native attachments", async ()
           throw new Error(`unexpected invoke: ${command}`);
         },
       },
-      "@mariozechner/pi-ai/google": {
+      "@earendil-works/pi-ai/google": {
         streamGoogle(model, context, options) {
           return {
             async *[Symbol.asyncIterator]() {

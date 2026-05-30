@@ -1,4 +1,4 @@
-import type { Context, Message, TextContent, ToolResultMessage } from "@mariozechner/pi-ai";
+import type { Context, Message, TextContent, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { DisplayImageItemDetails, DisplayImageResultDetails } from "../../tools/builtinTypes";
 import {
   hostedSearchBlockToContextText,

@@ -1,4 +1,4 @@
-import type { Tool, ToolCall, ToolResultMessage } from "@mariozechner/pi-ai";
+import type { Tool, ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import {
   createCompactionThrottleState,
   noteCompactionApplied,

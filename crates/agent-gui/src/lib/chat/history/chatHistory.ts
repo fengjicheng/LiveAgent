@@ -1,4 +1,4 @@
-import type { Message } from "@mariozechner/pi-ai";
+import type { Message } from "@earendil-works/pi-ai";
 import { invoke } from "@tauri-apps/api/core";
 import { normalizeConversationSystemPrompt } from "../context/systemPrompt";
 import {
