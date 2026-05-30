@@ -1,4 +1,4 @@
-import type { Tool } from "@mariozechner/pi-ai";
+import type { Tool } from "@earendil-works/pi-ai";
 import { parseSubagentRunState } from "../../tools/delegate/history";
 import {
   createAgentTemplateLookup,

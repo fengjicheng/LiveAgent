@@ -1,4 +1,4 @@
-import type { Context } from "@mariozechner/pi-ai";
+import type { Context } from "@earendil-works/pi-ai";
 import { type ModelOption, toModelValue } from "../../providers/llm";
 import type { AppSettings } from "../../settings";
 import type { ChatHistorySummary } from "../history/chatHistory";

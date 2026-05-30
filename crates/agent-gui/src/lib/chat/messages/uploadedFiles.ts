@@ -1,4 +1,4 @@
-import type { Message, UserMessage } from "@mariozechner/pi-ai";
+import type { Message, UserMessage } from "@earendil-works/pi-ai";
 
 export type UploadedReadableFileKind =
   | "text"

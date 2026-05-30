@@ -5,7 +5,7 @@ import type {
   ToolResultMessage,
   Usage,
   UserMessage,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 
 import type { StreamDebugLogger } from "../../debug/agentDebug";
 import { assistantMessageToText, completeAssistantMessage } from "../../providers/llm";

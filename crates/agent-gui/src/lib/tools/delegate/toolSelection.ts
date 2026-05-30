@@ -1,4 +1,4 @@
-import type { Tool } from "@mariozechner/pi-ai";
+import type { Tool } from "@earendil-works/pi-ai";
 
 import type { BuiltinToolMetadata } from "../builtinTypes";
 import { DELEGATE_TOOL_NAME } from "./constants";

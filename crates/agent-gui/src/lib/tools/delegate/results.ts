@@ -1,4 +1,4 @@
-import type { ToolCall, ToolResultMessage } from "@mariozechner/pi-ai";
+import type { ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 
 import type { SubagentIdentityRecord } from "../../chat/subagent/subagentHistory";
 import type {

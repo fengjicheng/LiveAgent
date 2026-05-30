@@ -8,8 +8,49 @@ import ts from "typescript";
 const DEFAULT_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json"];
 
 function createDefaultMocks() {
+  const typeboxMock = {
+    Type: {
+      Object(properties = {}) {
+        return { type: "object", properties };
+      },
+      String(options = {}) {
+        return { type: "string", ...options };
+      },
+      Number(options = {}) {
+        return { type: "number", ...options };
+      },
+      Integer(options = {}) {
+        return { type: "integer", ...options };
+      },
+      Null(options = {}) {
+        return { type: "null", ...options };
+      },
+      Any(options = {}) {
+        return { ...options };
+      },
+      Record(key, value, options = {}) {
+        return { type: "object", propertyNames: key, additionalProperties: value, ...options };
+      },
+      Boolean(options = {}) {
+        return { type: "boolean", ...options };
+      },
+      Literal(value, options = {}) {
+        return { const: value, ...options };
+      },
+      Union(anyOf = [], options = {}) {
+        return { anyOf, ...options };
+      },
+      Optional(schema) {
+        return { ...schema, optional: true };
+      },
+      Array(items, options = {}) {
+        return { type: "array", items, ...options };
+      },
+    },
+  };
+
   return {
-    "@mariozechner/pi-ai": {
+    "@earendil-works/pi-ai": {
       getModel(id, config = {}) {
         return {
           id,
@@ -19,23 +60,34 @@ function createDefaultMocks() {
           ...config,
         };
       },
+      streamSimple() {
+        throw new Error("streamSimple mock was not expected to be called");
+      },
+      validateToolArguments(_tool, toolCall) {
+        return toolCall?.arguments ?? {};
+      },
+      EventStream: class EventStream {
+        constructor() {
+          throw new Error("EventStream mock was not expected to be constructed");
+        }
+      },
     },
-    "@mariozechner/pi-ai/anthropic": {
+    "@earendil-works/pi-ai/anthropic": {
       streamAnthropic() {
         throw new Error("streamAnthropic mock was not expected to be called");
       },
     },
-    "@mariozechner/pi-ai/openai-completions": {
+    "@earendil-works/pi-ai/openai-completions": {
       streamOpenAICompletions() {
         throw new Error("streamOpenAICompletions mock was not expected to be called");
       },
     },
-    "@mariozechner/pi-ai/openai-responses": {
+    "@earendil-works/pi-ai/openai-responses": {
       streamOpenAIResponses() {
         throw new Error("streamOpenAIResponses mock was not expected to be called");
       },
     },
-    "@mariozechner/pi-ai/google": {
+    "@earendil-works/pi-ai/google": {
       streamGoogle() {
         throw new Error("streamGoogle mock was not expected to be called");
       },
@@ -45,46 +97,7 @@ function createDefaultMocks() {
         throw new Error("tauri invoke mock was not expected to be called");
       },
     },
-    "@sinclair/typebox": {
-      Type: {
-        Object(properties = {}) {
-          return { type: "object", properties };
-        },
-        String(options = {}) {
-          return { type: "string", ...options };
-        },
-        Number(options = {}) {
-          return { type: "number", ...options };
-        },
-        Integer(options = {}) {
-          return { type: "integer", ...options };
-        },
-        Null(options = {}) {
-          return { type: "null", ...options };
-        },
-        Any(options = {}) {
-          return { ...options };
-        },
-        Record(key, value, options = {}) {
-          return { type: "object", propertyNames: key, additionalProperties: value, ...options };
-        },
-        Boolean(options = {}) {
-          return { type: "boolean", ...options };
-        },
-        Literal(value, options = {}) {
-          return { const: value, ...options };
-        },
-        Union(anyOf = [], options = {}) {
-          return { anyOf, ...options };
-        },
-        Optional(schema) {
-          return { ...schema, optional: true };
-        },
-        Array(items, options = {}) {
-          return { type: "array", items, ...options };
-        },
-      },
-    },
+    typebox: typeboxMock,
     "react/jsx-runtime": {
       jsx(type, props, key) {
         return { type, props: props ?? {}, key: key ?? null };
@@ -169,6 +182,11 @@ export function createTsModuleLoader(options = {}) {
   function loadModule(specifier, parentDir = rootDir) {
     const mock = resolveMock(specifier, parentDir);
     if (mock !== undefined) return mock;
+
+    if (specifier === "@earendil-works/pi-agent-core") {
+      const packageJson = requireFromRoot.resolve("@earendil-works/pi-agent-core/package.json");
+      return loadModule(path.join(path.dirname(packageJson), "dist/agent.js"));
+    }
 
     const isRootRelative =
       specifier.startsWith("src/") ||

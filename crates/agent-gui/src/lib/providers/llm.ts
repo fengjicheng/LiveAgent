@@ -5,18 +5,18 @@ import type {
   Model,
   OpenAICompletionsCompat,
   SimpleStreamOptions,
-} from "@mariozechner/pi-ai";
-import { getModel } from "@mariozechner/pi-ai";
-import { streamAnthropic } from "@mariozechner/pi-ai/anthropic";
-import { type GoogleOptions, streamGoogle } from "@mariozechner/pi-ai/google";
+} from "@earendil-works/pi-ai";
+import { getModel } from "@earendil-works/pi-ai";
+import { streamAnthropic } from "@earendil-works/pi-ai/anthropic";
+import { type GoogleOptions, streamGoogle } from "@earendil-works/pi-ai/google";
 import {
   type OpenAICompletionsOptions,
   streamOpenAICompletions,
-} from "@mariozechner/pi-ai/openai-completions";
+} from "@earendil-works/pi-ai/openai-completions";
 import {
   type OpenAIResponsesOptions,
   streamOpenAIResponses,
-} from "@mariozechner/pi-ai/openai-responses";
+} from "@earendil-works/pi-ai/openai-responses";
 import {
   appendHostedSearchBlocksToAssistant,
   type HostedSearchBlock,
@@ -1298,11 +1298,16 @@ function normalizeCompatBaseUrl(baseUrl: string | undefined) {
   return baseUrl?.trim().replace(/\/+$/, "").toLowerCase() ?? "";
 }
 
-function resolveCodexOpenAICompletionsCompat(params: {
+function resolveCodexOpenAICompletionsOverrides(params: {
   baseUrl: string;
   upstreamBaseUrl?: string;
   modelId: string;
-}): OpenAICompletionsCompat | undefined {
+}):
+  | {
+      compat: OpenAICompletionsCompat;
+      thinkingLevelMap?: Model<"openai-completions">["thinkingLevelMap"];
+    }
+  | undefined {
   const compatBaseUrl = normalizeCompatBaseUrl(params.upstreamBaseUrl ?? params.baseUrl);
   if (isOfficialOpenAIBaseUrl(compatBaseUrl)) return undefined;
 
@@ -1350,17 +1355,20 @@ function resolveCodexOpenAICompletionsCompat(params: {
   } else if (isOpenRouter) {
     compat.thinkingFormat = "openrouter";
   }
-  if (isGroq && normalizedModelId === "qwen/qwen3-32b") {
-    compat.reasoningEffortMap = {
-      minimal: "default",
-      low: "default",
-      medium: "default",
-      high: "default",
-      xhigh: "default",
-    };
-  }
-
-  return compat;
+  return {
+    compat,
+    ...(isGroq && normalizedModelId === "qwen/qwen3-32b"
+      ? {
+          thinkingLevelMap: {
+            minimal: "default",
+            low: "default",
+            medium: "default",
+            high: "default",
+            xhigh: "default",
+          },
+        }
+      : {}),
+  };
 }
 
 function normalizeCodexBaseUrl(baseUrl: string): {
@@ -1514,13 +1522,16 @@ export function createModelFromConfig(
       maxTokens,
     };
     if (api === "openai-completions") {
-      const compat = resolveCodexOpenAICompletionsCompat({
+      const overrides = resolveCodexOpenAICompletionsOverrides({
         baseUrl: normalizedBaseUrl,
         upstreamBaseUrl,
         modelId,
       });
-      if (compat) {
-        custom.compat = compat;
+      if (overrides) {
+        custom.compat = overrides.compat;
+        if (overrides.thinkingLevelMap) {
+          custom.thinkingLevelMap = overrides.thinkingLevelMap;
+        }
       }
     }
     return custom;

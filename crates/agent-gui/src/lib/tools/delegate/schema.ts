@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY } from "./constants";
 

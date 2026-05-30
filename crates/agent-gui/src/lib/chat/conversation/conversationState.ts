@@ -1,4 +1,4 @@
-import type { AssistantMessage, Context, Message } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Context, Message } from "@earendil-works/pi-ai";
 
 import { assistantMessageToText } from "../../providers/llm";
 import {

@@ -43,7 +43,7 @@ const loader = createTsModuleLoader({
         return { modalState: "open", requestClose: onClose };
       },
     },
-    "@mariozechner/pi-agent-core": {
+    "@earendil-works/pi-agent-core": {
       Agent: class Agent {},
     },
     "../providers/llm": {

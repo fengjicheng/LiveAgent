@@ -1,6 +1,6 @@
 import { generateDiffFile } from "@git-diff-view/file";
 import { DiffModeEnum, DiffView } from "@git-diff-view/react";
-import type { ImageContent, ToolResultMessage, Usage } from "@mariozechner/pi-ai";
+import type { ImageContent, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
 import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import iconSimpleUrl from "../../../src-tauri/icons/icon-simple.png";
 import type { IconComponent } from "../../components/icons";

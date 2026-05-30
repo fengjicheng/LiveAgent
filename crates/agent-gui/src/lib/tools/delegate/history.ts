@@ -1,4 +1,4 @@
-import type { Tool, ToolCall } from "@mariozechner/pi-ai";
+import type { Tool, ToolCall } from "@earendil-works/pi-ai";
 
 import type {
   ConversationViewState,

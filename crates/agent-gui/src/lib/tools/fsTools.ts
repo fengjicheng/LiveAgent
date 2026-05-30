@@ -4,8 +4,8 @@ import type {
   Tool,
   ToolCall,
   ToolResultMessage,
-} from "@mariozechner/pi-ai";
-import { type TSchema, Type } from "@sinclair/typebox";
+} from "@earendil-works/pi-ai";
+import { type TSchema, Type } from "typebox";
 import { invoke } from "@tauri-apps/api/core";
 import {
   type BuiltinToolBundle,

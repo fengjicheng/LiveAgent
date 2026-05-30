@@ -1,4 +1,4 @@
-import type { Context, Message, Tool } from "@mariozechner/pi-ai";
+import type { Context, Message, Tool } from "@earendil-works/pi-ai";
 
 import type {
   SubagentIdentityRecord,

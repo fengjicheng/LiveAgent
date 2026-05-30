@@ -1,4 +1,4 @@
-import type { AssistantMessage, Context } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import {
   type CompactionThrottleState,
   noteCompactionRound,
