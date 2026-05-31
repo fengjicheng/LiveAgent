@@ -80,8 +80,8 @@
 | Config | `crates/agent-gateway/internal/config/config.go` |
 | gRPC server | `crates/agent-gateway/internal/server/grpc.go` |
 | HTTP routes | `crates/agent-gateway/internal/server/http.go` |
-| WebSocket server | `crates/agent-gateway/internal/server/websocket.go` |
-| Session manager | `crates/agent-gateway/internal/session/manager.go` |
+| WebSocket server | `crates/agent-gateway/internal/server/websocket.go`、`websocket_routes.go`、`websocket_*_handlers.go`、`websocket_payloads.go`、`websocket_roundtrip.go`、`websocket_writer.go`、`websocket_connection_state.go` |
+| Session manager | `crates/agent-gateway/internal/session/manager.go`、`agent_session.go`、`manager_state.go`、`manager_registry.go`、`manager_*_sync.go`、`manager_terminal.go`、`manager_chat_runs.go` |
 | Auth | `crates/agent-gateway/internal/auth/*` |
 | Handlers | `crates/agent-gateway/internal/handler/*` |
 | Proto source | `crates/agent-gateway/proto/v1/gateway.proto` |

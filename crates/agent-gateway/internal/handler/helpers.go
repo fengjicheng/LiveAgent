@@ -53,12 +53,12 @@ func waitForEnvelope(
 	}
 }
 
-func gatewayErrorStatus(errResp *gatewayv1.ErrorResponse) int {
+func GatewayErrorStatus(errResp *gatewayv1.ErrorResponse) int {
 	if errResp == nil {
 		return http.StatusBadGateway
 	}
-	switch errResp.GetCode() {
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict:
+	switch int(errResp.GetCode()) {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict:
 		return int(errResp.GetCode())
 	default:
 		return http.StatusBadGateway

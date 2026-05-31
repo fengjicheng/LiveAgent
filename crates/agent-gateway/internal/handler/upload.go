@@ -107,7 +107,7 @@ func ImportReadableFiles(
 			return
 		}
 		if errResp := env.GetError(); errResp != nil {
-			writeError(w, gatewayErrorStatus(errResp), errResp.GetMessage())
+			writeError(w, GatewayErrorStatus(errResp), errResp.GetMessage())
 			return
 		}
 

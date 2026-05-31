@@ -106,11 +106,7 @@ func publicHistoryShare(cfg *config.Config, sm *session.Manager) http.HandlerFun
 			return
 		}
 		if errResp := response.GetError(); errResp != nil {
-			status := http.StatusInternalServerError
-			if isPublicHistoryShareNotFound(errResp.GetMessage()) {
-				status = http.StatusNotFound
-			}
-			writePublicHistoryShareError(w, status, errResp.GetMessage())
+			writePublicHistoryShareError(w, handler.GatewayErrorStatus(errResp), errResp.GetMessage())
 			return
 		}
 
@@ -128,13 +124,6 @@ func publicHistoryShare(cfg *config.Config, sm *session.Manager) http.HandlerFun
 			"redact_tool_content": share.GetRedactToolContent(),
 		})
 	}
-}
-
-func isPublicHistoryShareNotFound(message string) bool {
-	normalized := strings.TrimSpace(message)
-	return strings.Contains(normalized, "分享链接不存在或已关闭") ||
-		strings.Contains(normalized, "分享 token 不能为空") ||
-		strings.Contains(normalized, "未找到对应的历史对话")
 }
 
 func writePublicHistoryShareError(w http.ResponseWriter, status int, message string) {

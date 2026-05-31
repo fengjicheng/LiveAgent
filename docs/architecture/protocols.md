@@ -66,6 +66,29 @@
 
 GUI 本地上传不需要 HTTP/Gateway，直接通过 Tauri command 导入。
 
+## Public Share 错误码
+
+`/api/public/history-shares/{token}` 仍然通过 Gateway 转发到桌面端解析 share token。桌面端返回 `ErrorResponse.code` 后，Gateway HTTP 直接按 code 映射状态：
+
+| code | HTTP | 场景 |
+|---:|---:|---|
+| `400` | Bad Request | share token 为空或请求非法。 |
+| `404` | Not Found | 分享链接不存在、已关闭，或对应历史对话不存在。 |
+| 其他 | Bad Gateway | 桌面端处理失败或返回未知错误。 |
+
+Gateway 不再通过错误文案推断 public share 状态，错误语义由桌面端产生并通过 proto 传递。
+
+## Terminal Event 兴趣模型
+
+WebUI 的 terminal 事件以 session/project interest 控制：
+
+| 事件 | 转发规则 |
+|---|---|
+| metadata，例如 `created`、`exit`、`closed` | 可广播给已认证连接，用于保持 session/project 列表新鲜。 |
+| `output` | 必须先通过 `terminal.attach` 订阅具体 `session_id`；`terminal.detach` 后停止转发。 |
+
+Gateway 的连接态 tracker 只维护 WebSocket 连接内的短期 interest，不改变桌面端 terminal registry，也不改变现有 wire payload。
+
 ## Skills 与 Memory 管理协议
 
 | 能力 | WebUI 方法 | Desktop 落点 |

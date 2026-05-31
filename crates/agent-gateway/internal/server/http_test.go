@@ -122,6 +122,29 @@ func TestPublicHistoryShareResolvesWithoutAuthorization(t *testing.T) {
 }
 
 func TestPublicHistoryShareReturnsNotFoundForDisabledToken(t *testing.T) {
+	status := publicHistoryShareErrorStatusForTest(t, http.StatusNotFound, "分享链接不存在或已关闭")
+	if status != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, status)
+	}
+}
+
+func TestPublicHistoryShareReturnsBadRequestFromAgentCode(t *testing.T) {
+	status := publicHistoryShareErrorStatusForTest(t, http.StatusBadRequest, "分享 token 不能为空")
+	if status != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, status)
+	}
+}
+
+func TestPublicHistoryShareDoesNotInferStatusFromLegacyMessage(t *testing.T) {
+	status := publicHistoryShareErrorStatusForTest(t, http.StatusInternalServerError, "分享链接不存在或已关闭")
+	if status != http.StatusBadGateway {
+		t.Fatalf("expected status %d, got %d", http.StatusBadGateway, status)
+	}
+}
+
+func publicHistoryShareErrorStatusForTest(t *testing.T, code int, message string) int {
+	t.Helper()
+
 	sm := session.NewManager()
 	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
 	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
@@ -151,8 +174,8 @@ func TestPublicHistoryShareReturnsNotFoundForDisabledToken(t *testing.T) {
 		Timestamp: time.Now().Unix(),
 		Payload: &gatewayv1.AgentEnvelope_Error{
 			Error: &gatewayv1.ErrorResponse{
-				Code:    http.StatusNotFound,
-				Message: "分享链接不存在或已关闭",
+				Code:    int32(code),
+				Message: message,
 			},
 		},
 	})
@@ -162,9 +185,7 @@ func TestPublicHistoryShareReturnsNotFoundForDisabledToken(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for public share response")
 	}
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected status %d, got %d body %s", http.StatusNotFound, rec.Code, rec.Body.String())
-	}
+	return rec.Code
 }
 
 func TestPublicHistoryShareReturnsUnavailableWhenAgentOffline(t *testing.T) {

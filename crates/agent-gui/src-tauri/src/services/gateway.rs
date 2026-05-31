@@ -777,7 +777,10 @@ impl GatewayController {
                         })
                         .await
                     }
-                    Err(error) => self.send_error_response(request_id, 500, error).await,
+                    Err(error) => {
+                        let code = history_share_resolve_error_code(&error);
+                        self.send_error_response(request_id, code, error).await
+                    }
                 }
             }
             Some(proto::gateway_envelope::Payload::HistoryDelete(request)) => {
@@ -1737,6 +1740,21 @@ fn build_error_response_envelope(
     }
 }
 
+fn history_share_resolve_error_code(message: &str) -> i32 {
+    let normalized = message.trim();
+    if normalized.is_empty() {
+        return 500;
+    }
+    if normalized.contains("分享 token 不能为空") {
+        return 400;
+    }
+    if normalized.contains("分享链接不存在或已关闭") || normalized.contains("未找到对应的历史对话")
+    {
+        return 404;
+    }
+    500
+}
+
 fn build_settings_sync_envelope(payload: Value) -> Result<proto::AgentEnvelope, String> {
     Ok(proto::AgentEnvelope {
         request_id: format!("settings-sync-{}", Uuid::new_v4()),
@@ -1793,11 +1811,29 @@ fn serialize_settings_sync_payload(payload: &Value) -> Result<String, String> {
 mod tests {
     use super::{
         build_chat_event_envelope, build_endpoint, build_grpc_url,
-        build_local_settings_update_event_payload, merge_settings_sync_snapshot,
-        required_terminal_project_path_key, set_disconnected_status, GatewayStatusSnapshot,
+        build_local_settings_update_event_payload, history_share_resolve_error_code,
+        merge_settings_sync_snapshot, required_terminal_project_path_key, set_disconnected_status,
+        GatewayStatusSnapshot,
     };
     use crate::commands::settings::RemoteSettingsPayload;
     use serde_json::{json, Value};
+
+    #[test]
+    fn history_share_resolve_error_code_maps_public_share_failures() {
+        assert_eq!(history_share_resolve_error_code("分享 token 不能为空"), 400);
+        assert_eq!(
+            history_share_resolve_error_code("分享链接不存在或已关闭"),
+            404
+        );
+        assert_eq!(
+            history_share_resolve_error_code("未找到对应的历史对话"),
+            404
+        );
+        assert_eq!(
+            history_share_resolve_error_code("读取历史对话分享链接失败：db"),
+            500
+        );
+    }
 
     #[test]
     fn merge_settings_sync_snapshot_keeps_cached_ui_only_fields() {
