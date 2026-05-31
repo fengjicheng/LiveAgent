@@ -7,6 +7,7 @@ import {
   LogOut,
   PanelRightClose,
   PanelRightOpen,
+  Terminal,
   Upload,
   User,
 } from "./components/icons";
@@ -32,6 +33,7 @@ import type {
 } from "@/components/chat/MentionComposer";
 import { ChatHistorySidebar } from "@/components/chat/ChatHistorySidebar";
 import { SharedHistoryManagerModal } from "@/components/chat/SharedHistoryManagerModal";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -823,6 +825,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<"chat" | "skills-hub" | "mcp-hub">("chat");
   const [projectToolsPanelOpen, setProjectToolsPanelOpen] = useState(false);
   const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>([]);
+  const { confirm: requestConfirmDialog, dialog: confirmDialog } = useConfirmDialog();
   const terminalSessionsVersionRef = useRef(0);
   const terminalStatusSessionIdRef = useRef("");
   const {
@@ -4242,13 +4245,41 @@ export default function App() {
           if (terminalClient && settings.remote.enableWebTerminal && pathKey) {
             terminalSessionsToClose = await terminalClient.list(pathKey);
             const runningTerminalCount = terminalSessionsToClose.filter((session) => session.running).length;
-            if (
-              runningTerminalCount > 0 &&
-              !window.confirm(
-                `项目 "${project.name}" 中仍有 ${runningTerminalCount} 个 Terminal 正在运行。删除项目会关闭这些 Terminal，是否继续？`,
-              )
-            ) {
-              return;
+            if (runningTerminalCount > 0) {
+              const confirmed = await requestConfirmDialog({
+                title: translate("chat.workspaceRemoveConfirm", settings.locale).replace(
+                  "{name}",
+                  project.name,
+                ),
+                subtitle: translate("chat.workspaceRemoveDescription", settings.locale),
+                description: (
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+                      <Terminal className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-foreground">
+                          {translate("chat.exitConfirmRunningLabel", settings.locale)}
+                        </span>
+                        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500/15 px-1.5 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                          {runningTerminalCount}
+                        </span>
+                      </div>
+                      <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+                        {translate("chat.workspaceRemoveTerminalDescription", settings.locale)}
+                      </p>
+                    </div>
+                  </div>
+                ),
+                confirmLabel: translate("chat.workspaceRemoveConfirmContinue", settings.locale),
+                cancelLabel: translate("chat.cancel", settings.locale),
+                closeLabel: translate("chat.workspaceRemoveConfirmClose", settings.locale),
+                tone: "warning",
+              });
+              if (!confirmed) {
+                return;
+              }
             }
           }
 
@@ -4328,7 +4359,9 @@ export default function App() {
       isAgentMode,
       refreshHistoryWorkdirs,
       removeWorkspaceProjectFromSettings,
+      requestConfirmDialog,
       settings.remote.enableWebTerminal,
+      settings.locale,
       settings.system,
       startNewConversation,
       terminalClient,
@@ -5997,6 +6030,8 @@ export default function App() {
             onSelect={handleWorkdirPickerSelect}
           />
         ) : null}
+
+        {confirmDialog}
 
         <main className="gateway-main-shell">
           <div className="gateway-main-backdrop" />

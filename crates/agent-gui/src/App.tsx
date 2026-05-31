@@ -43,7 +43,12 @@ const GATEWAY_SETTINGS_SYNC_EVENT = "gateway:settings-sync";
 
 function AppChrome(props: { children: ReactNode }) {
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden bg-background">
+    <div
+      className="relative flex h-full w-full flex-col overflow-hidden bg-background"
+      onContextMenu={(event) => {
+        event.preventDefault();
+      }}
+    >
       <WindowsTitleBar />
       <div className="relative min-h-0 flex-1 overflow-hidden bg-background">
         {props.children}

@@ -15,9 +15,10 @@ import type {
 } from "../components/chat/MentionComposer";
 import { type NotifyItem, NotifyToast } from "../components/chat/NotifyToast";
 import { SharedHistoryManagerModal } from "../components/chat/SharedHistoryManagerModal";
-import { Ban, PanelRightClose, PanelRightOpen, Upload } from "../components/icons";
+import { Ban, PanelRightClose, PanelRightOpen, Terminal, Upload } from "../components/icons";
 import { ProjectToolsPanel } from "../components/project-tools/ProjectToolsPanel";
 import { Button } from "../components/ui/button";
+import { useConfirmDialog } from "../components/ui/confirm-dialog";
 import { useLocale } from "../i18n";
 import {
   type CompactionStatus,
@@ -595,6 +596,7 @@ export function ChatPage(props: ChatPageProps) {
     conversationId: string;
     startedAt: number;
   } | null>(null);
+  const { confirm: requestConfirmDialog, dialog: confirmDialog } = useConfirmDialog();
 
   const isAgentMode = isAgentExecutionMode(settings.system.executionMode);
   const isAgentDevExecutionMode = isAgentDevMode(settings.system.executionMode);
@@ -1420,9 +1422,35 @@ export function ChatPage(props: ChatPageProps) {
       const runningCount = Math.max(0, Number(event.payload?.runningCount ?? 0));
       const confirmed =
         runningCount === 0 ||
-        window.confirm(
-          `仍有 ${runningCount} 个 Terminal 正在运行。退出 LiveAgent 会关闭这些进程，是否继续？`,
-        );
+        (await requestConfirmDialog({
+          title: t("chat.exitConfirmTitle"),
+          subtitle: t("chat.exitConfirmSubtitle"),
+          description: (
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+                <Terminal className="h-4 w-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold text-foreground">
+                    {t("chat.exitConfirmRunningLabel")}
+                  </span>
+                  <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500/15 px-1.5 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                    {runningCount}
+                  </span>
+                </div>
+                <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+                  {t("chat.exitConfirmDescription")}
+                </p>
+              </div>
+            </div>
+          ),
+          detail: t("chat.exitConfirmNote"),
+          confirmLabel: t("chat.exitConfirmContinue"),
+          cancelLabel: t("chat.cancel"),
+          closeLabel: t("chat.exitConfirmClose"),
+          tone: "warning",
+        }));
       if (!confirmed || cancelled) return;
       try {
         await invoke("app_confirmed_exit");
@@ -1447,7 +1475,7 @@ export function ChatPage(props: ChatPageProps) {
       cancelled = true;
       unlisten?.();
     };
-  }, [setErrorMessage]);
+  }, [requestConfirmDialog, t]);
   const sidebarRunningConversationIds = useMemo(() => {
     const next = new Set(runningConversationIds);
     for (const conversationId of syncedRunningConversationRuntime.keys()) {
@@ -1881,13 +1909,36 @@ export function ChatPage(props: ChatPageProps) {
 
           const terminalSessions = pathKey ? await tauriTerminalClient.list(pathKey) : [];
           const runningTerminalCount = terminalSessions.filter((session) => session.running).length;
-          if (
-            runningTerminalCount > 0 &&
-            !window.confirm(
-              `项目 "${project.name}" 中仍有 ${runningTerminalCount} 个 Terminal 正在运行。删除项目会关闭这些 Terminal，是否继续？`,
-            )
-          ) {
-            return;
+          if (runningTerminalCount > 0) {
+            const confirmed = await requestConfirmDialog({
+              title: t("chat.workspaceRemoveConfirm").replace("{name}", project.name),
+              subtitle: t("chat.workspaceRemoveDescription"),
+              description: (
+                <div className="flex items-start gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+                    <Terminal className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-foreground">
+                        {t("chat.exitConfirmRunningLabel")}
+                      </span>
+                      <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500/15 px-1.5 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                        {runningTerminalCount}
+                      </span>
+                    </div>
+                    <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+                      {t("chat.workspaceRemoveTerminalDescription")}
+                    </p>
+                  </div>
+                </div>
+              ),
+              confirmLabel: t("chat.workspaceRemoveConfirmContinue"),
+              cancelLabel: t("chat.cancel"),
+              closeLabel: t("chat.workspaceRemoveConfirmClose"),
+              tone: "warning",
+            });
+            if (!confirmed) return;
           }
 
           for (const conversationId of conversationIds) {
@@ -4115,6 +4166,8 @@ export function ChatPage(props: ChatPageProps) {
           onClose={() => setSharedManagerOpen(false)}
         />
       ) : null}
+
+      {confirmDialog}
 
       {/* ---- Main content ---- */}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">

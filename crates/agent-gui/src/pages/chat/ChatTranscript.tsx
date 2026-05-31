@@ -2,6 +2,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { invoke } from "@tauri-apps/api/core";
 import {
   memo,
+  type MouseEvent as ReactMouseEvent,
   type RefObject,
   useCallback,
   useEffect,
@@ -11,6 +12,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { createPortal } from "react-dom";
 import iconSimpleUrl from "../../../src-tauri/icons/icon-simple.png";
 import { ImagePreview, type ImagePreviewSlide } from "../../components/chat/ImagePreview";
 import {
@@ -487,6 +489,77 @@ function HistorySwitchLoadingOverlay() {
       </div>
     </div>
   );
+}
+
+type TranscriptContextMenuState = {
+  x: number;
+  y: number;
+  selectedText: string;
+};
+
+const TRANSCRIPT_CONTEXT_MENU_WIDTH = 184;
+const TRANSCRIPT_CONTEXT_MENU_HEIGHT = 52;
+const TRANSCRIPT_CONTEXT_MENU_MARGIN = 12;
+
+function writeTextToClipboard(text: string) {
+  if (!text) return;
+
+  if (navigator.clipboard?.writeText) {
+    void navigator.clipboard.writeText(text).catch(() => {
+      fallbackWriteTextToClipboard(text);
+    });
+    return;
+  }
+
+  fallbackWriteTextToClipboard(text);
+}
+
+function fallbackWriteTextToClipboard(text: string) {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+}
+
+function resolveTranscriptSelectionText(root: HTMLElement | null) {
+  if (!root) return "";
+
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+    return "";
+  }
+
+  const selectedText = selection.toString();
+  if (!selectedText.trim()) return "";
+
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.commonAncestorContainer)) {
+    return "";
+  }
+
+  return selectedText;
+}
+
+function clampTranscriptContextMenuPosition(x: number, y: number) {
+  const maxLeft = Math.max(
+    TRANSCRIPT_CONTEXT_MENU_MARGIN,
+    window.innerWidth - TRANSCRIPT_CONTEXT_MENU_WIDTH - TRANSCRIPT_CONTEXT_MENU_MARGIN,
+  );
+  const maxTop = Math.max(
+    TRANSCRIPT_CONTEXT_MENU_MARGIN,
+    window.innerHeight - TRANSCRIPT_CONTEXT_MENU_HEIGHT - TRANSCRIPT_CONTEXT_MENU_MARGIN,
+  );
+
+  return {
+    left: Math.min(Math.max(TRANSCRIPT_CONTEXT_MENU_MARGIN, x), maxLeft),
+    top: Math.min(Math.max(TRANSCRIPT_CONTEXT_MENU_MARGIN, y), maxTop),
+  };
 }
 
 type ChatTranscriptProps = {
@@ -1027,19 +1100,106 @@ export const ChatTranscript = memo(function ChatTranscript(props: ChatTranscript
     onResendFromEdit,
     onOpenSettings,
   } = props;
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const showNoModelsState = !hasModels;
   const showStartChatState = hasModels && historyItems.length === 0 && !isSending;
   const shouldReserveTranscriptBottomSpace = !(showNoModelsState || showStartChatState);
   const [scrollViewport, setScrollViewport] = useState<HTMLDivElement | null>(null);
+  const transcriptRootRef = useRef<HTMLDivElement | null>(null);
+  const transcriptContextMenuRef = useRef<HTMLDivElement | null>(null);
+  const [transcriptContextMenu, setTranscriptContextMenu] =
+    useState<TranscriptContextMenuState | null>(null);
+
+  const closeTranscriptContextMenu = useCallback(() => {
+    setTranscriptContextMenu(null);
+  }, []);
 
   useLayoutEffect(() => {
     const nextViewport = resolveScrollViewport(scrollAreaRef.current);
     setScrollViewport((current) => (current === nextViewport ? current : nextViewport));
   });
 
+  useEffect(() => {
+    closeTranscriptContextMenu();
+  }, [closeTranscriptContextMenu, conversationId]);
+
+  useEffect(() => {
+    if (!transcriptContextMenu) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        closeTranscriptContextMenu();
+        return;
+      }
+      if (transcriptContextMenuRef.current?.contains(target)) {
+        return;
+      }
+      closeTranscriptContextMenu();
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeTranscriptContextMenu();
+      }
+    };
+
+    const handleSelectionChange = () => {
+      if (!resolveTranscriptSelectionText(transcriptRootRef.current)) {
+        closeTranscriptContextMenu();
+      }
+    };
+
+    const handleScroll = () => {
+      closeTranscriptContextMenu();
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown, true);
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("scroll", handleScroll, true);
+    window.addEventListener("resize", handleScroll);
+    window.addEventListener("blur", handleScroll);
+    document.addEventListener("selectionchange", handleSelectionChange);
+
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown, true);
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("scroll", handleScroll, true);
+      window.removeEventListener("resize", handleScroll);
+      window.removeEventListener("blur", handleScroll);
+      document.removeEventListener("selectionchange", handleSelectionChange);
+    };
+  }, [closeTranscriptContextMenu, transcriptContextMenu]);
+
+  const handleTranscriptContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const selectedText = resolveTranscriptSelectionText(transcriptRootRef.current);
+      if (!selectedText) {
+        closeTranscriptContextMenu();
+        return;
+      }
+      setTranscriptContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        selectedText,
+      });
+    },
+    [closeTranscriptContextMenu],
+  );
+
+  const transcriptContextMenuPosition = transcriptContextMenu
+    ? clampTranscriptContextMenuPosition(transcriptContextMenu.x, transcriptContextMenu.y)
+    : null;
+  const copySelectedTextLabel =
+    locale === "en-US" ? "Copy selected text" : "复制选中文本";
+
   return (
-    <div className="relative min-h-0 flex-1">
+    <div
+      ref={transcriptRootRef}
+      className="relative min-h-0 flex-1"
+      onContextMenu={handleTranscriptContextMenu}
+    >
       <ScrollArea ref={scrollAreaRef} className="h-full">
         <div className="mx-auto w-full max-w-[768px] px-5 py-4">
           {showNoModelsState ? (
@@ -1133,6 +1293,36 @@ export const ChatTranscript = memo(function ChatTranscript(props: ChatTranscript
           <div ref={bottomRef} className={shouldReserveTranscriptBottomSpace ? "h-48" : "h-0"} />
         </div>
       </ScrollArea>
+      {transcriptContextMenu && transcriptContextMenuPosition
+        ? createPortal(
+            <div
+              ref={transcriptContextMenuRef}
+              role="menu"
+              className="fixed z-[120] w-max min-w-[9.5rem] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border border-border/70 bg-popover p-1.5 text-popover-foreground shadow-[0_20px_60px_-20px_rgba(15,23,42,0.35)]"
+              style={{
+                left: transcriptContextMenuPosition.left,
+                top: transcriptContextMenuPosition.top,
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+              }}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] text-foreground/90 transition-colors hover:bg-accent hover:text-accent-foreground"
+                onClick={() => {
+                  writeTextToClipboard(transcriptContextMenu.selectedText);
+                  closeTranscriptContextMenu();
+                }}
+              >
+                <Copy className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 flex-1 truncate">{copySelectedTextLabel}</span>
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
       {isHistorySwitching ? <HistorySwitchLoadingOverlay /> : null}
     </div>
   );

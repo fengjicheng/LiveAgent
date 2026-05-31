@@ -22,6 +22,7 @@ import {
   X,
 } from "../icons";
 import { Button } from "../ui/button";
+import { useConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
 
 type FileTreeKind = "file" | "dir";
@@ -175,6 +176,7 @@ export function ProjectFileTreePanel(props: {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const onSyncStateChangeRef = useRef(onSyncStateChange);
   const lastRevisionRef = useRef(syncState.revision);
+  const { confirm: requestConfirmDialog, dialog: confirmDialog } = useConfirmDialog();
 
   const state = states[projectPathKey] ?? createInitialState(cwd);
   const selectedNode = state.nodes[state.selectedPath] ?? state.nodes[ROOT_PATH];
@@ -595,9 +597,29 @@ export function ProjectFileTreePanel(props: {
   const deletePath = useCallback(
     async (targetPath = selectedPath) => {
       if (!targetPath || busyAction) return;
-      const confirmed = window.confirm(
-        t("projectTools.fileTree.deleteConfirm").replace("{path}", targetPath),
-      );
+      const confirmed = await requestConfirmDialog({
+        title: t("projectTools.fileTree.deleteConfirm").replace("{path}", targetPath),
+        subtitle: t("projectTools.fileTree.deleteConfirmDescription"),
+        description: (
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-destructive/25 bg-destructive/10 text-destructive">
+              <Trash2 className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-semibold text-foreground">
+                {basename(targetPath)}
+              </div>
+              <p className="mt-1.5 break-all text-xs leading-5 text-muted-foreground">
+                {targetPath}
+              </p>
+            </div>
+          </div>
+        ),
+        confirmLabel: t("projectTools.fileTree.delete"),
+        cancelLabel: t("settings.cancel"),
+        closeLabel: t("projectTools.fileTree.deleteConfirmClose"),
+        tone: "destructive",
+      });
       if (!confirmed) return;
       const parent = dirname(targetPath);
       setBusyAction(true);
@@ -630,6 +652,7 @@ export function ProjectFileTreePanel(props: {
       busyAction,
       cwd,
       loadChildren,
+      requestConfirmDialog,
       selectedPath,
       setProjectState,
       state.expanded,
@@ -756,7 +779,9 @@ export function ProjectFileTreePanel(props: {
         </div>
         <div className="flex flex-col gap-1">
           <div className="text-sm font-medium text-foreground">{t("projectTools.newFileTree")}</div>
-          <div className="text-xs text-muted-foreground">{t("projectTools.fileTreeDescription")}</div>
+          <div className="text-xs text-muted-foreground">
+            {t("projectTools.fileTreeDescription")}
+          </div>
         </div>
         <Button
           size="sm"
@@ -1014,6 +1039,8 @@ export function ProjectFileTreePanel(props: {
           </button>
         </div>
       ) : null}
+
+      {confirmDialog}
     </div>
   );
 }
