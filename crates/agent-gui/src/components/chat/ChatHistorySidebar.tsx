@@ -151,8 +151,8 @@ const HistoryRow = memo(function HistoryRow(props: {
   onDeleteConversation: (id: string) => void;
   onSetPendingDelete: (id: string | null) => void;
 }) {
-  const {
-    item,
+	  const {
+	    item,
     isActive,
     isBusy,
     isRunning,
@@ -168,11 +168,12 @@ const HistoryRow = memo(function HistoryRow(props: {
     onCancelRename,
     onSetPinned,
     onShareConversation,
-    onDeleteConversation,
-    onSetPendingDelete,
-  } = props;
+	    onDeleteConversation,
+	    onSetPendingDelete,
+	  } = props;
+	  const { t } = useLocale();
 
-  const inputRef = useRef<HTMLInputElement | null>(null);
+	  const inputRef = useRef<HTMLInputElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
   const handleSelect = useCallback(() => {
@@ -210,13 +211,15 @@ const HistoryRow = memo(function HistoryRow(props: {
     inputRef.current?.select();
   }, [isRenaming]);
 
-  if (isPendingDelete) {
-    return (
-      <div className="chat-history-row rounded-2xl border border-border/70 bg-background px-3 py-2.5 shadow-xs shadow-black/5">
-        <p className="truncate text-sm leading-5 text-foreground/80">
-          删除「<span className="font-medium text-foreground">{item.title}</span>」？
-        </p>
-        <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">此操作无法撤销</p>
+	  if (isPendingDelete) {
+	    return (
+	      <div className="chat-history-row rounded-2xl border border-border/70 bg-background px-3 py-2.5 shadow-xs shadow-black/5">
+	        <p className="truncate text-sm leading-5 text-foreground/80">
+	          {t("chat.conversationDeleteConfirm").replace("{title}", item.title)}
+	        </p>
+	        <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+	          {t("chat.conversationDeleteWarning")}
+	        </p>
         <div className="mt-2 grid grid-cols-2 gap-1.5">
           <Button
             type="button"
@@ -225,7 +228,7 @@ const HistoryRow = memo(function HistoryRow(props: {
             onClick={handleCancelDelete}
             className="h-7 rounded-xl border-border/60 text-xs font-normal text-muted-foreground hover:text-foreground"
           >
-            取消
+	            {t("chat.cancel")}
           </Button>
           <Button
             type="button"
@@ -234,7 +237,7 @@ const HistoryRow = memo(function HistoryRow(props: {
             disabled={isBusy || isDeleteDisabled}
             className="h-7 rounded-xl bg-destructive text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
           >
-            删除
+	            {t("chat.delete")}
           </Button>
         </div>
       </div>
@@ -294,8 +297,8 @@ const HistoryRow = memo(function HistoryRow(props: {
               <span
                 role="img"
                 className="flex h-8 w-3.5 shrink-0 items-center justify-center text-primary/75"
-                aria-label="已置顶"
-                title="已置顶"
+	                aria-label={t("chat.statusPinned")}
+	                title={t("chat.statusPinned")}
               >
                 <Pin className="h-3.5 w-3.5" />
               </span>
@@ -305,8 +308,8 @@ const HistoryRow = memo(function HistoryRow(props: {
               <span
                 role="img"
                 className="flex h-8 w-3.5 shrink-0 items-center justify-center text-sky-500/80"
-                aria-label="已分享"
-                title="已分享"
+	                aria-label={t("chat.statusShared")}
+	                title={t("chat.statusShared")}
               >
                 <Link2 className="h-3.5 w-3.5" />
               </span>
@@ -316,8 +319,8 @@ const HistoryRow = memo(function HistoryRow(props: {
               <span
                 role="img"
                 className="relative flex h-8 w-3.5 shrink-0 items-center justify-center"
-                aria-label="正在回复"
-                title="正在回复"
+	                aria-label={t("chat.statusRunningReply")}
+	                title={t("chat.statusRunningReply")}
               >
                 <span className="absolute h-2 w-2 rounded-full bg-emerald-400/45 animate-ping" />
                 <span className="relative h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.14)]" />
@@ -331,8 +334,8 @@ const HistoryRow = memo(function HistoryRow(props: {
                     type="button"
                     variant="ghost"
                     size="icon"
-                    title="更多操作"
-                    aria-label="更多操作"
+	                    title={t("chat.conversationMore")}
+	                    aria-label={t("chat.conversationMore")}
                     onPointerDown={(e: React.PointerEvent<HTMLButtonElement>) =>
                       e.stopPropagation()
                     }
@@ -363,18 +366,18 @@ const HistoryRow = memo(function HistoryRow(props: {
                     ) : (
                       <Pin className="h-3.5 w-3.5" />
                     )}
-                    {item.isPinned ? "取消置顶" : "置顶对话"}
+	                    {item.isPinned ? t("chat.conversationUnpin") : t("chat.conversationPin")}
                   </DropdownMenuItem>
                 ) : null}
                 {canShareConversation && !item.isPending ? (
                   <DropdownMenuItem onSelect={handleShare} className="gap-2">
                     <Share2 className="h-3.5 w-3.5" />
-                    分享
+	                    {t("chat.conversationShare")}
                   </DropdownMenuItem>
                 ) : null}
                 <DropdownMenuItem onSelect={handleStartRenaming} className="gap-2">
                   <Edit3 className="h-3.5 w-3.5" />
-                  修改标题
+	                  {t("chat.conversationRename")}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   disabled={isDeleteDisabled}
@@ -382,7 +385,7 @@ const HistoryRow = memo(function HistoryRow(props: {
                   className="gap-2 text-destructive focus:bg-destructive/10 focus:text-destructive"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                  删除对话
+	                  {t("chat.conversationDelete")}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -429,6 +432,7 @@ const ProjectRow = memo(function ProjectRow(props: {
     onRemoveProject,
     onSetPendingRemove,
   } = props;
+  const { t } = useLocale();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const skipNextBlurCommitRef = useRef(false);
   const isDefaultProject = project.id === DEFAULT_WORKSPACE_PROJECT_ID;
@@ -462,12 +466,10 @@ const ProjectRow = memo(function ProjectRow(props: {
     return (
       <div className="rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2.5 text-sm text-destructive shadow-xs shadow-black/5">
         <p className="truncate font-medium leading-5 text-destructive">
-          移除「{project.name}」？
+          {t("chat.workspaceRemoveConfirm").replace("{name}", project.name)}
         </p>
         <p className="mt-0.5 text-[11px] leading-4 text-destructive/75">
-          {isRunning
-            ? "后台任务运行中，暂时不能移除。"
-            : "会删除此项目下的历史对话，不会删除文件夹。"}
+          {isRunning ? t("chat.workspaceRemoveRunning") : t("chat.workspaceRemoveDescription")}
         </p>
         <div className="mt-2 grid grid-cols-2 gap-1.5">
           <Button
@@ -477,7 +479,7 @@ const ProjectRow = memo(function ProjectRow(props: {
             onClick={handleCancelRemove}
             className="h-7 rounded-xl border-border/60 bg-background text-xs font-normal text-muted-foreground hover:text-foreground"
           >
-            取消
+            {t("chat.cancel")}
           </Button>
           <Button
             type="button"
@@ -486,7 +488,7 @@ const ProjectRow = memo(function ProjectRow(props: {
             disabled={isRunning}
             className="h-7 rounded-xl bg-destructive text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
           >
-            移除
+            {t("chat.remove")}
           </Button>
         </div>
       </div>
@@ -588,8 +590,8 @@ const ProjectRow = memo(function ProjectRow(props: {
                 <span
                   role="img"
                   className="relative flex h-2 w-2 shrink-0 items-center justify-center"
-                  aria-label="正在回复"
-                  title="正在回复"
+                  aria-label={t("chat.statusRunningReply")}
+                  title={t("chat.statusRunningReply")}
                 >
                   <span className="absolute h-2 w-2 rounded-full bg-emerald-400/45 animate-ping" />
                   <span className="relative h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.14)]" />
@@ -599,8 +601,8 @@ const ProjectRow = memo(function ProjectRow(props: {
                 <span
                   role="img"
                   className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-primary/75"
-                  aria-label="已置顶"
-                  title="已置顶"
+                  aria-label={t("chat.statusPinned")}
+                  title={t("chat.statusPinned")}
                 >
                   <Pin className="h-3 w-3" />
                 </span>
@@ -638,8 +640,8 @@ const ProjectRow = memo(function ProjectRow(props: {
                   PROJECT_ICON_BUTTON_CLASS,
                   "text-destructive hover:!bg-destructive/10 hover:text-destructive",
                 )}
-                title="移除项目"
-                aria-label="移除项目"
+                title={t("chat.workspaceRemove")}
+                aria-label={t("chat.workspaceRemove")}
                 onClick={handleRequestRemove}
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -652,8 +654,8 @@ const ProjectRow = memo(function ProjectRow(props: {
                 variant="ghost"
                 size="icon"
                 className={PROJECT_ICON_BUTTON_CLASS}
-                title="新对话"
-                aria-label="新对话"
+                title={t("chat.workspaceNewConversation")}
+                aria-label={t("chat.workspaceNewConversation")}
                 onClick={() => onNewConversationForProject(project)}
               >
                 <SquarePen className="h-3.5 w-3.5" />
@@ -666,8 +668,8 @@ const ProjectRow = memo(function ProjectRow(props: {
                       variant="ghost"
                       size="icon"
                       className={PROJECT_ICON_BUTTON_CLASS}
-                      title="更多"
-                      aria-label="更多"
+                      title={t("chat.workspaceMore")}
+                      aria-label={t("chat.workspaceMore")}
                     />
                   }
                 >
@@ -680,7 +682,7 @@ const ProjectRow = memo(function ProjectRow(props: {
                     ) : (
                       <Pin className="h-3.5 w-3.5" />
                     )}
-                    {isPinned ? "取消置顶" : "置顶项目"}
+                    {isPinned ? t("chat.workspaceUnpin") : t("chat.workspacePin")}
                   </DropdownMenuItem>
                   {!isDefaultProject ? (
                     <>
@@ -689,14 +691,14 @@ const ProjectRow = memo(function ProjectRow(props: {
                         className="gap-2"
                       >
                         <Edit3 className="h-3.5 w-3.5" />
-                        修改标题
+                        {t("chat.workspaceRename")}
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         onSelect={handleRequestRemove}
                         className="gap-2 text-destructive focus:bg-destructive/10 focus:text-destructive"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
-                        移除项目
+                        {t("chat.workspaceRemove")}
                       </DropdownMenuItem>
                     </>
                   ) : null}
@@ -711,19 +713,21 @@ const ProjectRow = memo(function ProjectRow(props: {
 });
 
 function HistoryListLoadingSkeleton() {
+  const { t } = useLocale();
+
   return (
     <div
       className="space-y-1.5 pt-1"
       role="status"
       aria-live="polite"
-      aria-label="正在读取历史记录"
+      aria-label={t("sidebar.readingHistory")}
     >
       <div className="flex items-center gap-2 px-2 pb-1 text-[11px] font-medium text-muted-foreground/75">
         <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/35 opacity-75" />
           <span className="relative inline-flex h-2 w-2 rounded-full bg-primary/70" />
         </span>
-        <span>正在读取历史记录...</span>
+        <span>{t("sidebar.readingHistory")}</span>
       </div>
       {HISTORY_LOADING_SKELETON_ROWS.map((row) => (
         <div key={`${row.title}-${row.meta}`} className="rounded-lg px-2 py-2.5">
@@ -1271,7 +1275,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                   <ChevronRight
                     className={cn(SIDEBAR_SECTION_CHEVRON_CLASS, !projectsCollapsed && "rotate-90")}
                   />
-                  项目
+                  {t("chat.workspaceSection")}
                 </button>
                 <DropdownMenu>
                   <DropdownMenuTrigger
@@ -1281,8 +1285,8 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                         variant="ghost"
                         size="icon"
                         className={PROJECT_ICON_BUTTON_CLASS}
-                        title="新建项目"
-                        aria-label="新建项目"
+                        title={t("chat.workspaceCreate")}
+                        aria-label={t("chat.workspaceCreate")}
                       />
                     }
                   >
@@ -1292,7 +1296,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                     {onCreateProject ? (
                       <DropdownMenuItem onSelect={() => onCreateProject()} className="gap-2">
                         <Plus className="h-3.5 w-3.5" />
-                        新建项目
+                        {t("chat.workspaceCreate")}
                       </DropdownMenuItem>
                     ) : null}
                   </DropdownMenuContent>
@@ -1405,8 +1409,14 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                     size="icon"
                     onClick={handleOpenSharedConversations}
                     className="h-7 w-7 rounded-full border border-border/50 bg-background/70 text-muted-foreground shadow-xs shadow-black/5 transition-colors hover:border-sky-500/25 hover:bg-sky-500/10 hover:text-sky-600 dark:hover:text-sky-400"
-                    title={`管理已分享会话（${sharedConversationCount}）`}
-                    aria-label={`管理已分享会话（${sharedConversationCount}）`}
+                    title={t("chat.manageSharedConversations").replace(
+                      "{count}",
+                      String(sharedConversationCount),
+                    )}
+                    aria-label={t("chat.manageSharedConversations").replace(
+                      "{count}",
+                      String(sharedConversationCount),
+                    )}
                   >
                     <Share2 className="h-3.5 w-3.5" />
                   </Button>
@@ -1436,7 +1446,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                 {errorMessage ? (
                   <div className="shrink-0 px-3 pb-2">
                     <SidebarStateCard
-                      title="历史记录读取失败"
+                      title={t("chat.historyReadFailed")}
                       description={errorMessage}
                       tone="error"
                     />
@@ -1484,7 +1494,9 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                   )}
                   {!isLoading && items.length > 0 && (hasMore || isLoadingMore) ? (
                     <div className="px-2 pb-2 pt-1 text-center text-[11px] leading-5 text-muted-foreground/70">
-                      {isLoadingMore ? "正在加载更多历史记录..." : "继续滚动加载更多"}
+                      {isLoadingMore
+                        ? t("sidebar.loadingMoreHistory")
+                        : t("sidebar.continueLoadingHistory")}
                     </div>
                   ) : null}
                 </div>
