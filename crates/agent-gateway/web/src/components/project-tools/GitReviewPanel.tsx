@@ -36,7 +36,9 @@ import {
   BrushCleaning,
   ChevronRight,
   CheckCircle2,
+  Cloud,
   Copy,
+  Download,
   ExternalLink,
   Eye,
   FilePenLine,
@@ -3479,6 +3481,7 @@ export function GitReviewPanel(props: {
             size="sm"
             variant="ghost"
             disabled={loading || historyLoading || operationBusy}
+            className="h-7 w-7 px-0"
             title={t("projectTools.gitReview.refresh")}
             aria-label={t("projectTools.gitReview.refresh")}
             onClick={() => {
@@ -3497,22 +3500,30 @@ export function GitReviewPanel(props: {
             variant="ghost"
             disabled={writeDisabled || operationBusy}
             title={t("projectTools.gitReview.fetch")}
-            className="gap-1.5"
+            aria-label={t("projectTools.gitReview.fetch")}
+            className="h-7 w-7 px-0"
             onClick={() => void runOperation("fetch", () => gitClient!.fetch(cwd), "fetch")}
           >
-            {busy === "fetch" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-            {t("projectTools.gitReview.fetch")}
+            {busy === "fetch" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Cloud className="h-3.5 w-3.5" />
+            )}
           </Button>
           <Button
             size="sm"
             variant="ghost"
             disabled={writeDisabled || operationBusy}
             title={t("projectTools.gitReview.pull")}
-            className="gap-1.5"
+            aria-label={t("projectTools.gitReview.pull")}
+            className="h-7 w-7 px-0"
             onClick={() => void runOperation("pull", () => gitClient!.pull(cwd), "pull")}
           >
-            {busy === "pull" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-            {t("projectTools.gitReview.pull")}
+            {busy === "pull" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Download className="h-3.5 w-3.5" />
+            )}
           </Button>
           <Button
             size="sm"
@@ -3520,6 +3531,7 @@ export function GitReviewPanel(props: {
             disabled={writeDisabled || operationBusy}
             title={t("projectTools.gitReview.push")}
             aria-label={t("projectTools.gitReview.push")}
+            className="h-7 w-7 px-0"
             onClick={() => void pushCurrentBranch()}
           >
             {busy === "push" ? (
