@@ -114,10 +114,10 @@ const PROJECT_ICON_BUTTON_CLASS =
   "h-7 w-7 rounded-lg text-muted-foreground transition-colors hover:!bg-foreground/[0.08] hover:text-foreground active:!bg-foreground/[0.1] focus-visible:!bg-foreground/[0.08] data-[state=open]:!bg-foreground/[0.08] data-[state=open]:text-foreground";
 const SIDEBAR_SECTION_ROWS_TRANSITION_CLASS =
   "transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none";
-const SIDEBAR_SECTION_BODY_CLASS =
-  "min-h-0 overflow-hidden transition-opacity duration-300 ease-out motion-reduce:transition-none";
 const SIDEBAR_SECTION_CHEVRON_CLASS =
   "h-3.5 w-3.5 shrink-0 transition-transform duration-300 ease-out motion-reduce:transition-none";
+const SIDEBAR_PROJECT_MIN_BODY_HEIGHT = 96;
+const SIDEBAR_RECENT_MIN_BODY_HEIGHT = 160;
 const EMPTY_PROJECT_PATH_KEYS = new Set<string>();
 const EMPTY_PROJECT_ACTIVITY_UPDATED_ATS = new Map<string, number>();
 const HISTORY_LOADING_SKELETON_ROWS = [
@@ -1140,7 +1140,6 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
       runningProjectPathKeys,
     });
   }, [projectActivityUpdatedAts, projects, runningProjectPathKeys]);
-  const canResizeProjectSections = showProjects && !projectsCollapsed && !recentCollapsed;
   const sidebarSectionLayout = useMemo(() => {
     const {
       containerHeight,
@@ -1154,8 +1153,21 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
       0,
       containerHeight - projectsHeaderHeight - recentHeaderHeight - handleHeight,
     );
-    const resizeMaxHeight = Math.floor(available / 2);
-    const resizeMinHeight = Math.max(0, Math.min(projectsContentHeight, resizeMaxHeight));
+    const projectMinBodyHeight = Math.min(SIDEBAR_PROJECT_MIN_BODY_HEIGHT, available);
+    const recentMinBodyHeight = Math.min(
+      SIDEBAR_RECENT_MIN_BODY_HEIGHT,
+      Math.max(0, available - projectMinBodyHeight),
+    );
+    const resizeMaxHeight = Math.max(0, available - recentMinBodyHeight);
+    const resizeMinHeight = Math.max(
+      0,
+      Math.min(projectsContentHeight, projectMinBodyHeight, resizeMaxHeight),
+    );
+    const defaultProjectsBodyHeight = clampSidebarSectionHeight(
+      Math.min(projectsContentHeight, Math.floor(available / 2)),
+      resizeMinHeight,
+      resizeMaxHeight,
+    );
 
     let projectsBodyHeight = 0;
     if (showProjects && !projectsCollapsed) {
@@ -1168,7 +1180,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
           resizeMaxHeight,
         );
       } else {
-        projectsBodyHeight = resizeMinHeight;
+        projectsBodyHeight = defaultProjectsBodyHeight;
       }
     }
     const recentBodyHeight = recentCollapsed ? 0 : Math.max(0, available - projectsBodyHeight);
@@ -1196,6 +1208,11 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     showProjects,
     sidebarSectionMetrics,
   ]);
+  const canResizeProjectSections =
+    showProjects &&
+    !projectsCollapsed &&
+    !recentCollapsed &&
+    sidebarSectionLayout.resizeMaxHeight > sidebarSectionLayout.resizeMinHeight;
   sidebarSectionLayoutRef.current = {
     projectsBodyHeight: sidebarSectionLayout.projectsBodyHeight,
     resizeMinHeight: sidebarSectionLayout.resizeMinHeight,
