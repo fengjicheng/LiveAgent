@@ -25,6 +25,7 @@ import type {
   GitCommitFile,
   GitCommitSummary,
   GitDiffResponse,
+  GitLogResponse,
   GitOperationResponse,
   GitRepositoryState,
   GitStatusEntry,
@@ -473,16 +474,26 @@ type ParsedDiffStat = {
 type DiffViewKind = "branch" | "workingTree";
 type GitReviewMode = "changes" | "history";
 type GitReviewStackedPane = "list" | "detail";
+type GitHistoryMarkerKind = Extract<GraphRow["kind"], "incoming-changes" | "outgoing-changes">;
+type GitHistoryGraphState = Pick<
+  GitLogResponse,
+  "historyBaseRef" | "historyAhead" | "historyBehind" | "mergeBase"
+>;
 type GitHistoryRow =
+  | {
+      type: "marker";
+      kind: GitHistoryMarkerKind;
+      graphIndex: number;
+    }
   | {
       type: "commit";
       commit: GitCommitSummary;
-      commitIndex: number;
+      graphIndex: number;
     }
   | {
       type: "file";
       commit: GitCommitSummary;
-      commitIndex: number;
+      graphIndex: number;
       file: GitCommitFile;
     }
   | {
@@ -1766,6 +1777,30 @@ function commitHistoryTitle(commit: GitCommitSummary) {
   return refs.length > 0 ? `${label} - ${refs.join(", ")}` : label;
 }
 
+function gitHistoryMarkerRef(
+  kind: GitHistoryMarkerKind,
+  state: Pick<GitRepositoryState, "head">,
+  historyBaseRef: string,
+) {
+  return kind === "outgoing-changes" ? state.head : historyBaseRef;
+}
+
+const EMPTY_GIT_HISTORY_GRAPH_STATE: GitHistoryGraphState = {
+  historyBaseRef: "",
+  historyAhead: 0,
+  historyBehind: 0,
+  mergeBase: "",
+};
+
+function gitHistoryGraphStateFromResponse(response: GitLogResponse): GitHistoryGraphState {
+  return {
+    historyBaseRef: response.historyBaseRef,
+    historyAhead: response.historyAhead,
+    historyBehind: response.historyBehind,
+    mergeBase: response.mergeBase,
+  };
+}
+
 function CommitRefTags({
   refs,
   selected,
@@ -1822,14 +1857,48 @@ function CommitRefTags({
 function GitGraphCommitMarker({
   cx,
   color,
+  kind,
   isHead,
   isMerge,
 }: {
   cx: number;
   color: string;
+  kind: GraphRow["kind"];
   isHead: boolean;
   isMerge: boolean;
 }) {
+  if (kind === "incoming-changes" || kind === "outgoing-changes") {
+    return (
+      <g>
+        <circle
+          cx={cx}
+          cy={GRAPH_DOT_Y}
+          r={GRAPH_DOT_R + 3}
+          fill={color}
+          stroke="var(--git-review-graph-background)"
+          strokeWidth={GRAPH_STROKE_W}
+        />
+        <circle
+          cx={cx}
+          cy={GRAPH_DOT_Y}
+          r={GRAPH_DOT_R + 1}
+          fill="var(--git-review-graph-background)"
+          stroke="var(--git-review-graph-background)"
+          strokeWidth={GRAPH_STROKE_W + 1}
+        />
+        <circle
+          cx={cx}
+          cy={GRAPH_DOT_Y}
+          r={GRAPH_DOT_R + 1}
+          fill="none"
+          stroke={color}
+          strokeDasharray="4 2"
+          strokeWidth={Math.max(1, GRAPH_STROKE_W - 1)}
+        />
+      </g>
+    );
+  }
+
   if (isHead) {
     return (
       <g>
@@ -2021,6 +2090,7 @@ function GitGraphSvgCell({ row }: { row: GraphRow }) {
         <GitGraphCommitMarker
           cx={cx}
           color={commitColor}
+          kind={row.kind}
           isHead={row.isHead}
           isMerge={row.isMerge}
         />
@@ -2350,7 +2420,11 @@ function gitRepositoryStateSignature(state: GitRepositoryState) {
   return `${header}\x1d${entries}`;
 }
 
-function gitHistorySignature(state: GitRepositoryState, commits: GitCommitSummary[]) {
+function gitHistorySignature(
+  state: GitRepositoryState,
+  commits: GitCommitSummary[],
+  historyGraphState: GitHistoryGraphState,
+) {
   const commitsSignature = commits
     .map((commit) =>
       [
@@ -2367,7 +2441,7 @@ function gitHistorySignature(state: GitRepositoryState, commits: GitCommitSummar
       ].join("\x1e"),
     )
     .join("\x1f");
-  return `${gitRepositoryStateSignature(state)}\x1d${commitsSignature}`;
+  return `${gitRepositoryStateSignature(state)}\x1d${historyGraphState.historyBaseRef}\x1e${historyGraphState.historyAhead}\x1e${historyGraphState.historyBehind}\x1e${historyGraphState.mergeBase}\x1c${commitsSignature}`;
 }
 
 function gitDiffSignature(diff: GitDiffResponse) {
@@ -2437,6 +2511,9 @@ export const GitReviewPanel = memo(function GitReviewPanel(props: GitReviewPanel
   const [activeDiffView, setActiveDiffView] = useState<DiffViewKind>("workingTree");
   const [reviewMode, setReviewMode] = useState<GitReviewMode>("changes");
   const [historyCommits, setHistoryCommits] = useState<GitCommitSummary[]>([]);
+  const [historyGraphState, setHistoryGraphState] = useState<GitHistoryGraphState>(
+    EMPTY_GIT_HISTORY_GRAPH_STATE,
+  );
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [historyHasMore, setHistoryHasMore] = useState(false);
@@ -2804,61 +2881,120 @@ export const GitReviewPanel = memo(function GitReviewPanel(props: GitReviewPanel
     [cwd, gitClient, t],
   );
 
-  const loadHistory = useCallback(async (options: GitRefreshOptions = {}) => {
-    const append = options.append === true && historyCommitsRef.current.length > 0;
-    if (append && !historyHasMoreRef.current) {
-      return;
-    }
-    if (historyInFlightRef.current) {
-      return;
-    }
-    historyInFlightRef.current = true;
-    const silent = options.silent === true;
-    const force = options.force !== false;
-    const skip = append ? historyCommitsRef.current.length : 0;
-    if (!gitClient || !cwd.trim()) {
-      historySignatureRef.current = "";
-      historyCommitsRef.current = [];
-      setHistoryCommits([]);
-      selectedCommitShaRef.current = "";
-      selectedCommitFilePathRef.current = "";
-      expandedCommitShasRef.current = new Set();
-      setSelectedCommitSha("");
-      setSelectedCommitFilePath("");
-      setExpandedCommitShas(new Set());
-      setHistoryHasMoreValue(false);
-      setHistoryLoadMoreError("");
-      setHistoryLoading(false);
-      setHistoryLoadingMore(false);
-      clearCommitDiff();
-      setHistoryError("");
-      historyInFlightRef.current = false;
-      return;
-    }
-    if (append) {
-      setHistoryLoadingMore(true);
-      setHistoryLoadMoreError("");
-    } else if (!silent) {
-      setHistoryLoading(true);
-      setHistoryError("");
-      setHistoryLoadMoreError("");
-    }
-    try {
-      const response = await gitClient.log(cwd, {
-        limit: GIT_HISTORY_PAGE_SIZE,
-        skip,
-      });
-      const previousStatusSignature = statusSignatureRef.current;
-      const nextStatusSignature = gitRepositoryStateSignature(response.state);
-      const statusChanged = previousStatusSignature !== nextStatusSignature;
-      statusSignatureRef.current = nextStatusSignature;
-      const pageHasMore = response.commits.length >= GIT_HISTORY_PAGE_SIZE;
+  const loadHistory = useCallback(
+    async (options: GitRefreshOptions = {}) => {
+      const append = options.append === true && historyCommitsRef.current.length > 0;
+      if (append && !historyHasMoreRef.current) {
+        return;
+      }
+      if (historyInFlightRef.current) {
+        return;
+      }
+      historyInFlightRef.current = true;
+      const silent = options.silent === true;
+      const force = options.force !== false;
+      const skip = append ? historyCommitsRef.current.length : 0;
+      if (!gitClient || !cwd.trim()) {
+        historySignatureRef.current = "";
+        historyCommitsRef.current = [];
+        setHistoryCommits([]);
+        setHistoryGraphState(EMPTY_GIT_HISTORY_GRAPH_STATE);
+        selectedCommitShaRef.current = "";
+        selectedCommitFilePathRef.current = "";
+        expandedCommitShasRef.current = new Set();
+        setSelectedCommitSha("");
+        setSelectedCommitFilePath("");
+        setExpandedCommitShas(new Set());
+        setHistoryHasMoreValue(false);
+        setHistoryLoadMoreError("");
+        setHistoryLoading(false);
+        setHistoryLoadingMore(false);
+        clearCommitDiff();
+        setHistoryError("");
+        historyInFlightRef.current = false;
+        return;
+      }
       if (append) {
+        setHistoryLoadingMore(true);
+        setHistoryLoadMoreError("");
+      } else if (!silent) {
+        setHistoryLoading(true);
+        setHistoryError("");
+        setHistoryLoadMoreError("");
+      }
+      try {
+        const response = await gitClient.log(cwd, {
+          limit: GIT_HISTORY_PAGE_SIZE,
+          skip,
+        });
+        const nextHistoryGraphState = gitHistoryGraphStateFromResponse(response);
+        const previousStatusSignature = statusSignatureRef.current;
+        const nextStatusSignature = gitRepositoryStateSignature(response.state);
+        const statusChanged = previousStatusSignature !== nextStatusSignature;
+        statusSignatureRef.current = nextStatusSignature;
+        const pageHasMore = response.commits.length >= GIT_HISTORY_PAGE_SIZE;
+        if (append) {
+          setState(response.state);
+          if (response.state.status !== "ready") {
+            historySignatureRef.current = "";
+            historyCommitsRef.current = [];
+            setHistoryCommits([]);
+            setHistoryGraphState(EMPTY_GIT_HISTORY_GRAPH_STATE);
+            selectedCommitShaRef.current = "";
+            selectedCommitFilePathRef.current = "";
+            expandedCommitShasRef.current = new Set();
+            setSelectedCommitSha("");
+            setSelectedCommitFilePath("");
+            setExpandedCommitShas(new Set());
+            setHistoryHasMoreValue(false);
+            clearCommitDiff();
+            return;
+          }
+          const existingCommits = historyCommitsRef.current;
+          const existingShas = new Set(existingCommits.map((commit) => commit.sha));
+          const nextCommits = [
+            ...existingCommits,
+            ...response.commits.filter((commit) => !existingShas.has(commit.sha)),
+          ];
+          historyCommitsRef.current = nextCommits;
+          setHistoryCommits(nextCommits);
+          setHistoryGraphState(nextHistoryGraphState);
+          setHistoryHasMoreValue(pageHasMore);
+          setHistoryLoadMoreError("");
+          return;
+        }
+
+        const nextSignature = gitHistorySignature(
+          response.state,
+          response.commits,
+          nextHistoryGraphState,
+        );
+        const historyChanged = historySignatureRef.current !== nextSignature;
+        historySignatureRef.current = nextSignature;
+        if (historyChanged) {
+          commitDetailsCacheRef.current.clear();
+        }
+        if (options.notifyChanged && previousStatusSignature && statusChanged) {
+          suppressNextGitChangedRef.current = true;
+          dispatchGitChanged(cwd);
+        }
+        setHistoryHasMoreValue(
+          !force &&
+            !historyChanged &&
+            historyCommitsRef.current.length > response.commits.length &&
+            !historyHasMoreRef.current
+            ? false
+            : pageHasMore,
+        );
+        setHistoryLoadMoreError("");
+        if (!force && !historyChanged) {
+          return;
+        }
         setState(response.state);
-        if (response.state.status !== "ready") {
-          historySignatureRef.current = "";
-          historyCommitsRef.current = [];
-          setHistoryCommits([]);
+        historyCommitsRef.current = response.commits;
+        setHistoryCommits(response.commits);
+        setHistoryGraphState(nextHistoryGraphState);
+        if (response.state.status !== "ready" || response.commits.length === 0) {
           selectedCommitShaRef.current = "";
           selectedCommitFilePathRef.current = "";
           expandedCommitShasRef.current = new Set();
@@ -2869,107 +3005,62 @@ export const GitReviewPanel = memo(function GitReviewPanel(props: GitReviewPanel
           clearCommitDiff();
           return;
         }
-        const existingCommits = historyCommitsRef.current;
-        const existingShas = new Set(existingCommits.map((commit) => commit.sha));
-        const nextCommits = [
-          ...existingCommits,
-          ...response.commits.filter((commit) => !existingShas.has(commit.sha)),
-        ];
-        historyCommitsRef.current = nextCommits;
-        setHistoryCommits(nextCommits);
-        setHistoryHasMoreValue(pageHasMore);
-        setHistoryLoadMoreError("");
-        return;
+        const currentCommit = response.commits.find(
+          (commit) => commit.sha === selectedCommitShaRef.current,
+        );
+        const nextCommit = currentCommit ?? response.commits[0];
+        const currentFile =
+          currentCommit?.files.find((file) => file.path === selectedCommitFilePathRef.current) ??
+          null;
+        const availableCommitShas = new Set(response.commits.map((commit) => commit.sha));
+        const nextExpandedCommitShas = new Set(
+          [...expandedCommitShasRef.current].filter((sha) => availableCommitShas.has(sha)),
+        );
+        if (currentCommit && currentFile) {
+          nextExpandedCommitShas.add(currentCommit.sha);
+        }
+        selectedCommitShaRef.current = nextCommit.sha;
+        selectedCommitFilePathRef.current = currentFile?.path ?? "";
+        expandedCommitShasRef.current = nextExpandedCommitShas;
+        setSelectedCommitSha(nextCommit.sha);
+        setSelectedCommitFilePath(currentFile?.path ?? "");
+        setExpandedCommitShas(nextExpandedCommitShas);
+        if (currentCommit && currentFile) {
+          void loadCommitDiff(currentCommit.sha, currentFile.path);
+        } else {
+          clearCommitDiff();
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (append) {
+          setHistoryLoadMoreError(message);
+          setHistoryHasMoreValue(true);
+        } else if (!silent || force) {
+          historyCommitsRef.current = [];
+          setHistoryCommits([]);
+          setHistoryGraphState(EMPTY_GIT_HISTORY_GRAPH_STATE);
+          selectedCommitShaRef.current = "";
+          selectedCommitFilePathRef.current = "";
+          expandedCommitShasRef.current = new Set();
+          setSelectedCommitSha("");
+          setSelectedCommitFilePath("");
+          setExpandedCommitShas(new Set());
+          setHistoryHasMoreValue(false);
+          setHistoryLoadMoreError("");
+          clearCommitDiff();
+          setHistoryError(message);
+        }
+      } finally {
+        historyInFlightRef.current = false;
+        if (append) {
+          setHistoryLoadingMore(false);
+        } else if (!silent) {
+          setHistoryLoading(false);
+        }
       }
-      const nextSignature = gitHistorySignature(response.state, response.commits);
-      const historyChanged = historySignatureRef.current !== nextSignature;
-      historySignatureRef.current = nextSignature;
-      if (historyChanged) {
-        commitDetailsCacheRef.current.clear();
-      }
-      if (options.notifyChanged && previousStatusSignature && statusChanged) {
-        suppressNextGitChangedRef.current = true;
-        dispatchGitChanged(cwd);
-      }
-      setHistoryHasMoreValue(
-        !force &&
-          !historyChanged &&
-          historyCommitsRef.current.length > response.commits.length &&
-          !historyHasMoreRef.current
-          ? false
-          : pageHasMore,
-      );
-      setHistoryLoadMoreError("");
-      if (!force && !historyChanged) {
-        return;
-      }
-      setState(response.state);
-      historyCommitsRef.current = response.commits;
-      setHistoryCommits(response.commits);
-      if (response.state.status !== "ready" || response.commits.length === 0) {
-        selectedCommitShaRef.current = "";
-        selectedCommitFilePathRef.current = "";
-        expandedCommitShasRef.current = new Set();
-        setSelectedCommitSha("");
-        setSelectedCommitFilePath("");
-        setExpandedCommitShas(new Set());
-        setHistoryHasMoreValue(false);
-        clearCommitDiff();
-        return;
-      }
-      const currentCommit = response.commits.find(
-        (commit) => commit.sha === selectedCommitShaRef.current,
-      );
-      const nextCommit = currentCommit ?? response.commits[0];
-      const currentFile =
-        currentCommit?.files.find((file) => file.path === selectedCommitFilePathRef.current) ??
-        null;
-      const availableCommitShas = new Set(response.commits.map((commit) => commit.sha));
-      const nextExpandedCommitShas = new Set(
-        [...expandedCommitShasRef.current].filter((sha) => availableCommitShas.has(sha)),
-      );
-      if (currentCommit && currentFile) {
-        nextExpandedCommitShas.add(currentCommit.sha);
-      }
-      selectedCommitShaRef.current = nextCommit.sha;
-      selectedCommitFilePathRef.current = currentFile?.path ?? "";
-      expandedCommitShasRef.current = nextExpandedCommitShas;
-      setSelectedCommitSha(nextCommit.sha);
-      setSelectedCommitFilePath(currentFile?.path ?? "");
-      setExpandedCommitShas(nextExpandedCommitShas);
-      if (currentCommit && currentFile) {
-        void loadCommitDiff(currentCommit.sha, currentFile.path);
-      } else {
-        clearCommitDiff();
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (append) {
-        setHistoryLoadMoreError(message);
-        setHistoryHasMoreValue(true);
-      } else if (!silent || force) {
-        historyCommitsRef.current = [];
-        setHistoryCommits([]);
-        selectedCommitShaRef.current = "";
-        selectedCommitFilePathRef.current = "";
-        expandedCommitShasRef.current = new Set();
-        setSelectedCommitSha("");
-        setSelectedCommitFilePath("");
-        setExpandedCommitShas(new Set());
-        setHistoryHasMoreValue(false);
-        setHistoryLoadMoreError("");
-        clearCommitDiff();
-        setHistoryError(message);
-      }
-    } finally {
-      historyInFlightRef.current = false;
-      if (append) {
-        setHistoryLoadingMore(false);
-      } else if (!silent) {
-        setHistoryLoading(false);
-      }
-    }
-  }, [clearCommitDiff, cwd, gitClient, loadCommitDiff, setHistoryHasMoreValue]);
+    },
+    [clearCommitDiff, cwd, gitClient, loadCommitDiff, setHistoryHasMoreValue],
+  );
 
   const maybeLoadMoreHistory = useCallback(
     (element: HTMLElement | null) => {
@@ -3317,18 +3408,32 @@ export const GitReviewPanel = memo(function GitReviewPanel(props: GitReviewPanel
     () =>
       computeGitGraph(historyCommits, {
         currentRef: state.head,
-        remoteRef: state.upstream,
+        remoteRef: historyGraphState.historyBaseRef,
         remoteName: state.remoteName,
+        showRemoteChangeMarkers: true,
+        ahead: historyGraphState.historyAhead,
+        behind: historyGraphState.historyBehind,
+        mergeBase: historyGraphState.mergeBase,
       }),
-    [historyCommits, state.head, state.remoteName, state.upstream],
+    [historyCommits, historyGraphState, state.head, state.remoteName],
+  );
+  const historyCommitBySha = useMemo(
+    () => new Map(historyCommits.map((commit) => [commit.sha, commit])),
+    [historyCommits],
   );
   const historyRows = useMemo<GitHistoryRow[]>(() => {
     const rows: GitHistoryRow[] = [];
-    historyCommits.forEach((commit, commitIndex) => {
-      rows.push({ type: "commit", commit, commitIndex });
+    gitGraph.rows.forEach((graphRow, graphIndex) => {
+      if (graphRow.kind === "incoming-changes" || graphRow.kind === "outgoing-changes") {
+        rows.push({ type: "marker", kind: graphRow.kind, graphIndex });
+        return;
+      }
+      const commit = historyCommitBySha.get(graphRow.sha);
+      if (!commit) return;
+      rows.push({ type: "commit", commit, graphIndex });
       if (expandedCommitShas.has(commit.sha)) {
         commit.files.forEach((file) => {
-          rows.push({ type: "file", commit, commitIndex, file });
+          rows.push({ type: "file", commit, graphIndex, file });
         });
       }
     });
@@ -3336,7 +3441,14 @@ export const GitReviewPanel = memo(function GitReviewPanel(props: GitReviewPanel
       rows.push({ type: "loadMore" });
     }
     return rows;
-  }, [expandedCommitShas, historyCommits, historyHasMore, historyLoadMoreError, historyLoadingMore]);
+  }, [
+    expandedCommitShas,
+    gitGraph.rows,
+    historyCommitBySha,
+    historyHasMore,
+    historyLoadMoreError,
+    historyLoadingMore,
+  ]);
   const historyVirtualizer = useVirtualizer({
     count: historyRows.length,
     getScrollElement: () => historyListRef.current,
@@ -3345,6 +3457,7 @@ export const GitReviewPanel = memo(function GitReviewPanel(props: GitReviewPanel
     getItemKey: (index) => {
       const row = historyRows[index];
       if (!row) return index;
+      if (row.type === "marker") return `marker:${row.kind}:${row.graphIndex}`;
       if (row.type === "commit") return `commit:${row.commit.sha}`;
       if (row.type === "loadMore") return "load-more";
       return `file:${row.commit.sha}:${row.file.status}:${row.file.oldPath ?? ""}:${row.file.path}`;
@@ -4425,6 +4538,45 @@ export const GitReviewPanel = memo(function GitReviewPanel(props: GitReviewPanel
                         </div>
                       );
                     }
+                    if (row.type === "marker") {
+                      const graphRow = gitGraph.rows[row.graphIndex];
+                      if (!graphRow) return null;
+                      const label =
+                        row.kind === "outgoing-changes"
+                          ? t("projectTools.gitReview.outgoingChanges")
+                          : t("projectTools.gitReview.incomingChanges");
+                      const refLabel = gitHistoryMarkerRef(
+                        row.kind,
+                        state,
+                        historyGraphState.historyBaseRef,
+                      );
+                      const title = refLabel ? `${label} ${refLabel}` : label;
+                      return (
+                        <div
+                          key={virtualRow.key}
+                          ref={historyVirtualizer.measureElement}
+                          data-index={virtualRow.index}
+                          className="absolute left-0 top-0 w-full"
+                          style={{ transform: `translateY(${virtualRow.start}px)` }}
+                        >
+                          <div
+                            className="git-review-history-row flex h-[22px] w-full min-w-0 select-none items-center gap-1 px-1.5 text-left text-xs text-muted-foreground transition-colors"
+                            title={title}
+                            aria-label={title}
+                          >
+                            <GitGraphSvgCell row={graphRow} />
+                            <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
+                              {label}
+                            </span>
+                            {refLabel ? (
+                              <span className="shrink-0 truncate text-[11px] text-muted-foreground">
+                                {refLabel}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    }
                     if (row.type === "file") {
                       const TypeIcon = getFileTypeIcon(row.file.path, "file");
                       const fileSelected =
@@ -4437,7 +4589,7 @@ export const GitReviewPanel = memo(function GitReviewPanel(props: GitReviewPanel
                       const filePath = row.file.oldPath
                         ? `${parentPath(row.file.oldPath)} -> ${parentPath(row.file.path)}`
                         : parentPath(row.file.path);
-                      const graphRow = gitGraph.rows[row.commitIndex];
+                      const graphRow = gitGraph.rows[row.graphIndex];
                       return (
                         <div
                           key={virtualRow.key}
@@ -4484,7 +4636,7 @@ export const GitReviewPanel = memo(function GitReviewPanel(props: GitReviewPanel
                       historyContextMenu?.kind === "commit" &&
                       historyContextMenu.commitSha === commit.sha;
                     const commitExpanded = expandedCommitShas.has(commit.sha);
-                    const graphRow = gitGraph.rows[row.commitIndex];
+                    const graphRow = gitGraph.rows[row.graphIndex];
                     return (
                       <div
                         key={virtualRow.key}

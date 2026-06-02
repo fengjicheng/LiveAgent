@@ -183,7 +183,7 @@ for (const [surface, graph] of Object.entries(graphModules)) {
           { id: "merge", color: 0 },
           { id: "side", color: graph.GRAPH_REF_COLORS.remote },
         ],
-        isHead: true,
+        isHead: false,
         isMerge: true,
       },
       {
@@ -199,7 +199,7 @@ for (const [surface, graph] of Object.entries(graphModules)) {
           { id: "base", color: graph.GRAPH_REF_COLORS.local },
           { id: "side", color: graph.GRAPH_REF_COLORS.remote },
         ],
-        isHead: false,
+        isHead: true,
         isMerge: false,
       },
       {
@@ -231,6 +231,72 @@ for (const [surface, graph] of Object.entries(graphModules)) {
         isHead: false,
         isMerge: false,
       },
+    ]);
+  });
+
+  test(`${surface} git graph inserts VS Code incoming and outgoing change rows`, () => {
+    const result = graph.computeGitGraph(
+      [
+        { sha: "a", parents: ["b"], refs: ["origin/main"] },
+        { sha: "b", parents: ["e"] },
+        { sha: "c", parents: ["d"], refs: ["main"] },
+        { sha: "d", parents: ["e"] },
+        { sha: "e", parents: ["f"] },
+        { sha: "f", parents: ["g"] },
+      ],
+      {
+        currentRef: "main",
+        remoteRef: "origin/main",
+        showRemoteChangeMarkers: true,
+        ahead: 2,
+        behind: 2,
+      },
+    );
+
+    assert.equal(result.maxCols, 2);
+    assert.deepEqual(
+      result.rows.map((row) => row.kind),
+      [
+        "commit",
+        "commit",
+        "outgoing-changes",
+        "commit",
+        "commit",
+        "incoming-changes",
+        "commit",
+        "commit",
+      ],
+    );
+
+    const outgoing = result.rows[2];
+    assert.equal(outgoing.sha, graph.GIT_GRAPH_OUTGOING_CHANGES_ID);
+    assert.deepEqual(outgoing.parents, ["c"]);
+    assert.equal(outgoing.commitCol, 1);
+    assert.deepEqual(outgoing.inputLanes, [{ id: "e", color: graph.GRAPH_REF_COLORS.remote }]);
+    assert.deepEqual(outgoing.outputLanes, [
+      { id: "e", color: graph.GRAPH_REF_COLORS.remote },
+      { id: "c", color: graph.GRAPH_REF_COLORS.local },
+    ]);
+
+    const head = result.rows[3];
+    assert.equal(head.sha, "c");
+    assert.equal(head.isHead, true);
+    assert.deepEqual(head.inputLanes, [
+      { id: "e", color: graph.GRAPH_REF_COLORS.remote },
+      { id: "c", color: graph.GRAPH_REF_COLORS.local },
+    ]);
+
+    const incoming = result.rows[5];
+    assert.equal(incoming.sha, graph.GIT_GRAPH_INCOMING_CHANGES_ID);
+    assert.deepEqual(incoming.parents, ["e"]);
+    assert.equal(incoming.commitCol, 0);
+    assert.deepEqual(incoming.inputLanes, [
+      { id: graph.GIT_GRAPH_INCOMING_CHANGES_ID, color: graph.GRAPH_REF_COLORS.remote },
+      { id: "e", color: graph.GRAPH_REF_COLORS.local },
+    ]);
+    assert.deepEqual(incoming.outputLanes, [
+      { id: "e", color: graph.GRAPH_REF_COLORS.remote },
+      { id: "e", color: graph.GRAPH_REF_COLORS.local },
     ]);
   });
 
