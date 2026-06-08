@@ -9,6 +9,8 @@ import {
   normalizeProjectToolsFileTreeSettings,
   normalizeProjectToolsGitReviewSettings,
   normalizeProjectToolsTunnelSettings,
+  normalizeProjectToolsPanelActiveTab,
+  normalizeProjectToolsPanelActiveTabs,
   normalizeProjectToolsPanelTabOrders,
   normalizeSelectedModel,
   normalizeSettings,
@@ -94,13 +96,9 @@ function readLocalUiSettings(): {
             typeof legacyTerminalPanel.width === "string"
           ? Number(legacyTerminalPanel.width)
           : 420;
-    const projectToolsPanelActiveTab =
-      projectToolsPanel.activeTab === "terminal" ||
-      projectToolsPanel.activeTab === "fileTree" ||
-      projectToolsPanel.activeTab === "gitReview" ||
-      projectToolsPanel.activeTab === "tunnel"
-        ? projectToolsPanel.activeTab
-        : "fileTree";
+    const projectToolsPanelActiveTab = normalizeProjectToolsPanelActiveTab(
+      projectToolsPanel.activeTab,
+    );
     return toPersistedLocalCustomSettings({
       conversationTitleModel: normalizeSelectedModel(obj.conversationTitleModel),
       chatSidebar: {
@@ -112,6 +110,7 @@ function readLocalUiSettings(): {
           ? Math.min(1280, Math.max(320, Math.floor(projectToolsPanelWidth)))
           : 420,
         activeTab: projectToolsPanelActiveTab,
+        activeTabs: normalizeProjectToolsPanelActiveTabs(projectToolsPanel.activeTabs),
         tabOrders: normalizeProjectToolsPanelTabOrders(projectToolsPanel.tabOrders),
       },
       projectToolsFileTree: normalizeProjectToolsFileTreeSettings({}),

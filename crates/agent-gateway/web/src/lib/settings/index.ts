@@ -147,6 +147,7 @@ export type ProjectToolsPanelTab = "terminal" | "fileTree" | "gitReview" | "tunn
 export type ProjectToolsPanelSettings = {
   width: number;
   activeTab: ProjectToolsPanelTab;
+  activeTabs: Record<string, ProjectToolsPanelTab>;
   tabOrders: Record<string, string[]>;
 };
 
@@ -1585,6 +1586,33 @@ export function normalizeProjectToolsPanelTabOrder(input: unknown): string[] {
   return order;
 }
 
+function isProjectToolsPanelTab(input: unknown): input is ProjectToolsPanelTab {
+  return input === "terminal" ||
+    input === "fileTree" ||
+    input === "gitReview" ||
+    input === "tunnel";
+}
+
+export function normalizeProjectToolsPanelActiveTab(input: unknown): ProjectToolsPanelTab {
+  return isProjectToolsPanelTab(input) ? input : "fileTree";
+}
+
+export function normalizeProjectToolsPanelActiveTabs(
+  input: unknown,
+): Record<string, ProjectToolsPanelTab> {
+  const rawTabs = (
+    input && typeof input === "object" && !Array.isArray(input) ? input : {}
+  ) as Record<string, unknown>;
+  const activeTabs: Record<string, ProjectToolsPanelTab> = {};
+  for (const [pathKey, value] of Object.entries(rawTabs)) {
+    const normalizedPathKey = workspaceProjectPathKey(pathKey);
+    if (!normalizedPathKey || !isProjectToolsPanelTab(value)) continue;
+    activeTabs[normalizedPathKey] = value;
+    if (Object.keys(activeTabs).length >= 100) break;
+  }
+  return activeTabs;
+}
+
 export function normalizeProjectToolsPanelTabOrders(input: unknown): Record<string, string[]> {
   const rawOrders = (
     input && typeof input === "object" && !Array.isArray(input) ? input : {}
@@ -1615,13 +1643,9 @@ export function normalizeCustomSettings(
   const projectToolsPanel = (obj.projectToolsPanel && typeof obj.projectToolsPanel === "object"
     ? obj.projectToolsPanel
     : {}) as Record<string, unknown>;
-  const projectToolsPanelActiveTab =
-    projectToolsPanel.activeTab === "terminal" ||
-    projectToolsPanel.activeTab === "fileTree" ||
-    projectToolsPanel.activeTab === "gitReview" ||
-    projectToolsPanel.activeTab === "tunnel"
-      ? projectToolsPanel.activeTab
-      : "fileTree";
+  const projectToolsPanelActiveTab = normalizeProjectToolsPanelActiveTab(
+    projectToolsPanel.activeTab,
+  );
   const projectToolsFileTree = (
     obj.projectToolsFileTree && typeof obj.projectToolsFileTree === "object"
       ? obj.projectToolsFileTree
@@ -1654,6 +1678,7 @@ export function normalizeCustomSettings(
         420,
       ),
       activeTab: projectToolsPanelActiveTab,
+      activeTabs: normalizeProjectToolsPanelActiveTabs(projectToolsPanel.activeTabs),
       tabOrders: normalizeProjectToolsPanelTabOrders(projectToolsPanel.tabOrders),
     },
     projectToolsFileTree: normalizeProjectToolsFileTreeSettings(projectToolsFileTree),
@@ -1884,6 +1909,56 @@ export function getProjectToolsPanelTabOrder(
   return customSettings.projectToolsPanel.tabOrders[normalizedPathKey] ?? [];
 }
 
+export function getProjectToolsPanelActiveTab(
+  customSettings: CustomSettings,
+  projectPathKey: string,
+): ProjectToolsPanelTab {
+  const normalizedPathKey = workspaceProjectPathKey(projectPathKey);
+  if (!normalizedPathKey) return customSettings.projectToolsPanel.activeTab;
+  return (
+    customSettings.projectToolsPanel.activeTabs[normalizedPathKey] ??
+    customSettings.projectToolsPanel.activeTab
+  );
+}
+
+export function updateProjectToolsPanelActiveTab(
+  prev: AppSettings,
+  projectPathKey: string,
+  activeTab: ProjectToolsPanelTab,
+): AppSettings {
+  const nextActiveTab = normalizeProjectToolsPanelActiveTab(activeTab);
+  const normalizedPathKey = workspaceProjectPathKey(projectPathKey);
+  if (!normalizedPathKey) {
+    if (prev.customSettings.projectToolsPanel.activeTab === nextActiveTab) return prev;
+    return updateCustomSettings(prev, {
+      projectToolsPanel: {
+        ...prev.customSettings.projectToolsPanel,
+        activeTab: nextActiveTab,
+      },
+    });
+  }
+
+  const currentProjectActiveTab =
+    prev.customSettings.projectToolsPanel.activeTabs[normalizedPathKey];
+  if (
+    prev.customSettings.projectToolsPanel.activeTab === nextActiveTab &&
+    currentProjectActiveTab === nextActiveTab
+  ) {
+    return prev;
+  }
+
+  return updateCustomSettings(prev, {
+    projectToolsPanel: {
+      ...prev.customSettings.projectToolsPanel,
+      activeTab: nextActiveTab,
+      activeTabs: {
+        ...prev.customSettings.projectToolsPanel.activeTabs,
+        [normalizedPathKey]: nextActiveTab,
+      },
+    },
+  });
+}
+
 function projectToolsPanelTabOrderEqual(left: readonly string[], right: readonly string[]) {
   return left.length === right.length && left.every((item, index) => item === right[index]);
 }
@@ -1925,6 +2000,10 @@ export function removeProjectToolsProjectState(
     prev.customSettings.projectToolsPanel.tabOrders,
     normalizedPathKey,
   );
+  const hasActiveTab = Object.prototype.hasOwnProperty.call(
+    prev.customSettings.projectToolsPanel.activeTabs,
+    normalizedPathKey,
+  );
   const openProjectPathKeys = prev.customSettings.projectToolsFileTree.openProjectPathKeys
     .map((pathKey) => workspaceProjectPathKey(pathKey))
     .filter(Boolean);
@@ -1957,6 +2036,7 @@ export function removeProjectToolsProjectState(
 
   if (
     !hasTabOrder &&
+    !hasActiveTab &&
     !removedOpenProjectPathKey &&
     !removedGitReviewOpenProjectPathKey &&
     !removedTunnelOpenProjectPathKey &&
@@ -1971,6 +2051,12 @@ export function removeProjectToolsProjectState(
   if (hasTabOrder) {
     delete tabOrders[normalizedPathKey];
   }
+  const activeTabs = hasActiveTab
+    ? { ...prev.customSettings.projectToolsPanel.activeTabs }
+    : prev.customSettings.projectToolsPanel.activeTabs;
+  if (hasActiveTab) {
+    delete activeTabs[normalizedPathKey];
+  }
 
   const projects = hasFileTreeProjectState
     ? { ...prev.customSettings.projectToolsFileTree.projects }
@@ -1982,6 +2068,7 @@ export function removeProjectToolsProjectState(
   return updateCustomSettings(prev, {
     projectToolsPanel: {
       ...prev.customSettings.projectToolsPanel,
+      activeTabs,
       tabOrders,
     },
     projectToolsFileTree: {

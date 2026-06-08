@@ -65,6 +65,7 @@ import {
   findProviderModelConfig,
   getChatRuntimeReasoningLevelsForProvider,
   getProjectToolsFileTreeProjectState,
+  getProjectToolsPanelActiveTab,
   getProjectToolsPanelTabOrder,
   isAgentDevMode,
   isProjectToolsFileTreeOpen,
@@ -81,6 +82,7 @@ import {
   updateProjectToolsFileTreeOpen,
   updateProjectToolsGitReviewOpen,
   updateProjectToolsTunnelOpen,
+  updateProjectToolsPanelActiveTab,
   updateProjectToolsPanelTabOrder,
   type AppSettings,
   type ChatRuntimeControls,
@@ -2080,12 +2082,7 @@ export default function App() {
       setProjectToolsPanelOpen(true);
       setSettings((prev) =>
         updateProjectToolsTunnelOpen(
-          updateCustomSettings(prev, {
-            projectToolsPanel: {
-              ...prev.customSettings.projectToolsPanel,
-              activeTab: "tunnel",
-            },
-          }),
+          updateProjectToolsPanelActiveTab(prev, targetProjectPathKey, "tunnel"),
           targetProjectPathKey,
           true,
         ),
@@ -2319,12 +2316,7 @@ export default function App() {
       activateWorkspaceProject(project);
       setSettings((prev) =>
         updateProjectToolsFileTreeOpen(
-          updateCustomSettings(prev, {
-            projectToolsPanel: {
-              ...prev.customSettings.projectToolsPanel,
-              activeTab: "fileTree",
-            },
-          }),
+          updateProjectToolsPanelActiveTab(prev, pathKey, "fileTree"),
           pathKey,
           true,
         ),
@@ -6763,7 +6755,10 @@ export default function App() {
             theme={settings.theme}
             disabledMessage={projectToolsDisabledMessage}
             terminalDisabledMessage={terminalDisabledMessage}
-            activeTab={settings.customSettings.projectToolsPanel.activeTab}
+            activeTab={getProjectToolsPanelActiveTab(
+              settings.customSettings,
+              terminalProjectPathKey,
+            )}
             tabOrder={getProjectToolsPanelTabOrder(settings.customSettings, terminalProjectPathKey)}
             fileTreeOpen={projectToolsFileTreeOpen}
             fileTreeState={getProjectToolsFileTreeProjectState(
@@ -6795,12 +6790,7 @@ export default function App() {
             }
             onActiveTabChange={(activeTab) =>
               setSettings((prev) =>
-                updateCustomSettings(prev, {
-                  projectToolsPanel: {
-                    ...prev.customSettings.projectToolsPanel,
-                    activeTab,
-                  },
-                }),
+                updateProjectToolsPanelActiveTab(prev, terminalProjectPathKey, activeTab),
               )
             }
             onTabOrderChange={(tabOrder) =>

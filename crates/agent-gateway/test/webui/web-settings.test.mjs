@@ -351,6 +351,9 @@ test("gateway settings sync keeps newer project tool tab open state", () => {
       projectToolsPanel: {
         width: 612,
         activeTab: "gitReview",
+        activeTabs: {
+          "/web/project": "gitReview",
+        },
         tabOrders: {
           "/web/project": ["__git_review__", "__file_tree__"],
         },
@@ -394,7 +397,10 @@ test("gateway settings sync keeps newer project tool tab open state", () => {
   ]);
   assert.equal(staleSynced.customSettings.projectToolsTunnel.openVersion, 2);
   assert.equal(staleSynced.customSettings.projectToolsPanel.width, 612);
-  assert.equal(staleSynced.customSettings.projectToolsPanel.activeTab, "terminal");
+  assert.equal(staleSynced.customSettings.projectToolsPanel.activeTab, "gitReview");
+  assert.deepEqual(staleSynced.customSettings.projectToolsPanel.activeTabs, {
+    "/web/project": "gitReview",
+  });
   assert.deepEqual(staleSynced.customSettings.projectToolsPanel.tabOrders, {
     "/web/project": ["__git_review__", "__file_tree__"],
   });
@@ -404,6 +410,9 @@ test("gateway settings sync keeps newer project tool tab open state", () => {
       projectToolsPanel: {
         width: 360,
         activeTab: "tunnel",
+        activeTabs: {
+          "/desktop/project": "tunnel",
+        },
         tabOrders: {
           "/desktop/project": ["terminal-1", "__tunnel__"],
         },
@@ -427,15 +436,23 @@ test("gateway settings sync keeps newer project tool tab open state", () => {
   ]);
   assert.equal(newerSynced.customSettings.projectToolsTunnel.openVersion, 3);
   assert.equal(newerSynced.customSettings.projectToolsPanel.width, 612);
-  assert.equal(newerSynced.customSettings.projectToolsPanel.activeTab, "tunnel");
+  assert.equal(newerSynced.customSettings.projectToolsPanel.activeTab, "gitReview");
+  assert.deepEqual(newerSynced.customSettings.projectToolsPanel.activeTabs, {
+    "/web/project": "gitReview",
+    "/desktop/project": "tunnel",
+  });
   assert.deepEqual(newerSynced.customSettings.projectToolsPanel.tabOrders, {
     "/web/project": ["__git_review__", "__file_tree__"],
   });
 
   const payload = settingsSync.buildGatewaySettingsSyncPayload(newerSynced);
   assert.deepEqual(payload.customSettings.projectToolsPanel, {
-    activeTab: "tunnel",
+    activeTabs: {
+      "/web/project": "gitReview",
+      "/desktop/project": "tunnel",
+    },
   });
+  assert.equal(Object.hasOwn(payload.customSettings.projectToolsPanel, "activeTab"), false);
   assert.equal(Object.hasOwn(payload.customSettings.projectToolsPanel, "width"), false);
   assert.equal(Object.hasOwn(payload.customSettings.projectToolsPanel, "tabOrders"), false);
   assert.deepEqual(payload.customSettings.projectToolsGitReview, {

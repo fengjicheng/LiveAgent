@@ -3,9 +3,9 @@ import {
   normalizeChatRuntimeControls,
   normalizeProjectToolsFileTreeSettings,
   normalizeProjectToolsGitReviewSettings,
+  normalizeProjectToolsPanelActiveTabs,
   normalizeProjectToolsTunnelSettings,
   normalizeSettings,
-  type ProjectToolsPanelTab,
   workspaceProjectPathKey,
 } from "./index";
 
@@ -15,7 +15,7 @@ export type GatewaySettingsSyncProvider = Omit<AppSettings["customProviders"][nu
 };
 export type GatewayProjectToolsPanelSync = Pick<
   AppSettings["customSettings"]["projectToolsPanel"],
-  "activeTab"
+  "activeTabs"
 >;
 export type GatewaySettingsSyncCustomSettings = Omit<
   Partial<AppSettings["customSettings"]>,
@@ -101,7 +101,7 @@ function syncableCustomSettings(
   return {
     ...syncable,
     projectToolsPanel: {
-      activeTab: customSettings.projectToolsPanel.activeTab,
+      activeTabs: customSettings.projectToolsPanel.activeTabs,
     },
     chatSidebar: {
       projectsCollapsed: false,
@@ -353,12 +353,15 @@ function mergeSyncedProjectToolsTunnelSettings(
   };
 }
 
-function isProjectToolsPanelTab(value: unknown): value is ProjectToolsPanelTab {
+function projectToolsPanelActiveTabsEqual(
+  left: AppSettings["customSettings"]["projectToolsPanel"]["activeTabs"],
+  right: AppSettings["customSettings"]["projectToolsPanel"]["activeTabs"],
+) {
+  const leftEntries = Object.entries(left);
+  const rightEntries = Object.entries(right);
   return (
-    value === "terminal" ||
-    value === "fileTree" ||
-    value === "gitReview" ||
-    value === "tunnel"
+    leftEntries.length === rightEntries.length &&
+    leftEntries.every(([pathKey, activeTab]) => right[pathKey] === activeTab)
   );
 }
 
@@ -367,14 +370,16 @@ function mergeSyncedProjectToolsPanelSettings(
   incoming: unknown,
 ): AppSettings["customSettings"]["projectToolsPanel"] {
   const source = asObject(incoming);
-  const activeTab = isProjectToolsPanelTab(source.activeTab)
-    ? source.activeTab
-    : current.activeTab;
-  return activeTab === current.activeTab
+  if (!Object.hasOwn(source, "activeTabs")) return current;
+  const activeTabs = {
+    ...current.activeTabs,
+    ...normalizeProjectToolsPanelActiveTabs(source.activeTabs),
+  };
+  return projectToolsPanelActiveTabsEqual(activeTabs, current.activeTabs)
     ? current
     : {
         ...current,
-        activeTab,
+        activeTabs,
       };
 }
 

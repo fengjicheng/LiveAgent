@@ -113,6 +113,7 @@ import {
   findProviderModelConfig,
   getChatRuntimeReasoningLevelsForProvider,
   getProjectToolsFileTreeProjectState,
+  getProjectToolsPanelActiveTab,
   getProjectToolsPanelTabOrder,
   isAgentDevMode,
   isAgentExecutionMode,
@@ -133,6 +134,7 @@ import {
   updateProjectToolsFileTreeOpen,
   updateProjectToolsGitReviewOpen,
   updateProjectToolsTunnelOpen,
+  updateProjectToolsPanelActiveTab,
   updateProjectToolsPanelTabOrder,
   updateChatRuntimeControlsForProvider,
   updateMcp,
@@ -1103,12 +1105,7 @@ export function ChatPage(props: ChatPageProps) {
       activateWorkspaceProject(project);
       setSettings((prev) =>
         updateProjectToolsFileTreeOpen(
-          updateCustomSettings(prev, {
-            projectToolsPanel: {
-              ...prev.customSettings.projectToolsPanel,
-              activeTab: "fileTree",
-            },
-          }),
+          updateProjectToolsPanelActiveTab(prev, pathKey, "fileTree"),
           pathKey,
           true,
         ),
@@ -1125,12 +1122,7 @@ export function ChatPage(props: ChatPageProps) {
     setProjectToolsPanelOpen(true);
     setSettings((prev) =>
       updateProjectToolsTunnelOpen(
-        updateCustomSettings(prev, {
-          projectToolsPanel: {
-            ...prev.customSettings.projectToolsPanel,
-            activeTab: "tunnel",
-          },
-        }),
+        updateProjectToolsPanelActiveTab(prev, targetProjectPathKey, "tunnel"),
         targetProjectPathKey,
         true,
       ),
@@ -4671,7 +4663,10 @@ export function ChatPage(props: ChatPageProps) {
         width={settings.customSettings.projectToolsPanel.width}
         theme={settings.theme}
         disabledMessage={terminalDisabledMessage}
-        activeTab={settings.customSettings.projectToolsPanel.activeTab}
+        activeTab={getProjectToolsPanelActiveTab(
+          settings.customSettings,
+          terminalProjectPathKey,
+        )}
         tabOrder={getProjectToolsPanelTabOrder(settings.customSettings, terminalProjectPathKey)}
         fileTreeOpen={projectToolsFileTreeOpen}
         fileTreeState={getProjectToolsFileTreeProjectState(
@@ -4699,12 +4694,7 @@ export function ChatPage(props: ChatPageProps) {
         }
         onActiveTabChange={(activeTab) =>
           setSettings((prev) =>
-            updateCustomSettings(prev, {
-              projectToolsPanel: {
-                ...prev.customSettings.projectToolsPanel,
-                activeTab,
-              },
-            }),
+            updateProjectToolsPanelActiveTab(prev, terminalProjectPathKey, activeTab),
           )
         }
         onTabOrderChange={(tabOrder) =>
