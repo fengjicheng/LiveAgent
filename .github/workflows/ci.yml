@@ -117,7 +117,7 @@ jobs:
 
       - name: Test WebUI modules
         working-directory: crates/agent-gateway
-        run: node --test test/webui/*.test.mjs
+        run: node --test test/webui/*.test.mjs web/test/*.test.mjs
 
   gui:
     name: GUI

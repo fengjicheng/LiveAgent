@@ -366,6 +366,7 @@ test("SharedWorker gateway client keeps SSH create snapshots from worker payload
     title: undefined,
     cols: undefined,
     rows: undefined,
+    sftp_enabled: false,
   });
   port.emit({
     type: "response",
@@ -526,6 +527,7 @@ test("Gateway SharedWorker broadcasts events with each port connection id", asyn
     historyListeners = [];
     conversationListeners = [];
     settingsListeners = [];
+    sftpTransferListeners = [];
 
     constructor(token) {
       this.token = token;
@@ -553,6 +555,11 @@ test("Gateway SharedWorker broadcasts events with each port connection id", asyn
     }
 
     subscribeTerminal() {
+      return () => {};
+    }
+
+    subscribeSftpTransfers(listener) {
+      this.sftpTransferListeners.push(listener);
       return () => {};
     }
 
@@ -608,6 +615,31 @@ test("Gateway SharedWorker broadcasts events with each port connection id", asyn
     payload: historyEvent,
   });
 
+  const sftpEvent = {
+    kind: "progress",
+    transfer: {
+      id: "transfer-1",
+      sessionId: "ssh-1",
+      status: "running",
+      bytesTransferred: 12,
+      totalBytes: 24,
+    },
+  };
+  clientInstances[0].sftpTransferListeners[0](sftpEvent);
+
+  assert.deepEqual(firstPort.messages.at(-1), {
+    type: "event",
+    event_type: "sftp",
+    connection_id: "connection-1",
+    payload: sftpEvent,
+  });
+  assert.deepEqual(secondPort.messages.at(-1), {
+    type: "event",
+    event_type: "sftp",
+    connection_id: "connection-2",
+    payload: sftpEvent,
+  });
+
   globalThis.onconnect = previousOnConnect;
 });
 
@@ -642,6 +674,10 @@ test("Gateway SharedWorker applies foreground wakeups to the managed socket clie
     }
 
     subscribeTerminal() {
+      return () => {};
+    }
+
+    subscribeSftpTransfers() {
       return () => {};
     }
 
@@ -707,6 +743,10 @@ test("Gateway SharedWorker terminal metadata reaches every page while output sta
 
     subscribeTerminal(listener) {
       this.terminalListeners.push(listener);
+      return () => {};
+    }
+
+    subscribeSftpTransfers() {
       return () => {};
     }
 
@@ -854,6 +894,10 @@ test("Gateway SharedWorker forwards terminal output while attach request is pend
       return () => {};
     }
 
+    subscribeSftpTransfers() {
+      return () => {};
+    }
+
     snapshotTerminal(sessionId, maxBytes, projectPathKey) {
       this.calls.push(["snapshotTerminal", sessionId, maxBytes, projectPathKey]);
       return new Promise((resolve) => {
@@ -970,6 +1014,10 @@ test("Gateway SharedWorker keeps upstream terminal attached until every port det
 
     subscribeTerminal(listener) {
       this.terminalListeners.push(listener);
+      return () => {};
+    }
+
+    subscribeSftpTransfers() {
       return () => {};
     }
 
@@ -1142,6 +1190,10 @@ test("Gateway SharedWorker forwards chat metadata and uploaded files", async () 
     }
 
     subscribeTerminal() {
+      return () => {};
+    }
+
+    subscribeSftpTransfers() {
       return () => {};
     }
 
@@ -1717,6 +1769,10 @@ test("Gateway SharedWorker forwards history share requests", async () => {
       return () => {};
     }
 
+    subscribeSftpTransfers() {
+      return () => {};
+    }
+
     getHistoryShare(conversationID) {
       this.calls.push(["getHistoryShare", conversationID]);
       return {
@@ -1855,6 +1911,10 @@ test("Gateway SharedWorker forwards tunnel requests", async () => {
     }
 
     subscribeTerminal() {
+      return () => {};
+    }
+
+    subscribeSftpTransfers() {
       return () => {};
     }
 
@@ -2068,6 +2128,10 @@ test("Gateway SharedWorker forwards chat.attach streams to the requesting port",
       return () => {};
     }
 
+    subscribeSftpTransfers() {
+      return () => {};
+    }
+
     async *attachChat(conversationID, options) {
       this.calls.push(["attachChat", conversationID, options.afterSeq]);
       yield {
@@ -2161,6 +2225,10 @@ test("Gateway SharedWorker forwards conversation cancel without a stream id", as
     }
 
     subscribeTerminal() {
+      return () => {};
+    }
+
+    subscribeSftpTransfers() {
       return () => {};
     }
 
