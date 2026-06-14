@@ -63,11 +63,37 @@ type websocketTerminalRequestPayload struct {
 	PromptID       string `json:"prompt_id"`
 	PromptAnswer   string `json:"prompt_answer"`
 	TrustHostKey   bool   `json:"trust_host_key"`
+	SftpEnabled    bool   `json:"sftp_enabled"`
 }
 
 type websocketSshKnownHostResetPayload struct {
 	Host string `json:"host"`
 	Port *int   `json:"port"`
+}
+
+type websocketSftpRequestPayload struct {
+	SessionID           string `json:"session_id"`
+	SessionIDCamel      string `json:"sessionId"`
+	ProjectPathKey      string `json:"project_path_key"`
+	ProjectPathKeyCamel string `json:"projectPathKey"`
+	Workdir             string `json:"workdir"`
+	Side                string `json:"side"`
+	LocalPath           string `json:"local_path"`
+	LocalPathCamel      string `json:"localPath"`
+	RemotePath          string `json:"remote_path"`
+	RemotePathCamel     string `json:"remotePath"`
+	FromPath            string `json:"from_path"`
+	FromPathCamel       string `json:"fromPath"`
+	SourcePathCamel     string `json:"sourcePath"`
+	ToPath              string `json:"to_path"`
+	ToPathCamel         string `json:"toPath"`
+	Direction           string `json:"direction"`
+	TargetPath          string `json:"target_path"`
+	TargetPathCamel     string `json:"targetPath"`
+	TransferID          string `json:"transfer_id"`
+	TransferIDCamel     string `json:"transferId"`
+	Recursive           bool   `json:"recursive"`
+	Overwrite           bool   `json:"overwrite"`
 }
 
 type websocketGitRequestPayload struct {
@@ -98,6 +124,8 @@ type websocketConnection struct {
 	settingsEventsCleanup func()
 	terminalEvents        <-chan *gatewayv1.TerminalEvent
 	terminalEventsCleanup func()
+	sftpEvents            <-chan *gatewayv1.SftpEvent
+	sftpEventsCleanup     func()
 	chatEvents            <-chan *session.ChatBroadcastEvent
 	chatEventsCleanup     func()
 	heartbeatOnce         sync.Once
@@ -186,6 +214,10 @@ func (c *websocketConnection) close() {
 			c.terminalEventsCleanup()
 			c.terminalEventsCleanup = nil
 		}
+		if c.sftpEventsCleanup != nil {
+			c.sftpEventsCleanup()
+			c.sftpEventsCleanup = nil
+		}
 		if c.chatEventsCleanup != nil {
 			c.chatEventsCleanup()
 			c.chatEventsCleanup = nil
@@ -221,6 +253,7 @@ func (c *websocketConnection) handleAuth(req websocketRequest) {
 	c.startHistorySyncForwarder()
 	c.startSettingsSyncForwarder()
 	c.startTerminalEventForwarder()
+	c.startSftpEventForwarder()
 	c.startChatEventForwarder()
 	c.startWebSocketHeartbeat()
 	if err := c.writeResponse(req.ID, map[string]any{"ok": true}); err != nil {
@@ -350,6 +383,36 @@ func (c *websocketConnection) startTerminalEventForwarder() {
 					continue
 				}
 				if err := c.writeTerminalEvent(websocketTerminalEventPayload(event)); err != nil {
+					c.close()
+					return
+				}
+			}
+		}
+	}()
+}
+
+func (c *websocketConnection) startSftpEventForwarder() {
+	if c.sftpEvents != nil || c.sftpEventsCleanup != nil {
+		return
+	}
+
+	sftpEvents, cleanup := c.sm.SubscribeSftpEvents()
+	c.sftpEvents = sftpEvents
+	c.sftpEventsCleanup = cleanup
+
+	go func() {
+		for {
+			select {
+			case <-c.done:
+				return
+			case event, ok := <-sftpEvents:
+				if !ok {
+					return
+				}
+				if !c.sm.WebSshTerminalEnabled() {
+					continue
+				}
+				if err := c.writeSftpEvent(websocketSftpEventPayload(event)); err != nil {
 					c.close()
 					return
 				}
@@ -541,6 +604,13 @@ func (c *websocketConnection) writeSettingsEvent(payload any) error {
 func (c *websocketConnection) writeTerminalEvent(payload any) error {
 	return c.writeEnvelope(websocketEnvelope{
 		Type:    "terminal.event",
+		Payload: payload,
+	})
+}
+
+func (c *websocketConnection) writeSftpEvent(payload any) error {
+	return c.writeEnvelope(websocketEnvelope{
+		Type:    "sftp.event",
 		Payload: payload,
 	})
 }

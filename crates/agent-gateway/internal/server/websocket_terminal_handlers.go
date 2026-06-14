@@ -91,6 +91,7 @@ func (c *websocketConnection) handleTerminalRequest(req websocketRequest) {
 				PromptId:       strings.TrimSpace(body.PromptID),
 				PromptAnswer:   body.PromptAnswer,
 				TrustHostKey:   body.TrustHostKey,
+				SftpEnabled:    body.SftpEnabled,
 			},
 		},
 	})

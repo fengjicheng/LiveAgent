@@ -46,6 +46,7 @@ type RawTerminalSshMetadata = Partial<TerminalSshMetadata> & {
   auth_type?: string;
   reconnect_attempt?: number;
   reconnect_max_attempts?: number;
+  sftp_enabled?: boolean;
 };
 
 type RawTerminalSshPrompt = Partial<TerminalSshPrompt> & {
@@ -132,6 +133,7 @@ function normalizeSshMetadata(input: RawTerminalSshMetadata): TerminalSshMetadat
     status: input.status ?? "connected",
     reconnectAttempt: Number(input.reconnectAttempt ?? input.reconnect_attempt ?? 0),
     reconnectMaxAttempts: Number(input.reconnectMaxAttempts ?? input.reconnect_max_attempts ?? 3),
+    sftpEnabled: input.sftpEnabled ?? input.sftp_enabled ?? false,
   };
 }
 
@@ -260,6 +262,7 @@ export const tauriTerminalClient: TerminalClient = {
         title: params.title,
         cols: params.cols,
         rows: params.rows,
+        sftp_enabled: params.sftpEnabled ?? false,
       }),
     );
   },

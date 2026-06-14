@@ -131,17 +131,101 @@ async function invokeGatewayMemory<T>(command: string, args?: Record<string, unk
   });
 }
 
-function pickWorkdirInBrowser(): string | null {
-  if (typeof window === "undefined" || typeof window.prompt !== "function") {
+async function pickWorkdirInBrowser(): Promise<string | null> {
+  if (typeof window === "undefined" || typeof document === "undefined" || !document.body) {
     return null;
   }
 
-  const message = [
-    "浏览器无法直接打开远程目录选择器。",
-    "请输入桌面端 Agent 可访问的绝对工作目录路径：",
-  ].join("\n");
-  const picked = window.prompt(message, "");
-  return typeof picked === "string" && picked.trim() ? picked.trim() : null;
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "fixed inset-0 z-[120] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-label", "选择工作目录");
+
+    const panel = document.createElement("form");
+    panel.className = "relative z-10 w-full max-w-md overflow-hidden rounded-2xl border border-border/70 bg-background shadow-2xl";
+
+    const header = document.createElement("div");
+    header.className = "border-b border-border/60 px-5 py-4";
+
+    const title = document.createElement("div");
+    title.className = "text-base font-semibold text-foreground";
+    title.textContent = "选择工作目录";
+
+    const description = document.createElement("div");
+    description.className = "mt-1 text-xs text-muted-foreground";
+    description.textContent = "浏览器无法直接打开远程目录选择器。请输入桌面端 Agent 可访问的绝对工作目录路径。";
+
+    const body = document.createElement("div");
+    body.className = "space-y-2 px-5 py-5";
+
+    const label = document.createElement("label");
+    label.className = "block text-xs font-medium text-muted-foreground";
+    label.htmlFor = "gateway-browser-workdir-path";
+    label.textContent = "工作目录路径";
+
+    const input = document.createElement("input");
+    input.id = "gateway-browser-workdir-path";
+    input.className = "h-10 w-full rounded-lg border border-input bg-background px-3 font-mono text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-ring focus:ring-2 focus:ring-ring/20";
+    input.placeholder = "/Users/name/project";
+    input.type = "text";
+
+    const footer = document.createElement("div");
+    footer.className = "flex flex-col-reverse gap-2 border-t border-border/60 bg-muted/20 px-5 py-4 sm:flex-row sm:justify-end";
+
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.className = "inline-flex h-9 items-center justify-center rounded-lg border border-input bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted sm:w-auto";
+    cancelButton.textContent = "取消";
+
+    const confirmButton = document.createElement("button");
+    confirmButton.type = "submit";
+    confirmButton.className = "inline-flex h-9 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50 sm:w-auto";
+    confirmButton.disabled = true;
+    confirmButton.textContent = "确认";
+    let closed = false;
+
+    const cleanup = (value: string | null) => {
+      if (closed) return;
+      closed = true;
+      window.removeEventListener("keydown", handleKeyDown);
+      overlay.remove();
+      resolve(value);
+    };
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        cleanup(null);
+      }
+    }
+
+    input.addEventListener("input", () => {
+      confirmButton.disabled = input.value.trim().length === 0;
+    });
+    cancelButton.addEventListener("click", () => cleanup(null));
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) {
+        cleanup(null);
+      }
+    });
+    panel.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const value = input.value.trim();
+      if (value) {
+        cleanup(value);
+      }
+    });
+    window.addEventListener("keydown", handleKeyDown);
+
+    header.append(title, description);
+    body.append(label, input);
+    footer.append(cancelButton, confirmButton);
+    panel.append(header, body, footer);
+    overlay.append(panel);
+    document.body.append(overlay);
+    window.requestAnimationFrame(() => input.focus());
+  });
 }
 
 export async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -151,7 +235,7 @@ export async function invoke<T>(command: string, args?: Record<string, unknown>)
 
   switch (command) {
     case "system_pick_folder":
-      return pickWorkdirInBrowser() as T;
+      return (await pickWorkdirInBrowser()) as T;
     case "chat_history_list": {
       const response = await getGatewayWebSocketClient(loadToken().trim()).listHistory(
         typeof args?.page === "number" ? args.page : 1,

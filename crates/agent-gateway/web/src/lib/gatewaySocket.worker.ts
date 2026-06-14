@@ -362,6 +362,13 @@ function getManagedClient(token: string) {
     applyTerminalSessionEvent(managed.terminalSessions, event);
     broadcastTerminal(managed, event);
   });
+  managed.client.subscribeSftpTransfers((event) => {
+    broadcast(managed, {
+      type: "event",
+      event_type: "sftp",
+      payload: event,
+    });
+  });
 
   clients.set(normalizedToken, managed);
   return managed;
@@ -608,6 +615,7 @@ async function resolveRequest(client: GatewayWebSocketClient, method: string, pa
         title: typeof body.title === "string" ? body.title : undefined,
         cols: typeof body.cols === "number" ? body.cols : undefined,
         rows: typeof body.rows === "number" ? body.rows : undefined,
+        sftpEnabled: body.sftp_enabled === true,
       });
     case "terminal.answer_ssh_prompt":
       return client.answerSshTerminalPrompt({
@@ -668,6 +676,73 @@ async function resolveRequest(client: GatewayWebSocketClient, method: string, pa
         String(body.session_id ?? ""),
         String(body.project_path_key ?? ""),
       );
+      return undefined;
+    case "sftp.list":
+      return client.sftpList({
+        sessionId: String(body.session_id ?? ""),
+        projectPathKey: String(body.project_path_key ?? ""),
+        workdir: String(body.workdir ?? ""),
+        side: body.side === "local" ? "local" : "remote",
+        path: String(
+          body.side === "local" ? (body.local_path ?? "") : (body.remote_path ?? ""),
+        ),
+      });
+    case "sftp.stat":
+      return client.sftpStat({
+        sessionId: String(body.session_id ?? ""),
+        projectPathKey: String(body.project_path_key ?? ""),
+        workdir: String(body.workdir ?? ""),
+        side: body.side === "local" ? "local" : "remote",
+        path: String(
+          body.side === "local" ? (body.local_path ?? "") : (body.remote_path ?? ""),
+        ),
+      });
+    case "sftp.mkdir":
+      return client.sftpMkdir({
+        sessionId: String(body.session_id ?? ""),
+        projectPathKey: String(body.project_path_key ?? ""),
+        workdir: String(body.workdir ?? ""),
+        side: body.side === "local" ? "local" : "remote",
+        path: String(
+          body.side === "local" ? (body.local_path ?? "") : (body.remote_path ?? ""),
+        ),
+      });
+    case "sftp.rename":
+      return client.sftpRename({
+        sessionId: String(body.session_id ?? ""),
+        projectPathKey: String(body.project_path_key ?? ""),
+        workdir: String(body.workdir ?? ""),
+        side: body.side === "local" ? "local" : "remote",
+        fromPath: String(body.from_path ?? ""),
+        toPath: String(body.to_path ?? ""),
+      });
+    case "sftp.delete":
+      return client.sftpDelete({
+        sessionId: String(body.session_id ?? ""),
+        projectPathKey: String(body.project_path_key ?? ""),
+        workdir: String(body.workdir ?? ""),
+        side: body.side === "local" ? "local" : "remote",
+        path: String(
+          body.side === "local" ? (body.local_path ?? "") : (body.remote_path ?? ""),
+        ),
+        recursive: body.recursive === true,
+      });
+    case "sftp.transfer":
+      return client.sftpTransfer({
+        sessionId: String(body.session_id ?? ""),
+        projectPathKey: String(body.project_path_key ?? ""),
+        workdir: String(body.workdir ?? ""),
+        direction: body.direction === "download" ? "download" : "upload",
+        sourcePath: String(body.from_path ?? ""),
+        targetPath: String(body.target_path ?? ""),
+        recursive: body.recursive === true,
+        overwrite: body.overwrite === true,
+      });
+    case "sftp.cancel":
+      await client.sftpCancelTransfer({
+        sessionId: String(body.session_id ?? ""),
+        transferId: String(body.from_path ?? ""),
+      });
       return undefined;
     case "tunnel.list":
       return {

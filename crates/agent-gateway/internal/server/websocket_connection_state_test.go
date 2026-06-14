@@ -74,6 +74,28 @@ func TestWebsocketTerminalPermissionsSeparateLocalAndSshSessions(t *testing.T) {
 	}
 }
 
+func TestWebsocketTerminalSessionPayloadIncludesSftpEnabled(t *testing.T) {
+	t.Parallel()
+
+	payload := websocketTerminalSessionPayload(&gatewayv1.TerminalSession{
+		Id:   "ssh-1",
+		Kind: "ssh",
+		Ssh: &gatewayv1.TerminalSshMetadata{
+			SftpEnabled: true,
+		},
+	})
+	ssh, ok := payload["ssh"].(map[string]any)
+	if !ok {
+		t.Fatalf("ssh payload missing: %#v", payload["ssh"])
+	}
+	if got := ssh["sftp_enabled"]; got != true {
+		t.Fatalf("sftp_enabled = %#v, want true", got)
+	}
+	if got := ssh["sftpEnabled"]; got != true {
+		t.Fatalf("sftpEnabled = %#v, want true", got)
+	}
+}
+
 func TestWebsocketTerminalEventForwardingAllowsSshOnlyStatusEvents(t *testing.T) {
 	t.Parallel()
 

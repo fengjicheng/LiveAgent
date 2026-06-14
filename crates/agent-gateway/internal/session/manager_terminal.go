@@ -67,6 +67,7 @@ func cloneTerminalSshMetadata(ssh *gatewayv1.TerminalSshMetadata) *gatewayv1.Ter
 		Status:               ssh.GetStatus(),
 		ReconnectAttempt:     ssh.GetReconnectAttempt(),
 		ReconnectMaxAttempts: ssh.GetReconnectMaxAttempts(),
+		SftpEnabled:          ssh.GetSftpEnabled(),
 	}
 }
 

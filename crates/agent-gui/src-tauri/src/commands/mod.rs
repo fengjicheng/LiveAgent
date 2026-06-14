@@ -11,6 +11,7 @@ pub mod mcp;
 pub mod memory;
 pub mod process;
 pub mod settings;
+pub mod sftp;
 pub mod shell;
 pub mod subagent_history;
 pub mod system;

@@ -107,6 +107,7 @@ import { toModelValue } from "@/lib/providers/llm";
 
 import { getGatewayWebSocketClient, resetGatewayWebSocketClient } from "./lib/gatewaySocket";
 import { createGatewayGitClient } from "./lib/git/gatewayGitClient";
+import { createGatewaySftpClient } from "./lib/sftp/gatewaySftpClient";
 import { createGatewayTerminalClient } from "./lib/terminal/gatewayTerminalClient";
 import {
   applyTerminalEventToSessions,
@@ -791,6 +792,7 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const api = useMemo(() => (token ? getGatewayWebSocketClient(token) : null), [token]);
   const terminalClient = useMemo(() => (api ? createGatewayTerminalClient(api) : null), [api]);
+  const sftpClient = useMemo(() => (api ? createGatewaySftpClient(api) : null), [api]);
   const gitClient = useMemo(() => (api ? createGatewayGitClient(api) : null), [api]);
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -5975,12 +5977,13 @@ export default function App() {
     [hideWorkspaceSshTerminalOverlay, terminalProjectPath, terminalProjectPathKey],
   );
   const handleOpenSshTerminal = useCallback(
-    (session: TerminalSession) => {
+    (session: TerminalSession, kind: WorkspaceSshTerminalOpenRequest["kind"] = "bash") => {
       if (session.kind !== "ssh") return;
       workspaceSshTerminalRequestIdRef.current += 1;
       const openRequest = {
         id: workspaceSshTerminalRequestIdRef.current,
         sessionId: session.id,
+        kind,
       };
       openWorkspaceSshTerminalRequest(openRequest);
     },
@@ -7108,7 +7111,7 @@ export default function App() {
               />
             </Suspense>
           ) : null}
-          {workspaceSshTerminalMounted && terminalClient ? (
+          {workspaceSshTerminalMounted && terminalClient && sftpClient ? (
             <Suspense
               fallback={
                 <div className="workspace-ssh-terminal-overlay absolute inset-0 z-40 flex items-center justify-center border-r border-border bg-background text-sm text-muted-foreground shadow-2xl">
@@ -7120,6 +7123,7 @@ export default function App() {
                 openRequest={workspaceSshTerminalOpenRequest}
                 sessions={terminalSessions}
                 client={terminalClient}
+                sftpClient={sftpClient}
                 theme={settings.theme}
                 isOpen={workspaceSshTerminalOpen}
                 onHide={() => setWorkspaceSshTerminalOpen(false)}

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use crate::runtime::sftp::SftpSessionRegistry;
 use crate::runtime::terminal::{
     terminal_shell_options as runtime_terminal_shell_options, TerminalListResponse,
     TerminalReadTailResponse, TerminalSessionRecord, TerminalSessionRegistry,
@@ -44,11 +45,20 @@ pub async fn terminal_create_ssh(
     title: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
+    sftp_enabled: Option<bool>,
 ) -> Result<TerminalSshCreateResponse, String> {
     registry
         .inner()
         .clone()
-        .create_ssh(cwd, project_path_key, ssh_host_id, title, cols, rows)
+        .create_ssh(
+            cwd,
+            project_path_key,
+            ssh_host_id,
+            title,
+            cols,
+            rows,
+            sftp_enabled.unwrap_or(false),
+        )
         .await
 }
 
@@ -122,17 +132,25 @@ pub fn terminal_rename(
 #[tauri::command(rename_all = "snake_case")]
 pub fn terminal_close(
     registry: State<'_, Arc<TerminalSessionRegistry>>,
+    sftp_registry: State<'_, Arc<SftpSessionRegistry>>,
     session_id: String,
 ) -> Result<TerminalSessionRecord, String> {
-    registry.close(session_id)
+    let response = registry.close(session_id)?;
+    sftp_registry.close_session(&response.id);
+    Ok(response)
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn terminal_close_project(
     registry: State<'_, Arc<TerminalSessionRegistry>>,
+    sftp_registry: State<'_, Arc<SftpSessionRegistry>>,
     project_path_key: String,
 ) -> Result<TerminalListResponse, String> {
-    registry.close_project(project_path_key)
+    let response = registry.close_project(project_path_key)?;
+    for session in &response.sessions {
+        sftp_registry.close_session(&session.id);
+    }
+    Ok(response)
 }
 
 #[tauri::command(rename_all = "snake_case")]

@@ -26,6 +26,7 @@ export type TerminalSshMetadata = {
   status: "connected" | "reconnecting" | "disconnected" | string;
   reconnectAttempt: number;
   reconnectMaxAttempts: number;
+  sftpEnabled: boolean;
 };
 
 export type TerminalSshPrompt = {
@@ -98,6 +99,7 @@ export type TerminalClient = {
     title?: string;
     cols?: number;
     rows?: number;
+    sftpEnabled?: boolean;
   }): Promise<TerminalSshCreateResult>;
   answerSshPrompt(params: {
     promptId: string;

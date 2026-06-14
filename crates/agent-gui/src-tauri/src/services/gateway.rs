@@ -24,6 +24,10 @@ use crate::commands::settings::{
     open_db, redact_gateway_settings_sync_payload, reset_runtime_ssh_known_host,
     RemoteSettingsPayload, PROVIDER_API_KEY_UPDATES_FIELD, SSH_SECRET_UPDATES_FIELD,
 };
+use crate::runtime::sftp::{
+    SftpActionResponse, SftpEntry, SftpEventPayload, SftpListResponse, SftpSessionRegistry,
+    SftpStatResponse, SftpTransferResponse, SftpTransferState,
+};
 use crate::runtime::terminal::{
     terminal_shell_options, TerminalEventPayload, TerminalSessionRecord, TerminalSessionRegistry,
     TerminalShellOption, TerminalSnapshotResponse, TerminalSshCreateResponse,
@@ -242,6 +246,7 @@ pub struct GatewayController {
     cron_manager: Arc<CronManager>,
     memory_store: Arc<MemoryStore>,
     terminal_registry: Arc<TerminalSessionRegistry>,
+    sftp_registry: Arc<SftpSessionRegistry>,
     config_tx: watch::Sender<RemoteSettingsPayload>,
     runner_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     status: Mutex<GatewayStatusSnapshot>,
@@ -254,6 +259,7 @@ pub struct GatewayController {
     tunnel_ws_streams: Mutex<HashMap<String, mpsc::Sender<proto::TunnelFrame>>>,
     pending_tunnel_controls: Mutex<HashMap<String, oneshot::Sender<proto::TunnelControlResponse>>>,
     terminal_forwarder_once: Once,
+    sftp_forwarder_once: Once,
     remote_chat_inbox_sweeper_once: Once,
 }
 
@@ -263,6 +269,7 @@ impl GatewayController {
         cron_manager: Arc<CronManager>,
         memory_store: Arc<MemoryStore>,
         terminal_registry: Arc<TerminalSessionRegistry>,
+        sftp_registry: Arc<SftpSessionRegistry>,
     ) -> Self {
         let initial_config = RemoteSettingsPayload::default();
         let (config_tx, _) = watch::channel(initial_config);
@@ -271,6 +278,7 @@ impl GatewayController {
             cron_manager,
             memory_store,
             terminal_registry,
+            sftp_registry,
             config_tx,
             runner_task: Mutex::new(None),
             status: Mutex::new(GatewayStatusSnapshot {
@@ -293,12 +301,14 @@ impl GatewayController {
             tunnel_ws_streams: Mutex::new(HashMap::new()),
             pending_tunnel_controls: Mutex::new(HashMap::new()),
             terminal_forwarder_once: Once::new(),
+            sftp_forwarder_once: Once::new(),
             remote_chat_inbox_sweeper_once: Once::new(),
         }
     }
 
     pub fn start(self: &Arc<Self>) -> Result<(), String> {
         self.start_terminal_forwarder();
+        self.start_sftp_forwarder();
         self.start_remote_chat_inbox_sweeper();
         self.ensure_runner()
     }
@@ -316,6 +326,25 @@ impl GatewayController {
                     };
                     if let Err(error) = sender.blocking_send(envelope) {
                         eprintln!("send gateway terminal event failed: {error}");
+                    }
+                }
+            });
+        });
+    }
+
+    fn start_sftp_forwarder(self: &Arc<Self>) {
+        let controller = Arc::clone(self);
+        self.sftp_forwarder_once.call_once(move || {
+            let (receiver, guard) = controller.sftp_registry.subscribe();
+            thread::spawn(move || {
+                let _guard = guard;
+                while let Ok(event) = receiver.recv() {
+                    let envelope = build_sftp_event_envelope(event.payload);
+                    let Ok(sender) = controller.current_outbound_sender() else {
+                        continue;
+                    };
+                    if let Err(error) = sender.blocking_send(envelope) {
+                        eprintln!("send gateway SFTP event failed: {error}");
                     }
                 }
             });
@@ -1533,7 +1562,157 @@ impl GatewayController {
                     Err(error) => self.send_error_response(request_id, 500, error).await,
                 }
             }
+            Some(proto::gateway_envelope::Payload::SftpRequest(request)) => {
+                match self.handle_sftp_request(request).await {
+                    Ok(response) => {
+                        self.send_agent_envelope(proto::AgentEnvelope {
+                            request_id,
+                            timestamp: now_unix_seconds(),
+                            payload: Some(proto::agent_envelope::Payload::SftpResponse(response)),
+                        })
+                        .await
+                    }
+                    Err(error) => self.send_error_response(request_id, 500, error).await,
+                }
+            }
             None => Ok(()),
+        }
+    }
+
+    async fn handle_sftp_request(
+        &self,
+        request: proto::SftpRequest,
+    ) -> Result<proto::SftpResponse, String> {
+        if !self.config_tx.borrow().enable_web_ssh_terminal {
+            return Err("web SSH SFTP is disabled in desktop Remote settings".to_string());
+        }
+        let action = request.action.trim().to_ascii_lowercase();
+        match action.as_str() {
+            "list" => {
+                let side = if request.direction.trim().is_empty() {
+                    "remote".to_string()
+                } else {
+                    request.direction
+                };
+                let path = sftp_side_path(&side, &request.local_path, &request.remote_path);
+                let response = self
+                    .sftp_registry
+                    .list(
+                        request.session_id,
+                        Some(request.project_path_key),
+                        request.workdir,
+                        side,
+                        Some(path),
+                    )
+                    .await?;
+                Ok(sftp_list_response_to_proto(action, response))
+            }
+            "stat" | "probe" => {
+                let side = if request.direction.trim().is_empty() {
+                    "remote".to_string()
+                } else {
+                    request.direction
+                };
+                let path = sftp_side_path(&side, &request.local_path, &request.remote_path);
+                let response = self
+                    .sftp_registry
+                    .stat(
+                        request.session_id,
+                        Some(request.project_path_key),
+                        request.workdir,
+                        side,
+                        Some(path),
+                    )
+                    .await?;
+                Ok(sftp_stat_response_to_proto(action, response))
+            }
+            "mkdir" => {
+                let side = if request.direction.trim().is_empty() {
+                    "remote".to_string()
+                } else {
+                    request.direction
+                };
+                let path = sftp_side_path(&side, &request.local_path, &request.remote_path);
+                let response = self
+                    .sftp_registry
+                    .mkdir(
+                        request.session_id,
+                        Some(request.project_path_key),
+                        request.workdir,
+                        side,
+                        path,
+                    )
+                    .await?;
+                Ok(sftp_action_response_to_proto(action, response))
+            }
+            "rename" => {
+                let side = if request.direction.trim().is_empty() {
+                    "remote".to_string()
+                } else {
+                    request.direction
+                };
+                let response = self
+                    .sftp_registry
+                    .rename(
+                        request.session_id,
+                        Some(request.project_path_key),
+                        request.workdir,
+                        side,
+                        request.from_path,
+                        request.to_path,
+                    )
+                    .await?;
+                Ok(sftp_action_response_to_proto(action, response))
+            }
+            "delete" => {
+                let side = if request.direction.trim().is_empty() {
+                    "remote".to_string()
+                } else {
+                    request.direction
+                };
+                let path = sftp_side_path(&side, &request.local_path, &request.remote_path);
+                let response = self
+                    .sftp_registry
+                    .delete(
+                        request.session_id,
+                        Some(request.project_path_key),
+                        request.workdir,
+                        side,
+                        path,
+                        request.recursive,
+                    )
+                    .await?;
+                Ok(sftp_action_response_to_proto(action, response))
+            }
+            "transfer" => {
+                let response = self
+                    .sftp_registry
+                    .transfer(
+                        request.session_id,
+                        Some(request.project_path_key),
+                        request.workdir,
+                        request.direction,
+                        request.from_path,
+                        request.target_path,
+                        request.recursive,
+                        request.overwrite,
+                    )
+                    .await?;
+                Ok(sftp_transfer_response_to_proto(action, response))
+            }
+            "cancel" => {
+                self.sftp_registry
+                    .cancel_transfer(request.session_id, request.from_path)?;
+                Ok(proto::SftpResponse {
+                    action,
+                    path: String::new(),
+                    entries: Vec::new(),
+                    entry: None,
+                    exists: false,
+                    transfer: None,
+                })
+            }
+            _ => Err(format!("unsupported sftp action: {action}")),
         }
     }
 
@@ -1622,6 +1801,7 @@ impl GatewayController {
                         optional_proto_text(request.title),
                         optional_proto_u16(request.cols),
                         optional_proto_u16(request.rows),
+                        request.sftp_enabled,
                     )
                     .await?;
                 Ok(terminal_ssh_create_response_to_proto(action, response))
@@ -1726,13 +1906,14 @@ impl GatewayController {
                     &request.project_path_key,
                 )?;
                 let session = self.terminal_registry.close(request.session_id)?;
+                self.sftp_registry.close_session(&session.id);
                 Ok(terminal_record_response_to_proto(action, session))
             }
             "close_project" => {
                 let project_path_key =
                     required_terminal_project_path_key(&request.project_path_key)?;
                 let config = self.config_tx.borrow().clone();
-                let sessions = self
+                let sessions: Vec<TerminalSessionRecord> = self
                     .terminal_registry
                     .list(Some(project_path_key))
                     .sessions
@@ -1746,6 +1927,9 @@ impl GatewayController {
                     })
                     .filter_map(|session| self.terminal_registry.close(session.id).ok())
                     .collect();
+                for session in &sessions {
+                    self.sftp_registry.close_session(&session.id);
+                }
                 Ok(terminal_list_response_to_proto(action, sessions))
             }
             "detach" => Ok(proto::TerminalResponse {
@@ -3746,6 +3930,7 @@ fn terminal_session_to_proto(session: TerminalSessionRecord) -> proto::TerminalS
             status: ssh.status,
             reconnect_attempt: u32::from(ssh.reconnect_attempt),
             reconnect_max_attempts: u32::from(ssh.reconnect_max_attempts),
+            sftp_enabled: ssh.sftp_enabled,
         }),
     }
 }
@@ -3848,6 +4033,99 @@ fn terminal_ssh_create_response_to_proto(
     }
 }
 
+fn sftp_side_path(side: &str, local_path: &str, remote_path: &str) -> String {
+    if side.trim().eq_ignore_ascii_case("local") {
+        local_path.trim().to_string()
+    } else {
+        remote_path.trim().to_string()
+    }
+}
+
+fn sftp_entry_to_proto(entry: SftpEntry) -> proto::SftpEntry {
+    proto::SftpEntry {
+        path: entry.path,
+        name: entry.name,
+        kind: entry.kind,
+        size_bytes: entry.size_bytes,
+        mtime: entry.mtime,
+    }
+}
+
+fn sftp_transfer_to_proto(transfer: SftpTransferState) -> proto::SftpTransfer {
+    proto::SftpTransfer {
+        id: transfer.id,
+        session_id: transfer.session_id,
+        direction: transfer.direction,
+        status: transfer.status,
+        source_path: transfer.source_path,
+        target_path: transfer.target_path,
+        current_path: transfer.current_path,
+        bytes_done: transfer.bytes_done,
+        bytes_total: transfer.bytes_total,
+        files_done: transfer.files_done,
+        files_total: transfer.files_total,
+        error: transfer.error.unwrap_or_default(),
+    }
+}
+
+fn sftp_list_response_to_proto(action: String, response: SftpListResponse) -> proto::SftpResponse {
+    proto::SftpResponse {
+        action,
+        path: response.path,
+        entries: response
+            .entries
+            .into_iter()
+            .map(sftp_entry_to_proto)
+            .collect(),
+        entry: None,
+        exists: false,
+        transfer: None,
+    }
+}
+
+fn sftp_stat_response_to_proto(action: String, response: SftpStatResponse) -> proto::SftpResponse {
+    proto::SftpResponse {
+        action,
+        path: response
+            .entry
+            .as_ref()
+            .map(|entry| entry.path.clone())
+            .unwrap_or_default(),
+        entries: Vec::new(),
+        entry: response.entry.map(sftp_entry_to_proto),
+        exists: response.exists,
+        transfer: None,
+    }
+}
+
+fn sftp_action_response_to_proto(
+    action: String,
+    response: SftpActionResponse,
+) -> proto::SftpResponse {
+    proto::SftpResponse {
+        action,
+        path: response.path,
+        entries: Vec::new(),
+        entry: response.entry.map(sftp_entry_to_proto),
+        exists: false,
+        transfer: response.transfer.map(sftp_transfer_to_proto),
+    }
+}
+
+fn sftp_transfer_response_to_proto(
+    action: String,
+    response: SftpTransferResponse,
+) -> proto::SftpResponse {
+    proto::SftpResponse {
+        action,
+        path: response.transfer.target_path.clone(),
+        entries: Vec::new(),
+        entry: None,
+        exists: false,
+        transfer: Some(sftp_transfer_to_proto(response.transfer)),
+    }
+}
+
 fn build_terminal_event_envelope(payload: TerminalEventPayload) -> proto::AgentEnvelope {
     proto::AgentEnvelope {
         request_id: format!("terminal-event-{}", Uuid::new_v4()),
@@ -3861,6 +4139,19 @@ fn build_terminal_event_envelope(payload: TerminalEventPayload) -> proto::AgentE
                 data: payload.data.unwrap_or_default(),
                 output_start_offset: payload.output_start_offset.unwrap_or_default(),
                 output_end_offset: payload.output_end_offset.unwrap_or_default(),
+            },
+        )),
+    }
+}
+
+fn build_sftp_event_envelope(payload: SftpEventPayload) -> proto::AgentEnvelope {
+    proto::AgentEnvelope {
+        request_id: format!("sftp-event-{}", Uuid::new_v4()),
+        timestamp: now_unix_seconds(),
+        payload: Some(proto::agent_envelope::Payload::SftpEvent(
+            proto::SftpEvent {
+                kind: payload.kind,
+                transfer: Some(sftp_transfer_to_proto(payload.transfer)),
             },
         )),
     }

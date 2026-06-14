@@ -63,6 +63,7 @@ message GatewayEnvelope {
     GitRequest git_request = 61;
     FsReadEditableTextRequest fs_read_editable_text = 62;
     FsReadWorkspaceImageRequest fs_read_workspace_image = 63;
+    SftpRequest sftp_request = 64;
     TunnelControlRequest tunnel_control = 67;
     TunnelControlResponse tunnel_control_resp = 68;
     TunnelFrame tunnel_frame = 69;
@@ -114,6 +115,8 @@ message AgentEnvelope {
     GitResponse git_response = 64;
     FsReadEditableTextResponse fs_read_editable_text_resp = 65;
     FsReadWorkspaceImageResponse fs_read_workspace_image_resp = 66;
+    SftpResponse sftp_response = 73;
+    SftpEvent sftp_event = 74;
     TunnelControlRequest tunnel_control = 67;
     TunnelControlResponse tunnel_control_resp = 68;
     TunnelFrame tunnel_frame = 69;
@@ -263,6 +266,7 @@ message TerminalRequest {
   string prompt_id = 12;
   string prompt_answer = 13;
   bool trust_host_key = 14;
+  bool sftp_enabled = 15;
 }
 
 message TerminalSession {
@@ -293,6 +297,59 @@ message TerminalSshMetadata {
   string status = 7;
   uint32 reconnect_attempt = 8;
   uint32 reconnect_max_attempts = 9;
+  bool sftp_enabled = 10;
+}
+
+message SftpRequest {
+  string action = 1;
+  string session_id = 2;
+  string project_path_key = 3;
+  string workdir = 4;
+  string local_path = 5;
+  string remote_path = 6;
+  string from_path = 7;
+  string to_path = 8;
+  string direction = 9;
+  string target_path = 10;
+  bool recursive = 11;
+  bool overwrite = 12;
+}
+
+message SftpEntry {
+  string path = 1;
+  string name = 2;
+  string kind = 3;
+  uint64 size_bytes = 4;
+  uint64 mtime = 5;
+}
+
+message SftpTransfer {
+  string id = 1;
+  string session_id = 2;
+  string direction = 3;
+  string status = 4;
+  string source_path = 5;
+  string target_path = 6;
+  string current_path = 7;
+  uint64 bytes_done = 8;
+  uint64 bytes_total = 9;
+  uint32 files_done = 10;
+  uint32 files_total = 11;
+  string error = 12;
+}
+
+message SftpResponse {
+  string action = 1;
+  string path = 2;
+  repeated SftpEntry entries = 3;
+  SftpEntry entry = 4;
+  bool exists = 5;
+  SftpTransfer transfer = 6;
+}
+
+message SftpEvent {
+  string kind = 1;
+  SftpTransfer transfer = 2;
 }
 
 message TerminalSshPrompt {

@@ -1,19 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocale } from "@/i18n";
 import { cn } from "@/lib/shared/utils";
+import type { SftpClient } from "@/lib/sftp/types";
 import type { TerminalClient, TerminalSession } from "@/lib/terminal/types";
-import { AlertTriangle, RefreshCw, Terminal, Wifi, WifiOff, X } from "../icons";
+import { AlertTriangle, FolderTree, RefreshCw, Terminal, Wifi, WifiOff, X } from "../icons";
 import { XTermViewport } from "../project-tools/XTermViewport";
+import { WorkspaceSftpPanel } from "./WorkspaceSftpPanel";
 
 export type WorkspaceSshTerminalOpenRequest = {
   id: number;
   sessionId: string;
+  kind?: WorkspaceSshTerminalTabKind;
+};
+
+type WorkspaceSshTerminalTabKind = "bash" | "sftp";
+
+type WorkspaceSshTerminalTab = {
+  id: string;
+  sessionId: string;
+  kind: WorkspaceSshTerminalTabKind;
 };
 
 type WorkspaceSshTerminalOverlayProps = {
   openRequest: WorkspaceSshTerminalOpenRequest | null;
   sessions: TerminalSession[];
   client: TerminalClient;
+  sftpClient: SftpClient;
   theme: "light" | "dark";
   isOpen: boolean;
   onHide: () => void;
@@ -67,12 +79,16 @@ function statusIcon(session: TerminalSession) {
   return <WifiOff className="h-3.5 w-3.5 text-destructive" />;
 }
 
+function tabIdFor(sessionId: string, kind: WorkspaceSshTerminalTabKind) {
+  return `${kind}:${sessionId}`;
+}
+
 export function WorkspaceSshTerminalOverlay(props: WorkspaceSshTerminalOverlayProps) {
-  const { openRequest, sessions, client, theme, isOpen, onHide } = props;
+  const { openRequest, sessions, client, sftpClient, theme, isOpen, onHide } = props;
   const { t } = useLocale();
   const [isVisible, setIsVisible] = useState(isOpen);
-  const [openSessionIds, setOpenSessionIds] = useState<string[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState("");
+  const [openTabs, setOpenTabs] = useState<WorkspaceSshTerminalTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const openRequestIdRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
@@ -85,15 +101,18 @@ export function WorkspaceSshTerminalOverlay(props: WorkspaceSshTerminalOverlayPr
     () => new Map(sshSessions.map((session) => [session.id, session])),
     [sshSessions],
   );
-  const openSessions = useMemo(
+  const openTabRecords = useMemo(
     () =>
-      openSessionIds
-        .map((sessionId) => sessionsById.get(sessionId))
-        .filter((session): session is TerminalSession => Boolean(session)),
-    [openSessionIds, sessionsById],
+      openTabs
+        .map((tab) => ({ tab, session: sessionsById.get(tab.sessionId) }))
+        .filter((record): record is { tab: WorkspaceSshTerminalTab; session: TerminalSession } =>
+          Boolean(record.session),
+        ),
+    [openTabs, sessionsById],
   );
-  const activeSession =
-    openSessions.find((session) => session.id === activeSessionId) ?? openSessions[0] ?? null;
+  const activeRecord =
+    openTabRecords.find((record) => record.tab.id === activeTabId) ?? openTabRecords[0] ?? null;
+  const activeSession = activeRecord?.session ?? null;
 
   const cancelPendingHide = useCallback(() => {
     if (hideTimerRef.current === null) return;
@@ -110,14 +129,14 @@ export function WorkspaceSshTerminalOverlay(props: WorkspaceSshTerminalOverlayPr
     }, SSH_TERMINAL_OVERLAY_ANIMATION_MS);
   }, [cancelPendingHide, onHide]);
 
-  const closeTab = useCallback((sessionId: string) => {
-    setOpenSessionIds((current) => {
-      const index = current.indexOf(sessionId);
+  const closeTab = useCallback((tabId: string) => {
+    setOpenTabs((current) => {
+      const index = current.findIndex((tab) => tab.id === tabId);
       if (index < 0) return current;
-      const next = current.filter((id) => id !== sessionId);
-      setActiveSessionId((currentActive) => {
-        if (currentActive !== sessionId) return currentActive;
-        return next[Math.min(index, next.length - 1)] ?? "";
+      const next = current.filter((tab) => tab.id !== tabId);
+      setActiveTabId((currentActive) => {
+        if (currentActive !== tabId) return currentActive;
+        return next[Math.min(index, next.length - 1)]?.id ?? "";
       });
       return next;
     });
@@ -127,14 +146,18 @@ export function WorkspaceSshTerminalOverlay(props: WorkspaceSshTerminalOverlayPr
     if (!openRequest || openRequestIdRef.current === openRequest.id) return;
     const session = sessionsById.get(openRequest.sessionId);
     if (!session) return;
+    const kind = openRequest.kind ?? "bash";
+    const tabId = tabIdFor(session.id, kind);
     openRequestIdRef.current = openRequest.id;
     cancelPendingHide();
     setIsVisible(true);
     setError(null);
-    setOpenSessionIds((current) =>
-      current.includes(session.id) ? current : [...current, session.id],
+    setOpenTabs((current) =>
+      current.some((tab) => tab.id === tabId)
+        ? current
+        : [...current, { id: tabId, sessionId: session.id, kind }],
     );
-    setActiveSessionId(session.id);
+    setActiveTabId(tabId);
   }, [cancelPendingHide, openRequest, sessionsById]);
 
   useEffect(() => {
@@ -148,16 +171,16 @@ export function WorkspaceSshTerminalOverlay(props: WorkspaceSshTerminalOverlayPr
 
   useEffect(() => {
     const liveIds = new Set(sshSessions.map((session) => session.id));
-    setOpenSessionIds((current) => {
-      const next = current.filter((sessionId) => liveIds.has(sessionId));
+    setOpenTabs((current) => {
+      const next = current.filter((tab) => liveIds.has(tab.sessionId));
       return next.length === current.length ? current : next;
     });
   }, [sshSessions]);
 
   useEffect(() => {
-    if (activeSessionId && openSessions.some((session) => session.id === activeSessionId)) return;
-    setActiveSessionId(openSessions[0]?.id ?? "");
-  }, [activeSessionId, openSessions]);
+    if (activeTabId && openTabRecords.some((record) => record.tab.id === activeTabId)) return;
+    setActiveTabId(openTabRecords[0]?.tab.id ?? "");
+  }, [activeTabId, openTabRecords]);
 
   useEffect(
     () => () => {
@@ -205,23 +228,29 @@ export function WorkspaceSshTerminalOverlay(props: WorkspaceSshTerminalOverlayPr
       </div>
 
       <div className="flex h-10 shrink-0 items-end gap-1 overflow-x-auto border-b border-border bg-background px-2 pt-1">
-        {openSessions.map((session) => (
+        {openTabRecords.map(({ tab, session }) => (
           <button
-            key={session.id}
+            key={tab.id}
             type="button"
             className={cn(
               "group flex h-8 max-w-[14rem] shrink-0 items-center gap-1.5 rounded-t-md border border-b-0 px-2 text-xs transition-colors",
-              session.id === activeSessionId
+              tab.id === activeTabId
                 ? "border-border bg-muted text-foreground"
                 : "border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
             )}
             title={sessionEndpointLabel(session)}
-            onClick={() => setActiveSessionId(session.id)}
+            onClick={() => setActiveTabId(tab.id)}
           >
             <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", statusDotClassName(session))} />
-            <Terminal className="h-3.5 w-3.5 shrink-0" />
+            {tab.kind === "sftp" ? (
+              <FolderTree className="h-3.5 w-3.5 shrink-0" />
+            ) : (
+              <Terminal className="h-3.5 w-3.5 shrink-0" />
+            )}
             <span className="min-w-0 truncate">
-              {sessionTitle(session, t("workspaceSshTerminal.title"))}
+              {tab.kind === "sftp"
+                ? `${t("workspaceSshTerminal.sftpTab")} · ${sessionTitle(session, t("workspaceSshTerminal.title"))}`
+                : sessionTitle(session, t("workspaceSshTerminal.title"))}
             </span>
             <span
               role="button"
@@ -230,13 +259,13 @@ export function WorkspaceSshTerminalOverlay(props: WorkspaceSshTerminalOverlayPr
               title={t("workspaceSshTerminal.closeTab")}
               onClick={(event) => {
                 event.stopPropagation();
-                closeTab(session.id);
+                closeTab(tab.id);
               }}
               onKeyDown={(event) => {
                 if (event.key !== "Enter" && event.key !== " ") return;
                 event.preventDefault();
                 event.stopPropagation();
-                closeTab(session.id);
+                closeTab(tab.id);
               }}
             >
               <X className="h-3 w-3" />
@@ -253,22 +282,31 @@ export function WorkspaceSshTerminalOverlay(props: WorkspaceSshTerminalOverlayPr
       ) : null}
 
       <div className="relative min-h-0 flex-1 bg-background">
-        {openSessions.length > 0 ? (
-          openSessions.map((session) => {
-            const isActiveTerminal = isVisible && isOpen && activeSessionId === session.id;
+        {openTabRecords.length > 0 ? (
+          openTabRecords.map(({ tab, session }) => {
+            const isActiveTerminal = isVisible && isOpen && activeTabId === tab.id;
             return (
               <div
-                key={session.id}
+                key={tab.id}
                 aria-hidden={!isActiveTerminal}
                 className={cn("absolute inset-0 min-h-0", isActiveTerminal ? "block" : "hidden")}
               >
-                <XTermViewport
-                  client={client}
-                  session={session}
-                  theme={theme}
-                  isActive={isActiveTerminal}
-                  onError={setError}
-                />
+                {tab.kind === "sftp" ? (
+                  <WorkspaceSftpPanel
+                    client={sftpClient}
+                    session={session}
+                    isActive={isActiveTerminal}
+                    onError={setError}
+                  />
+                ) : (
+                  <XTermViewport
+                    client={client}
+                    session={session}
+                    theme={theme}
+                    isActive={isActiveTerminal}
+                    onError={setError}
+                  />
+                )}
               </div>
             );
           })

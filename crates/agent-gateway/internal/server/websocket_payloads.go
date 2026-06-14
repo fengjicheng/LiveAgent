@@ -135,6 +135,8 @@ func websocketTerminalSessionPayload(session *gatewayv1.TerminalSession) map[str
 			"status":                 strings.TrimSpace(ssh.GetStatus()),
 			"reconnect_attempt":      ssh.GetReconnectAttempt(),
 			"reconnect_max_attempts": ssh.GetReconnectMaxAttempts(),
+			"sftp_enabled":           ssh.GetSftpEnabled(),
+			"sftpEnabled":            ssh.GetSftpEnabled(),
 		}
 	}
 	return payload

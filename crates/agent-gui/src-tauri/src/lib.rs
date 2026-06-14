@@ -157,6 +157,13 @@ macro_rules! app_invoke_handler {
             commands::terminal::terminal_close,
             commands::terminal::terminal_close_project,
             commands::terminal::terminal_read_tail,
+            commands::sftp::sftp_list,
+            commands::sftp::sftp_stat,
+            commands::sftp::sftp_mkdir,
+            commands::sftp::sftp_rename,
+            commands::sftp::sftp_delete,
+            commands::sftp::sftp_transfer,
+            commands::sftp::sftp_cancel_transfer,
             commands::git::git_status,
             commands::git::git_branches,
             commands::git::git_init,
@@ -359,6 +366,9 @@ pub fn run() {
     );
     let power_activity = Arc::new(services::power_activity::PowerActivityManager::default());
     let terminal_registry = Arc::new(runtime::terminal::TerminalSessionRegistry::default());
+    let sftp_registry = Arc::new(runtime::sftp::SftpSessionRegistry::new(Arc::clone(
+        &terminal_registry,
+    )));
     let allow_exit = Arc::new(AtomicBool::new(false));
 
     let app = tauri::Builder::default()
@@ -373,11 +383,13 @@ pub fn run() {
             runtime::managed_process::ManagedProcessRegistry::default(),
         ))
         .manage(Arc::clone(&terminal_registry))
+        .manage(Arc::clone(&sftp_registry))
         .manage(Arc::clone(&allow_exit))
         .manage(Arc::clone(&cron_manager))
         .setup({
             let allow_exit = Arc::clone(&allow_exit);
             let terminal_registry = Arc::clone(&terminal_registry);
+            let sftp_registry = Arc::clone(&sftp_registry);
             move |app| {
                 commands::history_db::initialize_history_db()?;
                 configure_system_tray(
@@ -393,6 +405,7 @@ pub fn run() {
                 }
                 cron_manager.attach_app_handle(app.handle().clone())?;
                 terminal_registry.attach_app_handle(app.handle().clone());
+                sftp_registry.attach_app_handle(app.handle().clone());
                 Arc::clone(&cron_manager).start();
                 cron_manager.request_reload();
                 let gateway_controller = Arc::new(services::gateway::GatewayController::new(
@@ -400,6 +413,7 @@ pub fn run() {
                     Arc::clone(&cron_manager),
                     Arc::clone(&memory_store),
                     Arc::clone(&terminal_registry),
+                    Arc::clone(&sftp_registry),
                 ));
                 cron_manager
                     .attach_settings_sync_controller(Arc::downgrade(&gateway_controller))?;

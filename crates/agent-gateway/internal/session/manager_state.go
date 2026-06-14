@@ -40,6 +40,10 @@ type syncHub struct {
 	nextTerminalSubID   int
 	terminalSubscribers map[int]chan *gatewayv1.TerminalEvent
 	terminalSessions    map[string]*gatewayv1.TerminalSession
+
+	sftpMu          sync.Mutex
+	nextSftpSubID   int
+	sftpSubscribers map[int]chan *gatewayv1.SftpEvent
 }
 
 func newSyncHub() *syncHub {
@@ -48,6 +52,7 @@ func newSyncHub() *syncHub {
 		settingsSubscribers: make(map[int]chan *gatewayv1.SettingsSyncEvent),
 		terminalSubscribers: make(map[int]chan *gatewayv1.TerminalEvent),
 		terminalSessions:    make(map[string]*gatewayv1.TerminalSession),
+		sftpSubscribers:     make(map[int]chan *gatewayv1.SftpEvent),
 	}
 }
 

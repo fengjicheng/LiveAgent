@@ -76,6 +76,7 @@ pub struct TerminalSshMetadata {
     pub status: String,
     pub reconnect_attempt: u8,
     pub reconnect_max_attempts: u8,
+    pub sftp_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +128,15 @@ pub struct TerminalSshCreateResponse {
 pub struct TerminalSshLatencyResponse {
     pub session_id: String,
     pub latency_ms: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct TerminalSshSessionInfo {
+    pub project_path_key: String,
+    pub cwd: String,
+    pub running: bool,
+    pub host_id: String,
+    pub sftp_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -281,6 +291,7 @@ struct PendingSshConnectRequest {
     title: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
+    sftp_enabled: bool,
 }
 
 enum PendingSshPrompt {
@@ -550,6 +561,7 @@ impl TerminalSessionRegistry {
         title: Option<String>,
         cols: Option<u16>,
         rows: Option<u16>,
+        sftp_enabled: bool,
     ) -> Result<TerminalSshCreateResponse, String> {
         let cwd = canonicalize_workdir(&cwd)?;
         let project_key = project_path_key
@@ -566,6 +578,7 @@ impl TerminalSessionRegistry {
             title,
             cols,
             rows,
+            sftp_enabled,
         };
         self.create_ssh_from_request(request).await
     }
@@ -737,6 +750,7 @@ impl TerminalSessionRegistry {
             status: SSH_STATUS_CONNECTED.to_string(),
             reconnect_attempt: 0,
             reconnect_max_attempts: SSH_RECONNECT_MAX_ATTEMPTS,
+            sftp_enabled: request.sftp_enabled,
         };
         let record = TerminalSessionRecord {
             id: id.clone(),
@@ -1148,6 +1162,23 @@ impl TerminalSessionRegistry {
 
     pub fn session_record(&self, session_id: String) -> Result<TerminalSessionRecord, String> {
         self.record(session_id)
+    }
+
+    pub fn ssh_session_info(&self, session_id: &str) -> Result<TerminalSshSessionInfo, String> {
+        let record = self.record(session_id.to_string())?;
+        if record.kind.trim() != "ssh" {
+            return Err("terminal session is not an SSH connection".to_string());
+        }
+        let ssh = record
+            .ssh
+            .ok_or_else(|| "SSH session metadata is missing".to_string())?;
+        Ok(TerminalSshSessionInfo {
+            project_path_key: record.project_path_key,
+            cwd: record.cwd,
+            running: record.running,
+            host_id: ssh.host_id,
+            sftp_enabled: ssh.sftp_enabled,
+        })
     }
 
     pub async fn ssh_latency(
@@ -1616,7 +1647,12 @@ impl TerminalSessionRegistry {
     }
 }
 
-struct LiveAgentSshClient {
+pub(crate) struct TerminalSftpConnection {
+    pub(crate) _handle: client::Handle<LiveAgentSshClient>,
+    pub(crate) session: russh_sftp::client::SftpSession,
+}
+
+pub(crate) struct LiveAgentSshClient {
     host: String,
     port: u16,
     captured_host_key: Arc<tokio::sync::Mutex<Option<CapturedHostKey>>>,
@@ -1898,6 +1934,80 @@ async fn open_ssh_shell_channel(
         .await
         .map_err(|error| format!("SSH shell request failed: {error}"))?;
     Ok(channel)
+}
+
+pub(crate) async fn open_sftp_connection_for_host(
+    ssh_host_id: &str,
+) -> Result<TerminalSftpConnection, String> {
+    let host_config = load_runtime_ssh_host(ssh_host_id)?
+        .ok_or_else(|| format!("SSH host not found: {}", ssh_host_id.trim()))?;
+    if ssh_proxy_configured(&host_config) {
+        return Err("SSH proxy is configured for this host, but V1 SFTP does not support proxy connections yet.".to_string());
+    }
+    if host_config.host.trim().is_empty() {
+        return Err("SSH host is required".to_string());
+    }
+    if host_config.username.trim().is_empty() {
+        return Err("SSH username is required".to_string());
+    }
+
+    let auth = resolve_ssh_auth_material(&host_config)?;
+    let captured_host_key = Arc::new(tokio::sync::Mutex::new(None::<CapturedHostKey>));
+    let ssh_client = LiveAgentSshClient {
+        host: host_config.host.clone(),
+        port: host_config.port,
+        captured_host_key: Arc::clone(&captured_host_key),
+    };
+    let config = Arc::new(client::Config {
+        ..Default::default()
+    });
+    let mut handle = match client::connect(
+        config,
+        (host_config.host.as_str(), host_config.port),
+        ssh_client,
+    )
+    .await
+    {
+        Ok(handle) => handle,
+        Err(error) => {
+            if captured_host_key.lock().await.is_some() {
+                return Err("SSH host key requires confirmation before opening SFTP".to_string());
+            }
+            return Err(format!("SSH connection failed: {error}"));
+        }
+    };
+
+    match authenticate_ssh_handle(&mut handle, &host_config, auth).await? {
+        SshAuthOutcome::Authenticated => {}
+        SshAuthOutcome::KeyboardInteractivePrompt(_) => {
+            let _ = handle
+                .disconnect(
+                    russh::Disconnect::ByApplication,
+                    "Keyboard-interactive SFTP authentication requires Bash prompt first",
+                    "en",
+                )
+                .await;
+            return Err(
+                "SSH keyboard-interactive authentication requires opening Bash first".to_string(),
+            );
+        }
+    }
+
+    let channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|error| format!("SFTP channel open failed: {error}"))?;
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .map_err(|error| format!("SFTP subsystem request failed: {error}"))?;
+    let session = russh_sftp::client::SftpSession::new(channel.into_stream())
+        .await
+        .map_err(|error| format!("SFTP session failed: {error}"))?;
+    Ok(TerminalSftpConnection {
+        _handle: handle,
+        session,
+    })
 }
 
 async fn run_ssh_session_io(

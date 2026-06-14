@@ -15,6 +15,7 @@ import {
   Check,
   ChevronDown,
   Clock3,
+  FolderTree,
   Globe,
   Key,
   Loader2,
@@ -54,7 +55,7 @@ type SshTunnelPanelProps = {
   sessions: TerminalSession[];
   onSessionSnapshot: (snapshot: TerminalSnapshot) => void;
   onSessionClosed: (sessionId: string) => void;
-  onOpenSession: (session: TerminalSession) => void;
+  onOpenSession: (session: TerminalSession, kind?: "bash" | "sftp") => void;
   onAssociatedHostIdsChange: (hostIds: string[]) => void;
 };
 
@@ -351,6 +352,7 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
         projectPathKey,
         hostId: selectedCreateHost.id,
         title: createTitle.trim() || undefined,
+        sftpEnabled: createSftpEnabled,
       })
       .then((result) => {
         if (result.prompt) {
@@ -371,6 +373,7 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
   }, [
     canCreate,
     client,
+    createSftpEnabled,
     createTitle,
     cwd,
     finishCreatedSnapshot,
@@ -952,10 +955,22 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
                           title={t("projectTools.sshTunnelOpenBash")}
                           aria-label={t("projectTools.sshTunnelOpenBash")}
                           disabled={!connected}
-                          onClick={() => onOpenSession(session)}
+                          onClick={() => onOpenSession(session, "bash")}
                         >
                           <Terminal className="h-4 w-4" />
                         </button>
+                        {session.ssh?.sftpEnabled ? (
+                          <button
+                            type="button"
+                            className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/60 bg-background/70 text-muted-foreground transition-colors hover:border-sky-500/40 hover:bg-sky-500/10 hover:text-sky-600 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 dark:hover:text-sky-400"
+                            title={t("projectTools.sshTunnelOpenSftp")}
+                            aria-label={t("projectTools.sshTunnelOpenSftp")}
+                            disabled={!connected}
+                            onClick={() => onOpenSession(session, "sftp")}
+                          >
+                            <FolderTree className="h-4 w-4" />
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/60 bg-background/70 text-muted-foreground transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"

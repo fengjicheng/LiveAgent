@@ -15,6 +15,15 @@ import type {
   TerminalSshMetadata,
   TerminalSshPrompt,
 } from "@/lib/terminal/types";
+import type {
+  SftpActionResponse,
+  SftpEntry,
+  SftpListResponse,
+  SftpStatResponse,
+  SftpTransfer,
+  SftpTransferEvent,
+  SftpTransferResponse,
+} from "@/lib/sftp/types";
 
 import type {
   AgentStatus,
@@ -48,6 +57,7 @@ type HistoryListener = (event: GatewayHistoryEvent) => void;
 type ConversationListener = (event: ChatEvent) => void;
 type SettingsListener = (event: GatewaySettingsSyncPayload) => void;
 type TerminalListener = (event: TerminalEvent) => void;
+type SftpTransferListener = (event: SftpTransferEvent) => void;
 
 type PendingRequest = {
   resolve: (value: any) => void;
@@ -269,6 +279,7 @@ type RawTerminalSshMetadata = Partial<TerminalSshMetadata> & {
   auth_type?: string;
   reconnect_attempt?: number;
   reconnect_max_attempts?: number;
+  sftp_enabled?: boolean;
 };
 
 type RawTerminalSshPrompt = Partial<TerminalSshPrompt> & {
@@ -314,6 +325,32 @@ type RawTerminalEvent = {
   output_start_offset?: number;
   outputEndOffset?: number;
   output_end_offset?: number;
+};
+
+type RawSftpEntry = Partial<SftpEntry> & {
+  size_bytes?: number;
+};
+
+type RawSftpTransfer = Partial<SftpTransfer> & {
+  session_id?: string;
+  source_path?: string;
+  target_path?: string;
+  current_path?: string;
+  bytes_done?: number;
+  bytes_total?: number;
+  files_done?: number;
+  files_total?: number;
+};
+
+type RawSftpResponse = Partial<SftpListResponse & SftpStatResponse & SftpActionResponse> & {
+  entries?: RawSftpEntry[];
+  entry?: RawSftpEntry | null;
+  transfer?: RawSftpTransfer | null;
+};
+
+type RawSftpEvent = {
+  kind?: string;
+  transfer?: RawSftpTransfer | null;
 };
 
 class AsyncEventQueue<T> implements AsyncIterable<T>, AsyncIterator<T> {
@@ -545,6 +582,7 @@ function normalizeTerminalSshMetadata(input: RawTerminalSshMetadata): TerminalSs
     status: input.status ?? "connected",
     reconnectAttempt: Number(input.reconnectAttempt ?? input.reconnect_attempt ?? 0),
     reconnectMaxAttempts: Number(input.reconnectMaxAttempts ?? input.reconnect_max_attempts ?? 3),
+    sftpEnabled: input.sftpEnabled ?? input.sftp_enabled ?? false,
   };
 }
 
@@ -565,6 +603,80 @@ function normalizeTerminalSshPrompt(
     fingerprintSha256: input.fingerprintSha256 ?? input.fingerprint_sha256 ?? undefined,
     keyType: input.keyType ?? input.key_type ?? undefined,
     answerEcho: input.answerEcho ?? input.answer_echo ?? false,
+  };
+}
+
+function normalizeSftpEntry(entry: RawSftpEntry): SftpEntry {
+  return {
+    path: entry.path ?? "",
+    name: entry.name ?? "",
+    kind: entry.kind ?? "file",
+    sizeBytes: Number(entry.sizeBytes ?? entry.size_bytes ?? 0),
+    mtime: Number(entry.mtime ?? 0),
+  };
+}
+
+function normalizeSftpTransfer(transfer: RawSftpTransfer): SftpTransfer {
+  return {
+    id: transfer.id ?? "",
+    sessionId: transfer.sessionId ?? transfer.session_id ?? "",
+    direction: transfer.direction ?? "",
+    status: transfer.status ?? "",
+    sourcePath: transfer.sourcePath ?? transfer.source_path ?? "",
+    targetPath: transfer.targetPath ?? transfer.target_path ?? "",
+    currentPath: transfer.currentPath ?? transfer.current_path ?? "",
+    bytesDone: Number(transfer.bytesDone ?? transfer.bytes_done ?? 0),
+    bytesTotal: Number(transfer.bytesTotal ?? transfer.bytes_total ?? 0),
+    filesDone: Number(transfer.filesDone ?? transfer.files_done ?? 0),
+    filesTotal: Number(transfer.filesTotal ?? transfer.files_total ?? 0),
+    error: transfer.error ?? null,
+  };
+}
+
+function normalizeSftpListResponse(response: RawSftpResponse): SftpListResponse {
+  return {
+    path: response.path ?? "",
+    entries: (response.entries ?? []).map(normalizeSftpEntry),
+  };
+}
+
+function normalizeSftpStatResponse(response: RawSftpResponse): SftpStatResponse {
+  return {
+    exists: response.exists === true,
+    entry: response.entry ? normalizeSftpEntry(response.entry) : null,
+  };
+}
+
+function normalizeSftpActionResponse(response: RawSftpResponse): SftpActionResponse {
+  return {
+    action: response.action ?? "",
+    path: response.path ?? "",
+    entry: response.entry ? normalizeSftpEntry(response.entry) : null,
+    transfer: response.transfer ? normalizeSftpTransfer(response.transfer) : null,
+  };
+}
+
+function normalizeSftpTransferResponse(response: RawSftpResponse): SftpTransferResponse {
+  if (!response.transfer) {
+    throw new Error("SFTP transfer response did not include a transfer");
+  }
+  return { transfer: normalizeSftpTransfer(response.transfer) };
+}
+
+function normalizeSftpTransferEvent(event: RawSftpEvent): SftpTransferEvent | null {
+  if (!event.transfer) return null;
+  return {
+    kind: event.kind ?? "",
+    transfer: normalizeSftpTransfer(event.transfer),
+  };
+}
+
+function sftpPathPayload(side: "local" | "remote", path = "") {
+  return {
+    side,
+    direction: side,
+    local_path: side === "local" ? String(path) : "",
+    remote_path: side === "remote" ? String(path) : "",
   };
 }
 
@@ -771,6 +883,7 @@ export class GatewayWebSocketClient {
   private conversationListeners = new Set<ConversationListener>();
   private settingsListeners = new Set<SettingsListener>();
   private terminalListeners = new Set<TerminalListener>();
+  private sftpTransferListeners = new Set<SftpTransferListener>();
   private terminalSessionSnapshot = new Map<string, TerminalSession>();
   private statusPollTimer: number | null = null;
   private lastStatus: AgentStatus | null = null;
@@ -872,6 +985,13 @@ export class GatewayWebSocketClient {
     replayTerminalSnapshot(this.terminalSessionSnapshot, listener);
     return () => {
       this.terminalListeners.delete(listener);
+    };
+  }
+
+  subscribeSftpTransfers(listener: SftpTransferListener): () => void {
+    this.sftpTransferListeners.add(listener);
+    return () => {
+      this.sftpTransferListeners.delete(listener);
     };
   }
 
@@ -1097,6 +1217,128 @@ export class GatewayWebSocketClient {
     return this.request<T>(requestType, { workdir, args });
   }
 
+  async sftpList(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    path?: string;
+  }): Promise<SftpListResponse> {
+    return normalizeSftpListResponse(
+      await this.request<RawSftpResponse>("sftp.list", {
+        session_id: params.sessionId,
+        project_path_key: params.projectPathKey,
+        workdir: params.workdir,
+        ...sftpPathPayload(params.side, params.path ?? ""),
+      }),
+    );
+  }
+
+  async sftpStat(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    path?: string;
+  }): Promise<SftpStatResponse> {
+    return normalizeSftpStatResponse(
+      await this.request<RawSftpResponse>("sftp.stat", {
+        session_id: params.sessionId,
+        project_path_key: params.projectPathKey,
+        workdir: params.workdir,
+        ...sftpPathPayload(params.side, params.path ?? ""),
+      }),
+    );
+  }
+
+  async sftpMkdir(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    path: string;
+  }): Promise<SftpActionResponse> {
+    return normalizeSftpActionResponse(
+      await this.request<RawSftpResponse>("sftp.mkdir", {
+        session_id: params.sessionId,
+        project_path_key: params.projectPathKey,
+        workdir: params.workdir,
+        ...sftpPathPayload(params.side, params.path),
+      }),
+    );
+  }
+
+  async sftpRename(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    fromPath: string;
+    toPath: string;
+  }): Promise<SftpActionResponse> {
+    return normalizeSftpActionResponse(
+      await this.request<RawSftpResponse>("sftp.rename", {
+        session_id: params.sessionId,
+        project_path_key: params.projectPathKey,
+        workdir: params.workdir,
+        side: params.side,
+        direction: params.side,
+        from_path: params.fromPath,
+        to_path: params.toPath,
+      }),
+    );
+  }
+
+  async sftpDelete(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    path: string;
+    recursive?: boolean;
+  }): Promise<SftpActionResponse> {
+    return normalizeSftpActionResponse(
+      await this.request<RawSftpResponse>("sftp.delete", {
+        session_id: params.sessionId,
+        project_path_key: params.projectPathKey,
+        workdir: params.workdir,
+        ...sftpPathPayload(params.side, params.path),
+        recursive: params.recursive ?? false,
+      }),
+    );
+  }
+
+  async sftpTransfer(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    direction: "upload" | "download";
+    sourcePath: string;
+    targetPath: string;
+    recursive?: boolean;
+    overwrite?: boolean;
+  }): Promise<SftpTransferResponse> {
+    return normalizeSftpTransferResponse(
+      await this.request<RawSftpResponse>("sftp.transfer", {
+        session_id: params.sessionId,
+        project_path_key: params.projectPathKey,
+        workdir: params.workdir,
+        direction: params.direction,
+        from_path: params.sourcePath,
+        target_path: params.targetPath,
+        recursive: params.recursive ?? false,
+        overwrite: params.overwrite ?? false,
+      }),
+    );
+  }
+
+  async sftpCancelTransfer(params: { sessionId: string; transferId: string }): Promise<void> {
+    await this.request("sftp.cancel", {
+      session_id: params.sessionId,
+      from_path: params.transferId,
+    });
+  }
+
   async terminalShellOptions(): Promise<TerminalShellOptions> {
     return normalizeTerminalShellOptions(
       await this.requestWithRecovery<RawTerminalResponse>("terminal.shell_options", {}),
@@ -1139,6 +1381,7 @@ export class GatewayWebSocketClient {
     title?: string;
     cols?: number;
     rows?: number;
+    sftpEnabled?: boolean;
   }): Promise<TerminalSshCreateResult> {
     return normalizeTerminalSshCreateResult(
       await this.request<RawTerminalResponse>("terminal.create_ssh", {
@@ -1148,6 +1391,7 @@ export class GatewayWebSocketClient {
         title: params.title,
         cols: params.cols,
         rows: params.rows,
+        sftp_enabled: params.sftpEnabled ?? false,
       }),
     );
   }
@@ -1665,7 +1909,8 @@ export class GatewayWebSocketClient {
         this.historyListeners.size > 0 ||
         this.conversationListeners.size > 0 ||
         this.settingsListeners.size > 0 ||
-        this.terminalListeners.size > 0)
+        this.terminalListeners.size > 0 ||
+        this.sftpTransferListeners.size > 0)
     );
   }
 
@@ -1786,6 +2031,12 @@ export class GatewayWebSocketClient {
   private emitTerminal(event: TerminalEvent) {
     applyTerminalSnapshotEvent(this.terminalSessionSnapshot, event);
     for (const listener of this.terminalListeners) {
+      listener(event);
+    }
+  }
+
+  private emitSftpTransfer(event: SftpTransferEvent) {
+    for (const listener of this.sftpTransferListeners) {
       listener(event);
     }
   }
@@ -2130,6 +2381,14 @@ export class GatewayWebSocketClient {
       return;
     }
 
+    if (envelope.type === "sftp.event") {
+      const event = normalizeSftpTransferEvent(envelope.payload as RawSftpEvent);
+      if (event) {
+        this.emitSftpTransfer(event);
+      }
+      return;
+    }
+
     if ((envelope.type === "chat.event" || envelope.type === "chat.control") && requestId) {
       const stream = this.chatStreams.get(requestId);
       if (!stream) {
@@ -2318,6 +2577,7 @@ export type GatewayWebSocketClientLike = {
   subscribeConversation(listener: ConversationListener): () => void;
   subscribeSettings(listener: SettingsListener): () => void;
   subscribeTerminal(listener: TerminalListener): () => void;
+  subscribeSftpTransfers(listener: SftpTransferListener): () => void;
   chat(
     message: string,
     conversationId?: string,
@@ -2337,6 +2597,54 @@ export type GatewayWebSocketClientLike = {
     workdir: string,
     args?: Record<string, unknown>,
   ): Promise<T>;
+  sftpList(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    path?: string;
+  }): Promise<SftpListResponse>;
+  sftpStat(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    path?: string;
+  }): Promise<SftpStatResponse>;
+  sftpMkdir(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    path: string;
+  }): Promise<SftpActionResponse>;
+  sftpRename(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    fromPath: string;
+    toPath: string;
+  }): Promise<SftpActionResponse>;
+  sftpDelete(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    path: string;
+    recursive?: boolean;
+  }): Promise<SftpActionResponse>;
+  sftpTransfer(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    direction: "upload" | "download";
+    sourcePath: string;
+    targetPath: string;
+    recursive?: boolean;
+    overwrite?: boolean;
+  }): Promise<SftpTransferResponse>;
+  sftpCancelTransfer(params: { sessionId: string; transferId: string }): Promise<void>;
   terminalShellOptions(): Promise<TerminalShellOptions>;
   listTerminals(projectPathKey?: string): Promise<TerminalSession[]>;
   createTerminal(params: {
@@ -2354,6 +2662,7 @@ export type GatewayWebSocketClientLike = {
     title?: string;
     cols?: number;
     rows?: number;
+    sftpEnabled?: boolean;
   }): Promise<TerminalSshCreateResult>;
   answerSshTerminalPrompt(params: {
     promptId: string;
@@ -2468,7 +2777,7 @@ type SharedWorkerClientResponseMessage = {
 type SharedWorkerClientEventMessage = {
   type: "event";
   connection_id: string;
-  event_type: "status" | "history" | "conversation" | "settings" | "terminal";
+  event_type: "status" | "history" | "conversation" | "settings" | "terminal" | "sftp";
   payload: unknown;
 };
 
@@ -2587,6 +2896,7 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
   private conversationListeners = new Set<ConversationListener>();
   private settingsListeners = new Set<SettingsListener>();
   private terminalListeners = new Set<TerminalListener>();
+  private sftpTransferListeners = new Set<SftpTransferListener>();
   private terminalSessionSnapshot = new Map<string, TerminalSession>();
   private lastStatus: AgentStatus | null = null;
   private lastStatusError: string | null = null;
@@ -2683,6 +2993,13 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
     replayTerminalSnapshot(this.terminalSessionSnapshot, listener);
     return () => {
       this.terminalListeners.delete(listener);
+    };
+  }
+
+  subscribeSftpTransfers(listener: SftpTransferListener): () => void {
+    this.sftpTransferListeners.add(listener);
+    return () => {
+      this.sftpTransferListeners.delete(listener);
     };
   }
 
@@ -2852,6 +3169,140 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
     return this.request<T>(`git.${action}`, { workdir, args });
   }
 
+  async sftpList(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    path?: string;
+  }): Promise<SftpListResponse> {
+    return normalizeSftpListResponse(
+      await this.request<RawSftpResponse>("sftp.list", {
+        session_id: params.sessionId,
+        project_path_key: params.projectPathKey,
+        workdir: params.workdir,
+        side: params.side,
+        direction: params.side,
+        local_path: params.side === "local" ? (params.path ?? "") : "",
+        remote_path: params.side === "remote" ? (params.path ?? "") : "",
+      }),
+    );
+  }
+
+  async sftpStat(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    path?: string;
+  }): Promise<SftpStatResponse> {
+    return normalizeSftpStatResponse(
+      await this.request<RawSftpResponse>("sftp.stat", {
+        session_id: params.sessionId,
+        project_path_key: params.projectPathKey,
+        workdir: params.workdir,
+        side: params.side,
+        direction: params.side,
+        local_path: params.side === "local" ? (params.path ?? "") : "",
+        remote_path: params.side === "remote" ? (params.path ?? "") : "",
+      }),
+    );
+  }
+
+  async sftpMkdir(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    path: string;
+  }): Promise<SftpActionResponse> {
+    return normalizeSftpActionResponse(
+      await this.request<RawSftpResponse>("sftp.mkdir", {
+        session_id: params.sessionId,
+        project_path_key: params.projectPathKey,
+        workdir: params.workdir,
+        side: params.side,
+        direction: params.side,
+        local_path: params.side === "local" ? params.path : "",
+        remote_path: params.side === "remote" ? params.path : "",
+      }),
+    );
+  }
+
+  async sftpRename(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    fromPath: string;
+    toPath: string;
+  }): Promise<SftpActionResponse> {
+    return normalizeSftpActionResponse(
+      await this.request<RawSftpResponse>("sftp.rename", {
+        session_id: params.sessionId,
+        project_path_key: params.projectPathKey,
+        workdir: params.workdir,
+        side: params.side,
+        direction: params.side,
+        from_path: params.fromPath,
+        to_path: params.toPath,
+      }),
+    );
+  }
+
+  async sftpDelete(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    side: "local" | "remote";
+    path: string;
+    recursive?: boolean;
+  }): Promise<SftpActionResponse> {
+    return normalizeSftpActionResponse(
+      await this.request<RawSftpResponse>("sftp.delete", {
+        session_id: params.sessionId,
+        project_path_key: params.projectPathKey,
+        workdir: params.workdir,
+        side: params.side,
+        direction: params.side,
+        local_path: params.side === "local" ? params.path : "",
+        remote_path: params.side === "remote" ? params.path : "",
+        recursive: params.recursive ?? false,
+      }),
+    );
+  }
+
+  async sftpTransfer(params: {
+    sessionId: string;
+    projectPathKey: string;
+    workdir: string;
+    direction: "upload" | "download";
+    sourcePath: string;
+    targetPath: string;
+    recursive?: boolean;
+    overwrite?: boolean;
+  }): Promise<SftpTransferResponse> {
+    return normalizeSftpTransferResponse(
+      await this.request<RawSftpResponse>("sftp.transfer", {
+        session_id: params.sessionId,
+        project_path_key: params.projectPathKey,
+        workdir: params.workdir,
+        direction: params.direction,
+        from_path: params.sourcePath,
+        target_path: params.targetPath,
+        recursive: params.recursive ?? false,
+        overwrite: params.overwrite ?? false,
+      }),
+    );
+  }
+
+  async sftpCancelTransfer(params: { sessionId: string; transferId: string }): Promise<void> {
+    await this.request("sftp.cancel", {
+      session_id: params.sessionId,
+      from_path: params.transferId,
+    });
+  }
+
   async terminalShellOptions(): Promise<TerminalShellOptions> {
     return normalizeTerminalShellOptions(
       await this.request<RawTerminalResponse>("terminal.shell_options", {}),
@@ -2894,6 +3345,7 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
     title?: string;
     cols?: number;
     rows?: number;
+    sftpEnabled?: boolean;
   }): Promise<TerminalSshCreateResult> {
     return normalizeTerminalSshCreateResult(
       await this.request<RawTerminalResponse>("terminal.create_ssh", {
@@ -2903,6 +3355,7 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
         title: params.title,
         cols: params.cols,
         rows: params.rows,
+        sftp_enabled: params.sftpEnabled ?? false,
       }),
     );
   }
@@ -3560,6 +4013,13 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
         }
         return;
       }
+      case "sftp": {
+        const event = normalizeSftpTransferEvent(message.payload as RawSftpEvent);
+        if (event) {
+          this.emitSftpTransfer(event);
+        }
+        return;
+      }
     }
   }
 
@@ -3643,6 +4103,12 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
   private emitTerminal(event: TerminalEvent) {
     applyTerminalSnapshotEvent(this.terminalSessionSnapshot, event);
     for (const listener of this.terminalListeners) {
+      listener(event);
+    }
+  }
+
+  private emitSftpTransfer(event: SftpTransferEvent) {
+    for (const listener of this.sftpTransferListeners) {
       listener(event);
     }
   }

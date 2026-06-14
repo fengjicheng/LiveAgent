@@ -101,6 +101,7 @@ import { createSubagentRuntimeManager } from "../lib/chat/subagent/subagentRunti
 import { createStreamDebugLogger } from "../lib/debug/agentDebug";
 import { createConversationHookDispatcher } from "../lib/hooks/conversationHooks";
 import { tauriGitClient } from "../lib/git/tauriGitClient";
+import { tauriSftpClient } from "../lib/sftp/tauriSftpClient";
 import {
   lockMonacoNlsLocale,
   preparePreferredMonacoNlsLocale,
@@ -1542,12 +1543,13 @@ export function ChatPage(props: ChatPageProps) {
     [hideWorkspaceSshTerminalOverlay, terminalProjectPath, terminalProjectPathKey],
   );
   const handleOpenSshTerminal = useCallback(
-    (session: TerminalSession) => {
+    (session: TerminalSession, kind: WorkspaceSshTerminalOpenRequest["kind"] = "bash") => {
       if (session.kind !== "ssh") return;
       workspaceSshTerminalRequestIdRef.current += 1;
       const openRequest = {
         id: workspaceSshTerminalRequestIdRef.current,
         sessionId: session.id,
+        kind,
       };
       openWorkspaceSshTerminalRequest(openRequest);
     },
@@ -4670,6 +4672,7 @@ export function ChatPage(props: ChatPageProps) {
               openRequest={workspaceSshTerminalOpenRequest}
               sessions={terminalSessions}
               client={tauriTerminalClient}
+              sftpClient={tauriSftpClient}
               theme={settings.theme}
               isOpen={workspaceSshTerminalOpen}
               onHide={() => setWorkspaceSshTerminalOpen(false)}

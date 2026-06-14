@@ -106,7 +106,7 @@ type ProjectToolsPanelProps = {
   onTunnelOpenChange?: (open: boolean) => void;
   onSshTunnelOpenChange?: (open: boolean) => void;
   onSshProjectHostIdsChange?: (hostIds: string[]) => void;
-  onOpenSshSession?: (session: TerminalSession) => void;
+  onOpenSshSession?: (session: TerminalSession, kind?: "bash" | "sftp") => void;
   onSessionsChange?: (sessions: TerminalSession[]) => void;
   onInsertFileMention?: (path: string, kind: "file" | "dir") => void;
   onOpenFile?: (path: string) => void;
@@ -2084,7 +2084,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                       sessions={sshSessions}
                       onSessionSnapshot={rememberTerminalSnapshot}
                       onSessionClosed={forgetTerminalSession}
-                      onOpenSession={(session) => onOpenSshSession?.(session)}
+                      onOpenSession={(session, kind) => onOpenSshSession?.(session, kind)}
                       onAssociatedHostIdsChange={(hostIds) => {
                         onSshProjectHostIdsChange?.(hostIds);
                       }}

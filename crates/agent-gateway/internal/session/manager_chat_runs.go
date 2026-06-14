@@ -815,6 +815,11 @@ func (m *Manager) dispatchFromAgent(expected *AgentSession, env *gatewayv1.Agent
 		return
 	}
 
+	if sftpEvent := env.GetSftpEvent(); sftpEvent != nil {
+		m.broadcastSftpEvent(sftpEvent)
+		return
+	}
+
 	if tunnelFrame := env.GetTunnelFrame(); tunnelFrame != nil {
 		m.dispatchTunnelFrame(tunnelFrame)
 		return
