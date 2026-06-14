@@ -1214,7 +1214,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
               aria-label={t("projectTools.resizePanel")}
               title={t("projectTools.resizePanel")}
               className={cn(
-                "group absolute inset-y-0 left-0 z-[90] hidden w-4 -translate-x-1/2 cursor-col-resize touch-none items-center justify-center border-0 bg-transparent p-0 md:flex",
+                "group absolute inset-y-0 left-0 z-[90] hidden w-3 cursor-col-resize touch-none items-center justify-center border-0 bg-transparent p-0 md:flex",
                 "focus-visible:outline-none",
               )}
               onMouseDown={handleResizeStart}
