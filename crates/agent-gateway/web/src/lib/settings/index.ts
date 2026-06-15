@@ -512,8 +512,66 @@ export function normalizeWorkspaceProjectPath(path: unknown): string {
   return typeof path === "string" ? path.trim() : "";
 }
 
+function isWindowsProjectPathLike(path: string): boolean {
+  if (/^[\\/]{2}\?[\\/]/.test(path)) return true;
+  if (/^[A-Za-z]:(?:[\\/]|$)/.test(path)) return true;
+  return /^[\\/]{2}[^\\/]+[\\/]+[^\\/]+/.test(path);
+}
+
+function trimTrailingWindowsProjectSlashes(path: string): string {
+  let minLength = 1;
+  if (/^[A-Za-z]:\//.test(path)) {
+    minLength = 3;
+  } else if (path.startsWith("//")) {
+    const uncRoot = /^\/\/[^/]+\/[^/]+/.exec(path);
+    minLength = uncRoot?.[0].length ?? 2;
+  }
+  let next = path;
+  while (next.length > minLength && next.endsWith("/")) {
+    next = next.slice(0, -1);
+  }
+  return next;
+}
+
+function normalizeWindowsProjectPathKey(path: string): string {
+  const stripped = path
+    .replace(/^[\\/]{2}\?[\\/]UNC[\\/]/i, "//")
+    .replace(/^[\\/]{2}\?[\\/]/, "");
+  return trimTrailingWindowsProjectSlashes(stripped.replace(/\\/g, "/")).toLowerCase();
+}
+
+function normalizePosixProjectPathKey(path: string): string {
+  let next = path;
+  while (next.length > 1 && next.endsWith("/")) {
+    next = next.slice(0, -1);
+  }
+  return next;
+}
+
 export function workspaceProjectPathKey(path: unknown): string {
-  return normalizeWorkspaceProjectPath(path);
+  const normalizedPath = normalizeWorkspaceProjectPath(path);
+  if (!normalizedPath) return "";
+  return isWindowsProjectPathLike(normalizedPath)
+    ? normalizeWindowsProjectPathKey(normalizedPath)
+    : normalizePosixProjectPathKey(normalizedPath);
+}
+
+function assignNormalizedProjectKeyValue<T>(
+  target: Record<string, T>,
+  canonicalKeys: Set<string>,
+  rawPathKey: string,
+  value: T,
+): void {
+  const normalizedPathKey = workspaceProjectPathKey(rawPathKey);
+  if (!normalizedPathKey) return;
+  const isCanonicalKey = rawPathKey.trim() === normalizedPathKey;
+  const existingIsCanonical = canonicalKeys.has(normalizedPathKey);
+  if (isCanonicalKey || !existingIsCanonical) {
+    target[normalizedPathKey] = value;
+  }
+  if (isCanonicalKey) {
+    canonicalKeys.add(normalizedPathKey);
+  }
 }
 
 export function normalizeProjectToolsFileTreePath(path: unknown): string {
@@ -1359,9 +1417,9 @@ function normalizeSshProjectHostAssociations(
     input && typeof input === "object" && !Array.isArray(input) ? input : {}
   ) as Record<string, unknown>;
   const associations: Record<string, string[]> = {};
+  const canonicalKeys = new Set<string>();
   for (const [pathKey, rawHostIds] of Object.entries(rawAssociations)) {
-    const normalizedPathKey = workspaceProjectPathKey(pathKey);
-    if (!normalizedPathKey || !Array.isArray(rawHostIds)) continue;
+    if (!Array.isArray(rawHostIds)) continue;
     const ids: string[] = [];
     const seen = new Set<string>();
     for (const rawHostId of rawHostIds) {
@@ -1373,7 +1431,7 @@ function normalizeSshProjectHostAssociations(
       if (ids.length >= 64) break;
     }
     if (ids.length === 0) continue;
-    associations[normalizedPathKey] = ids;
+    assignNormalizedProjectKeyValue(associations, canonicalKeys, pathKey, ids);
     if (Object.keys(associations).length >= 100) break;
   }
   return associations;
@@ -1684,10 +1742,14 @@ export function normalizeProjectToolsFileTreeSettings(
       : {}
   ) as Record<string, unknown>;
   const projects: Record<string, ProjectToolsFileTreeProjectState> = {};
+  const canonicalKeys = new Set<string>();
   for (const [pathKey, projectState] of Object.entries(rawProjects)) {
-    const normalizedPathKey = workspaceProjectPathKey(pathKey);
-    if (!normalizedPathKey) continue;
-    projects[normalizedPathKey] = normalizeProjectToolsFileTreeProjectState(projectState);
+    assignNormalizedProjectKeyValue(
+      projects,
+      canonicalKeys,
+      pathKey,
+      normalizeProjectToolsFileTreeProjectState(projectState),
+    );
   }
   return {
     openProjectPathKeys,
@@ -1781,10 +1843,10 @@ export function normalizeProjectToolsPanelActiveTabs(
     input && typeof input === "object" && !Array.isArray(input) ? input : {}
   ) as Record<string, unknown>;
   const activeTabs: Record<string, ProjectToolsPanelTab> = {};
+  const canonicalKeys = new Set<string>();
   for (const [pathKey, value] of Object.entries(rawTabs)) {
-    const normalizedPathKey = workspaceProjectPathKey(pathKey);
-    if (!normalizedPathKey || !isProjectToolsPanelTab(value)) continue;
-    activeTabs[normalizedPathKey] = value;
+    if (!isProjectToolsPanelTab(value)) continue;
+    assignNormalizedProjectKeyValue(activeTabs, canonicalKeys, pathKey, value);
     if (Object.keys(activeTabs).length >= 100) break;
   }
   return activeTabs;
@@ -1795,12 +1857,11 @@ export function normalizeProjectToolsPanelTabOrders(input: unknown): Record<stri
     input && typeof input === "object" && !Array.isArray(input) ? input : {}
   ) as Record<string, unknown>;
   const orders: Record<string, string[]> = {};
+  const canonicalKeys = new Set<string>();
   for (const [pathKey, value] of Object.entries(rawOrders)) {
-    const normalizedPathKey = workspaceProjectPathKey(pathKey);
-    if (!normalizedPathKey) continue;
     const order = normalizeProjectToolsPanelTabOrder(value);
     if (order.length === 0) continue;
-    orders[normalizedPathKey] = order;
+    assignNormalizedProjectKeyValue(orders, canonicalKeys, pathKey, order);
     if (Object.keys(orders).length >= 100) break;
   }
   return orders;

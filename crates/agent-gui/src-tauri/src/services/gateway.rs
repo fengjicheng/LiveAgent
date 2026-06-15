@@ -25,6 +25,9 @@ use crate::commands::settings::{
     open_db, redact_gateway_settings_sync_payload, reset_runtime_ssh_known_host,
     RemoteSettingsPayload, PROVIDER_API_KEY_UPDATES_FIELD, SSH_SECRET_UPDATES_FIELD,
 };
+use crate::runtime::project_path::{
+    project_path_key as normalize_project_path_key, project_path_keys_equal,
+};
 use crate::runtime::sftp::{
     SftpActionResponse, SftpEntry, SftpEventPayload, SftpListResponse, SftpSessionRegistry,
     SftpStatResponse, SftpTransferResponse, SftpTransferState,
@@ -550,11 +553,9 @@ impl GatewayController {
                 name: input.name.unwrap_or_default().trim().to_string(),
                 ttl_seconds: normalize_tunnel_ttl(input.ttl_seconds)?,
                 public_base_url,
-                project_path_key: input
-                    .project_path_key
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string(),
+                project_path_key: normalize_project_path_key(
+                    &input.project_path_key.unwrap_or_default(),
+                ),
                 ..Default::default()
             })
             .await?;
@@ -591,11 +592,9 @@ impl GatewayController {
                 name: input.name.unwrap_or_default().trim().to_string(),
                 ttl_seconds,
                 expires_at,
-                project_path_key: input
-                    .project_path_key
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string(),
+                project_path_key: normalize_project_path_key(
+                    &input.project_path_key.unwrap_or_default(),
+                ),
                 ..Default::default()
             })
             .await?;
@@ -1745,7 +1744,7 @@ impl GatewayController {
                 })
             }
             "list" => {
-                let project_path_key = request.project_path_key.trim().to_string();
+                let project_path_key = normalize_project_path_key(&request.project_path_key);
                 let project_filter = (!project_path_key.is_empty()).then_some(project_path_key);
                 let config = self.config_tx.borrow().clone();
                 let sessions = self
@@ -1960,7 +1959,7 @@ impl GatewayController {
         let session = self
             .terminal_registry
             .session_record(session_id.trim().to_string())?;
-        if session.project_path_key != project_path_key {
+        if !project_path_keys_equal(&session.project_path_key, &project_path_key) {
             return Err("terminal session is outside the requested project".to_string());
         }
         Ok(())
@@ -3130,7 +3129,7 @@ impl GatewayController {
             expires_at: request.expires_at,
             active_connections: 0,
             status: "active".to_string(),
-            project_path_key: request.project_path_key.trim().to_string(),
+            project_path_key: normalize_project_path_key(&request.project_path_key),
         };
         self.store_local_tunnel(summary.clone(), target)?;
         Ok(summary)
@@ -3165,8 +3164,10 @@ impl GatewayController {
             record.summary.expires_at = request.expires_at;
         }
         if !request.project_path_key.trim().is_empty() {
-            record.summary.project_path_key = request.project_path_key.trim().to_string();
+            record.summary.project_path_key = normalize_project_path_key(&request.project_path_key);
         }
+        record.summary.project_path_key =
+            normalize_project_path_key(&record.summary.project_path_key);
         record.summary.status = "active".to_string();
         Ok(record.summary.clone())
     }
@@ -3206,20 +3207,23 @@ impl GatewayController {
             record.summary.public_url = request.public_url.trim().to_string();
         }
         if !request.project_path_key.trim().is_empty() {
-            record.summary.project_path_key = request.project_path_key.trim().to_string();
+            record.summary.project_path_key = normalize_project_path_key(&request.project_path_key);
         }
+        record.summary.project_path_key =
+            normalize_project_path_key(&record.summary.project_path_key);
         record.summary.status = "active".to_string();
         Ok(record.summary.clone())
     }
 
     fn store_local_tunnel(
         &self,
-        summary: GatewayTunnelSummary,
+        mut summary: GatewayTunnelSummary,
         target: TunnelTarget,
     ) -> Result<(), String> {
         if summary.id.trim().is_empty() {
             return Err("tunnel id is required".to_string());
         }
+        summary.project_path_key = normalize_project_path_key(&summary.project_path_key);
         self.tunnels
             .lock()
             .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?
@@ -3252,6 +3256,7 @@ impl GatewayController {
             .values()
             .map(|record| {
                 let mut summary = record.summary.clone();
+                summary.project_path_key = normalize_project_path_key(&summary.project_path_key);
                 if summary.expires_at > 0 && summary.expires_at <= now {
                     summary.status = "expired".to_string();
                 } else if !offline_status.trim().is_empty() {
@@ -3370,7 +3375,7 @@ fn gateway_tunnel_summary_from_proto(summary: proto::TunnelSummary) -> GatewayTu
         expires_at: summary.expires_at,
         active_connections: summary.active_connections,
         status: summary.status,
-        project_path_key: summary.project_path_key,
+        project_path_key: normalize_project_path_key(&summary.project_path_key),
     }
 }
 
@@ -3385,7 +3390,7 @@ fn proto_tunnel_summary_from_gateway(summary: GatewayTunnelSummary) -> proto::Tu
         expires_at: summary.expires_at,
         active_connections: summary.active_connections,
         status: summary.status,
-        project_path_key: summary.project_path_key,
+        project_path_key: normalize_project_path_key(&summary.project_path_key),
     }
 }
 
@@ -3887,7 +3892,7 @@ fn optional_proto_usize(value: u32) -> Option<usize> {
 }
 
 fn required_terminal_project_path_key(value: &str) -> Result<String, String> {
-    let project_path_key = value.trim().to_string();
+    let project_path_key = normalize_project_path_key(value);
     if project_path_key.is_empty() {
         return Err("project_path_key is required".to_string());
     }
@@ -3901,7 +3906,7 @@ fn terminal_u128_to_u64(value: u128) -> u64 {
 fn terminal_session_to_proto(session: TerminalSessionRecord) -> proto::TerminalSession {
     proto::TerminalSession {
         id: session.id,
-        project_path_key: session.project_path_key,
+        project_path_key: normalize_project_path_key(&session.project_path_key),
         cwd: session.cwd,
         shell: session.shell,
         title: session.title,
@@ -4135,7 +4140,7 @@ fn build_terminal_event_envelope(payload: TerminalEventPayload) -> proto::AgentE
             proto::TerminalEvent {
                 kind: payload.kind,
                 session_id: payload.session_id,
-                project_path_key: payload.project_path_key,
+                project_path_key: normalize_project_path_key(&payload.project_path_key),
                 session: Some(terminal_session_to_proto(payload.session)),
                 data: payload.data.unwrap_or_default(),
                 output_start_offset: payload.output_start_offset.unwrap_or_default(),
@@ -4570,6 +4575,10 @@ mod tests {
         assert_eq!(
             required_terminal_project_path_key(" /workspace/project ").as_deref(),
             Ok("/workspace/project")
+        );
+        assert_eq!(
+            required_terminal_project_path_key(r" C:\Repo\ ").as_deref(),
+            Ok("c:/repo")
         );
         assert!(required_terminal_project_path_key(" ").is_err());
     }

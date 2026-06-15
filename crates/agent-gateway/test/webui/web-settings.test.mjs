@@ -37,6 +37,69 @@ test("getWebDefaultSettings enables remote settings from the gateway token", () 
   assert.equal(settings.remote.token, "token");
 });
 
+test("web settings normalization canonicalizes project keyed maps with Windows path compatibility", () => {
+  const normalized = settings.normalizeSettings({
+    ssh: {
+      hosts: [
+        { id: "host-a", host: "example.com", username: "me" },
+        { id: "host-b", host: "example.org", username: "me" },
+      ],
+      projectHostAssociations: {
+        "c:/repo": ["host-b"],
+        "C:\\Repo\\": ["host-a"],
+      },
+    },
+    customSettings: {
+      projectToolsPanel: {
+        activeTabs: {
+          "c:/repo": "terminal",
+          "C:\\Repo\\": "tunnel",
+        },
+        tabOrders: {
+          "C:\\Repo\\": ["terminal"],
+          "c:/repo": ["fileTree", "terminal"],
+        },
+      },
+      projectToolsFileTree: {
+        openProjectPathKeys: ["C:\\Repo\\", "c:/repo"],
+        projects: {
+          "C:\\Repo\\": { query: "legacy" },
+          "c:/repo": { query: "canonical" },
+        },
+      },
+      projectToolsTunnel: {
+        openProjectPathKeys: ["C:\\Repo\\", "c:/repo"],
+      },
+      projectToolsSshTunnel: {
+        openProjectPathKeys: ["C:\\Repo\\", "c:/repo"],
+      },
+    },
+  });
+
+  assert.deepEqual(normalized.ssh.projectHostAssociations, {
+    "c:/repo": ["host-b"],
+  });
+  assert.deepEqual(normalized.customSettings.projectToolsPanel.activeTabs, {
+    "c:/repo": "terminal",
+  });
+  assert.deepEqual(normalized.customSettings.projectToolsPanel.tabOrders, {
+    "c:/repo": ["fileTree", "terminal"],
+  });
+  assert.deepEqual(normalized.customSettings.projectToolsFileTree.openProjectPathKeys, [
+    "c:/repo",
+  ]);
+  assert.equal(
+    normalized.customSettings.projectToolsFileTree.projects["c:/repo"].query,
+    "canonical",
+  );
+  assert.deepEqual(normalized.customSettings.projectToolsTunnel.openProjectPathKeys, [
+    "c:/repo",
+  ]);
+  assert.deepEqual(normalized.customSettings.projectToolsSshTunnel.openProjectPathKeys, [
+    "c:/repo",
+  ]);
+});
+
 test("web chat runtime controls default and follow provider reasoning support", () => {
   installWindow("https://gateway.example");
 

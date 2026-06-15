@@ -9,6 +9,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use crate::runtime::project_path::project_path_key as normalize_project_path_key;
 use crate::services::cron::{validate_cron_expression, CronManager};
 use crate::services::gateway::GatewayController;
 use uuid::Uuid;
@@ -1794,10 +1795,11 @@ fn load_ssh_project_host_associations(
         })
         .map_err(|e| format!("读取 {SSH_PROJECT_HOST_ASSOCIATIONS_TABLE} 失败：{e}"))?;
     let mut associations = Map::new();
+    let mut canonical_keys = HashSet::new();
     for row in rows {
         let (project_path_key, host_ids_json) =
             row.map_err(|e| format!("读取 {SSH_PROJECT_HOST_ASSOCIATIONS_TABLE} 行失败：{e}"))?;
-        let normalized_project_path_key = project_path_key.trim();
+        let normalized_project_path_key = normalize_project_path_key(&project_path_key);
         if normalized_project_path_key.is_empty() {
             continue;
         }
@@ -1810,8 +1812,10 @@ fn load_ssh_project_host_associations(
         if ids.is_empty() {
             continue;
         }
-        associations.insert(
-            normalized_project_path_key.to_string(),
+        insert_normalized_project_key_value(
+            &mut associations,
+            &mut canonical_keys,
+            &project_path_key,
             Value::Array(ids.into_iter().map(Value::String).collect()),
         );
     }
@@ -2490,9 +2494,10 @@ fn normalize_ssh_project_host_associations_value(
         _ => return Err("ssh.projectHostAssociations 必须是对象".to_string()),
     };
     let mut normalized = Map::new();
+    let mut canonical_keys = HashSet::new();
     for (project_path_key, host_ids) in raw {
-        let project_path_key = project_path_key.trim().to_string();
-        if project_path_key.is_empty() {
+        let normalized_project_path_key = normalize_project_path_key(&project_path_key);
+        if normalized_project_path_key.is_empty() {
             continue;
         }
         let items = expect_array(host_ids, "ssh.projectHostAssociations[]")?;
@@ -2513,10 +2518,35 @@ fn normalize_ssh_project_host_associations_value(
             }
         }
         if !ids.is_empty() {
-            normalized.insert(project_path_key, Value::Array(ids));
+            insert_normalized_project_key_value(
+                &mut normalized,
+                &mut canonical_keys,
+                &project_path_key,
+                Value::Array(ids),
+            );
         }
     }
     Ok(normalized)
+}
+
+fn insert_normalized_project_key_value(
+    target: &mut Map<String, Value>,
+    canonical_keys: &mut HashSet<String>,
+    raw_project_path_key: &str,
+    value: Value,
+) {
+    let normalized_project_path_key = normalize_project_path_key(raw_project_path_key);
+    if normalized_project_path_key.is_empty() {
+        return;
+    }
+    let is_canonical_key = raw_project_path_key.trim() == normalized_project_path_key;
+    let existing_is_canonical = canonical_keys.contains(&normalized_project_path_key);
+    if is_canonical_key || !existing_is_canonical {
+        target.insert(normalized_project_path_key.clone(), value);
+    }
+    if is_canonical_key {
+        canonical_keys.insert(normalized_project_path_key);
+    }
 }
 
 fn save_hooks(conn: &mut Connection, payload: Value) -> Result<(), String> {

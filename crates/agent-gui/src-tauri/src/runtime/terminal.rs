@@ -26,6 +26,9 @@ use crate::commands::settings::{
 use crate::runtime::platform::expand_tilde_path;
 #[cfg(windows)]
 use crate::runtime::process::configure_child_process_group;
+use crate::runtime::project_path::{
+    project_path_key as normalize_project_path_key, project_path_keys_equal,
+};
 
 const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
@@ -445,7 +448,7 @@ impl TerminalSessionRegistry {
 
     pub fn list(&self, project_path_key: Option<String>) -> TerminalListResponse {
         let project_key = project_path_key
-            .map(|value| workspace_project_path_key(&value))
+            .map(|value| normalize_project_path_key(&value))
             .filter(|value| !value.is_empty());
         let mut sessions = self
             .sessions
@@ -456,7 +459,7 @@ impl TerminalSessionRegistry {
             .filter(|record| {
                 project_key
                     .as_ref()
-                    .is_none_or(|wanted| &record.project_path_key == wanted)
+                    .is_none_or(|wanted| project_path_keys_equal(&record.project_path_key, wanted))
             })
             .collect::<Vec<_>>();
         sessions.sort_by(|a, b| {
@@ -478,9 +481,9 @@ impl TerminalSessionRegistry {
     ) -> Result<TerminalSnapshotResponse, String> {
         let cwd = canonicalize_workdir(&cwd)?;
         let project_key = project_path_key
-            .map(|value| workspace_project_path_key(&value))
+            .map(|value| normalize_project_path_key(&value))
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| workspace_project_path_key(&cwd.display().to_string()));
+            .unwrap_or_else(|| normalize_project_path_key(&cwd.display().to_string()));
         if project_key.is_empty() {
             return Err("project_path_key is required".to_string());
         }
@@ -599,9 +602,9 @@ impl TerminalSessionRegistry {
     ) -> Result<TerminalSshCreateResponse, String> {
         let cwd = canonicalize_workdir(&cwd)?;
         let project_key = project_path_key
-            .map(|value| workspace_project_path_key(&value))
+            .map(|value| normalize_project_path_key(&value))
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| workspace_project_path_key(&cwd.display().to_string()));
+            .unwrap_or_else(|| normalize_project_path_key(&cwd.display().to_string()));
         if project_key.is_empty() {
             return Err("project_path_key is required".to_string());
         }
@@ -1466,7 +1469,7 @@ impl TerminalSessionRegistry {
     }
 
     pub fn close_project(&self, project_path_key: String) -> Result<TerminalListResponse, String> {
-        let project_key = workspace_project_path_key(&project_path_key);
+        let project_key = normalize_project_path_key(&project_path_key);
         if project_key.is_empty() {
             return Err("project_path_key is required".to_string());
         }
@@ -1480,7 +1483,9 @@ impl TerminalSessionRegistry {
                     .record
                     .lock()
                     .ok()
-                    .filter(|record| record.project_path_key == project_key)
+                    .filter(|record| {
+                        project_path_keys_equal(&record.project_path_key, &project_key)
+                    })
                     .map(|_| id.clone())
             })
             .collect::<Vec<_>>();
@@ -1507,7 +1512,7 @@ impl TerminalSessionRegistry {
         session_id: Option<String>,
         max_bytes: Option<usize>,
     ) -> Result<TerminalReadTailResponse, String> {
-        let project_key = workspace_project_path_key(&project_path_key);
+        let project_key = normalize_project_path_key(&project_path_key);
         if project_key.is_empty() {
             return Err("project_path_key is required".to_string());
         }
@@ -1535,7 +1540,7 @@ impl TerminalSessionRegistry {
         }
         let selected_id = requested_session_id.unwrap_or_else(|| sessions[0].id.clone());
         let snapshot = self.snapshot(selected_id, max_bytes)?;
-        if snapshot.session.project_path_key != project_key {
+        if !project_path_keys_equal(&snapshot.session.project_path_key, &project_key) {
             return Err("terminal session is outside the current project".to_string());
         }
         Ok(TerminalReadTailResponse {
@@ -1563,7 +1568,9 @@ impl TerminalSessionRegistry {
                 sessions
                     .values()
                     .filter_map(|entry| entry.record.lock().ok())
-                    .filter(|record| record.project_path_key == project_path_key)
+                    .filter(|record| {
+                        project_path_keys_equal(&record.project_path_key, project_path_key)
+                    })
                     .count()
             })
             .unwrap_or(0);
@@ -1582,7 +1589,7 @@ impl TerminalSessionRegistry {
                     .values()
                     .filter_map(|entry| entry.record.lock().ok())
                     .filter(|record| {
-                        record.project_path_key == project_path_key
+                        project_path_keys_equal(&record.project_path_key, project_path_key)
                             && record.kind == "ssh"
                             && record.title.starts_with(base)
                     })
@@ -2559,10 +2566,6 @@ fn now_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
-}
-
-fn workspace_project_path_key(path: &str) -> String {
-    path.trim().to_string()
 }
 
 fn canonicalize_workdir(workdir: &str) -> Result<PathBuf, String> {
