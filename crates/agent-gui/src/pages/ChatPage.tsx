@@ -4349,7 +4349,6 @@ export function ChatPage(props: ChatPageProps) {
         <ChatHistorySidebar
           items={historyItems}
           currentConversationId={currentConversationId}
-          isBusy={isSending}
           runningConversationIds={sidebarRunningConversationIds}
           isLoading={historyLoading}
           totalItems={historyTotal}
