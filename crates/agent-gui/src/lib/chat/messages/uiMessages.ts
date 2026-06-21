@@ -136,8 +136,12 @@ function summarizeBashTimeout(value: unknown) {
     : `timeout_ms=${effective} (requested ${requested})`;
 }
 
-export function summarizeToolCall(toolCall: ToolCall, options?: { includeName?: boolean }) {
+export function summarizeToolCall(
+  toolCall: ToolCall,
+  options?: { includeName?: boolean; includeManagerAction?: boolean },
+) {
   const includeName = options?.includeName ?? true;
+  const includeManagerAction = options?.includeManagerAction ?? true;
   const args = toolCall.arguments || {};
   const name = toolCall.name;
   const path = summarizeToolArg(args.path);
@@ -200,7 +204,9 @@ export function summarizeToolCall(toolCall: ToolCall, options?: { includeName?: 
           ]
         : name === "SkillsManager"
           ? [
-              typeof args.action === "string" ? `action=${args.action}` : null,
+              includeManagerAction && typeof args.action === "string"
+                ? `action=${args.action}`
+                : null,
               path ? `path=${path}` : null,
               typeof args.offset === "number" ? `start=${args.offset + 1}` : null,
               typeof args.length === "number" ? `limit=${args.length}` : null,
@@ -210,138 +216,192 @@ export function summarizeToolCall(toolCall: ToolCall, options?: { includeName?: 
                 ? `conflict=${summarizeToolArg(args.conflict)}`
                 : null,
             ]
-          : name === "MemoryManager"
+          : name === "CronTaskManager"
             ? [
-                typeof args.action === "string" ? `action=${args.action}` : null,
-                typeof args.slug === "string" ? `slug=${summarizeToolArg(args.slug)}` : null,
-                typeof args.scope === "string" ? `scope=${summarizeToolArg(args.scope)}` : null,
+                includeManagerAction && typeof args.action === "string"
+                  ? `action=${args.action}`
+                  : null,
+                typeof args.task_id === "string" ? `task=${summarizeToolArg(args.task_id)}` : null,
+                typeof args.name === "string" ? `name=${summarizeToolArg(args.name)}` : null,
                 typeof args.type === "string" ? `type=${summarizeToolArg(args.type)}` : null,
-                typeof args.query === "string" ? `query=${summarizeToolArg(args.query)}` : null,
               ]
-            : name === "McpManager"
+            : name === "MemoryManager"
               ? [
-                  typeof args.action === "string" ? `action=${args.action}` : null,
-                  typeof args.server_id === "string"
-                    ? `server=${summarizeToolArg(args.server_id)}`
+                  includeManagerAction && typeof args.action === "string"
+                    ? `action=${args.action}`
                     : null,
-                  Array.isArray(args.server_ids) ? `servers=${args.server_ids.length}` : null,
-                  typeof args.conflict === "string"
-                    ? `conflict=${summarizeToolArg(args.conflict)}`
-                    : null,
-                  args.include_schema === true ? "includeSchema=true" : null,
+                  typeof args.slug === "string" ? `slug=${summarizeToolArg(args.slug)}` : null,
+                  typeof args.scope === "string" ? `scope=${summarizeToolArg(args.scope)}` : null,
+                  typeof args.type === "string" ? `type=${summarizeToolArg(args.type)}` : null,
+                  typeof args.query === "string" ? `query=${summarizeToolArg(args.query)}` : null,
                 ]
-              : name === "Agent"
+              : name === "McpManager"
                 ? [
-                    typeof args.agent_id === "string"
-                      ? `agent=${summarizeToolArg(args.agent_id)}`
+                    includeManagerAction && typeof args.action === "string"
+                      ? `action=${args.action}`
                       : null,
-                    typeof args.name === "string" ? `name=${summarizeToolArg(args.name)}` : null,
-                    typeof args.prompt === "string"
-                      ? `prompt=${summarizeToolArg(args.prompt)}`
+                    typeof args.server_id === "string"
+                      ? `server=${summarizeToolArg(args.server_id)}`
                       : null,
-                    typeof args.agent_spec === "string"
-                      ? `agentSpecChars=${args.agent_spec.length}`
+                    Array.isArray(args.server_ids) ? `servers=${args.server_ids.length}` : null,
+                    typeof args.conflict === "string"
+                      ? `conflict=${summarizeToolArg(args.conflict)}`
                       : null,
-                    typeof args.mode === "string" ? `mode=${summarizeToolArg(args.mode)}` : null,
-                    typeof args.concurrency === "number" ? `concurrency=${args.concurrency}` : null,
+                    args.include_schema === true ? "includeSchema=true" : null,
                   ]
-                : name === "SendMessage"
+                : name === "TunnelManager"
                   ? [
-                      typeof args.to === "string" ? `to=${summarizeToolArg(args.to)}` : null,
-                      typeof args.channel === "string"
-                        ? `channel=${summarizeToolArg(args.channel)}`
+                      includeManagerAction && typeof args.action === "string"
+                        ? `action=${args.action}`
                         : null,
-                      typeof args.subject === "string"
-                        ? `subject=${summarizeToolArg(args.subject)}`
+                      typeof args.targetUrl === "string"
+                        ? `target=${summarizeToolArg(args.targetUrl)}`
                         : null,
-                      typeof args.summary === "string" && typeof args.subject !== "string"
-                        ? `summary=${summarizeToolArg(args.summary)}`
-                        : null,
-                      typeof args.message === "string"
-                        ? `messageChars=${args.message.length}`
-                        : null,
+                      typeof args.slug === "string" ? `slug=${summarizeToolArg(args.slug)}` : null,
+                      typeof args.id === "string" ? `id=${summarizeToolArg(args.id)}` : null,
                     ]
-                  : name === "Write"
+                  : name === "SSHManager" || name === "SshManager"
                     ? [
-                        root,
-                        path ? `path=${path}` : null,
-                        "mode=rewrite",
-                        typeof args.content === "string"
-                          ? `contentChars=${args.content.length}`
+                        includeManagerAction && typeof args.action === "string"
+                          ? `action=${args.action}`
+                          : null,
+                        typeof args.host_id === "string"
+                          ? `host=${summarizeToolArg(args.host_id)}`
+                          : null,
+                        typeof args.session_id === "string"
+                          ? `session=${summarizeToolArg(args.session_id)}`
+                          : null,
+                        typeof args.path === "string" ? `path=${path}` : null,
+                        typeof args.command === "string"
+                          ? `command=${summarizeToolArg(args.command)}`
                           : null,
                       ]
-                    : name === "Edit"
+                    : name === "Agent"
                       ? [
-                          root,
-                          path ? `path=${path}` : null,
-                          typeof args.expected_replacements === "number"
-                            ? `expected=${args.expected_replacements}`
+                          typeof args.agent_id === "string"
+                            ? `agent=${summarizeToolArg(args.agent_id)}`
                             : null,
-                          args.replace_all === true ? "replaceAll=true" : null,
-                          typeof args.old_string === "string"
-                            ? `oldChars=${args.old_string.length}`
+                          typeof args.name === "string"
+                            ? `name=${summarizeToolArg(args.name)}`
                             : null,
-                          typeof args.new_string === "string"
-                            ? `newChars=${args.new_string.length}`
+                          typeof args.prompt === "string"
+                            ? `prompt=${summarizeToolArg(args.prompt)}`
+                            : null,
+                          typeof args.agent_spec === "string"
+                            ? `agentSpecChars=${args.agent_spec.length}`
+                            : null,
+                          typeof args.mode === "string"
+                            ? `mode=${summarizeToolArg(args.mode)}`
+                            : null,
+                          typeof args.concurrency === "number"
+                            ? `concurrency=${args.concurrency}`
                             : null,
                         ]
-                      : name === "List"
+                      : name === "SendMessage"
                         ? [
-                            root,
-                            path ? `path=${path}` : rootPath,
-                            typeof args.depth === "number" ? `depth=${args.depth}` : null,
-                            typeof args.offset === "number" ? `offset=${args.offset}` : null,
-                            typeof args.max_results === "number" ? `max=${args.max_results}` : null,
+                            typeof args.to === "string" ? `to=${summarizeToolArg(args.to)}` : null,
+                            typeof args.channel === "string"
+                              ? `channel=${summarizeToolArg(args.channel)}`
+                              : null,
+                            typeof args.subject === "string"
+                              ? `subject=${summarizeToolArg(args.subject)}`
+                              : null,
+                            typeof args.summary === "string" && typeof args.subject !== "string"
+                              ? `summary=${summarizeToolArg(args.summary)}`
+                              : null,
+                            typeof args.message === "string"
+                              ? `messageChars=${args.message.length}`
+                              : null,
                           ]
-                        : name === "Glob"
+                        : name === "Write"
                           ? [
                               root,
-                              typeof args.pattern === "string"
-                                ? `pattern=${summarizeToolArg(args.pattern)}`
-                                : null,
-                              path ? `path=${path}` : rootPath,
-                              typeof args.offset === "number" ? `offset=${args.offset}` : null,
-                              typeof args.max_results === "number"
-                                ? `max=${args.max_results}`
+                              path ? `path=${path}` : null,
+                              "mode=rewrite",
+                              typeof args.content === "string"
+                                ? `contentChars=${args.content.length}`
                                 : null,
                             ]
-                          : name === "Grep"
+                          : name === "Edit"
                             ? [
                                 root,
-                                typeof args.pattern === "string"
-                                  ? `pattern=${summarizeToolArg(args.pattern)}`
+                                path ? `path=${path}` : null,
+                                typeof args.expected_replacements === "number"
+                                  ? `expected=${args.expected_replacements}`
                                   : null,
-                                path ? `path=${path}` : rootPath,
-                                typeof args.file_pattern === "string"
-                                  ? `filePattern=${summarizeToolArg(args.file_pattern)}`
+                                args.replace_all === true ? "replaceAll=true" : null,
+                                typeof args.old_string === "string"
+                                  ? `oldChars=${args.old_string.length}`
                                   : null,
-                                typeof args.output_mode === "string"
-                                  ? `mode=${args.output_mode}`
+                                typeof args.new_string === "string"
+                                  ? `newChars=${args.new_string.length}`
                                   : null,
-                                typeof args.ignore_case === "boolean"
-                                  ? `ignoreCase=${args.ignore_case}`
-                                  : null,
-                                typeof args.context === "number" ? `context=${args.context}` : null,
-                                typeof args.head_limit === "number"
-                                  ? `head=${args.head_limit}`
-                                  : null,
-                                args.multiline === true ? "multiline=true" : null,
-                                typeof args.offset === "number" ? `offset=${args.offset}` : null,
                               ]
-                            : name === "Delete"
-                              ? [root, path ? `path=${path}` : null]
-                              : name === "Bash"
+                            : name === "List"
+                              ? [
+                                  root,
+                                  path ? `path=${path}` : rootPath,
+                                  typeof args.depth === "number" ? `depth=${args.depth}` : null,
+                                  typeof args.offset === "number" ? `offset=${args.offset}` : null,
+                                  typeof args.max_results === "number"
+                                    ? `max=${args.max_results}`
+                                    : null,
+                                ]
+                              : name === "Glob"
                                 ? [
                                     root,
-                                    typeof args.cwd === "string"
-                                      ? `cwd=${summarizeToolArg(args.cwd)}`
-                                      : rootPath,
-                                    summarizeBashTimeout(args.timeout_ms),
-                                    typeof args.command === "string"
-                                      ? `command=${summarizeToolArg(args.command)}`
+                                    typeof args.pattern === "string"
+                                      ? `pattern=${summarizeToolArg(args.pattern)}`
+                                      : null,
+                                    path ? `path=${path}` : rootPath,
+                                    typeof args.offset === "number"
+                                      ? `offset=${args.offset}`
+                                      : null,
+                                    typeof args.max_results === "number"
+                                      ? `max=${args.max_results}`
                                       : null,
                                   ]
-                                : [];
+                                : name === "Grep"
+                                  ? [
+                                      root,
+                                      typeof args.pattern === "string"
+                                        ? `pattern=${summarizeToolArg(args.pattern)}`
+                                        : null,
+                                      path ? `path=${path}` : rootPath,
+                                      typeof args.file_pattern === "string"
+                                        ? `filePattern=${summarizeToolArg(args.file_pattern)}`
+                                        : null,
+                                      typeof args.output_mode === "string"
+                                        ? `mode=${args.output_mode}`
+                                        : null,
+                                      typeof args.ignore_case === "boolean"
+                                        ? `ignoreCase=${args.ignore_case}`
+                                        : null,
+                                      typeof args.context === "number"
+                                        ? `context=${args.context}`
+                                        : null,
+                                      typeof args.head_limit === "number"
+                                        ? `head=${args.head_limit}`
+                                        : null,
+                                      args.multiline === true ? "multiline=true" : null,
+                                      typeof args.offset === "number"
+                                        ? `offset=${args.offset}`
+                                        : null,
+                                    ]
+                                  : name === "Delete"
+                                    ? [root, path ? `path=${path}` : null]
+                                    : name === "Bash"
+                                      ? [
+                                          root,
+                                          typeof args.cwd === "string"
+                                            ? `cwd=${summarizeToolArg(args.cwd)}`
+                                            : rootPath,
+                                          summarizeBashTimeout(args.timeout_ms),
+                                          typeof args.command === "string"
+                                            ? `command=${summarizeToolArg(args.command)}`
+                                            : null,
+                                        ]
+                                      : [];
 
   const summary = parts.filter(Boolean).join(" ");
   if (!summary) return includeName ? name : "";

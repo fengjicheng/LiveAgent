@@ -17,7 +17,7 @@ import {
   displayString,
   getBuiltinResultKind,
   getDelegateAgentInlineSummary,
-  getToolDisplayName,
+  getToolDisplayTitle,
   getToolMeta,
   isDelegateAgentCardToolCall,
   type MetaTag,
@@ -293,9 +293,13 @@ function ToolCallItem({
     ? ""
     : isDelegateAgentCard
       ? getDelegateAgentInlineSummary(item)
-      : summarizeToolCall(item.toolCall, { includeName: false });
+      : summarizeToolCall(item.toolCall, {
+          includeName: false,
+          includeManagerAction: false,
+        });
   const meta = getToolMeta(item.toolCall.name);
   const ToolIcon = meta.Icon;
+  const title = getToolDisplayTitle(item.toolCall);
 
   const dotClass = isRunning
     ? "bg-[hsl(var(--chat-running))] animate-pulse"
@@ -377,7 +381,13 @@ function ToolCallItem({
         {/* Tool name + inline summary on same line */}
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
           <span className="shrink-0 text-[12.5px] font-semibold tracking-[-0.01em] text-foreground/90">
-            {getToolDisplayName(item.toolCall.name)}
+            {title.name}
+            {title.action ? (
+              <span className="font-mono font-semibold text-muted-foreground/70">
+                {" · "}
+                {title.action}
+              </span>
+            ) : null}
           </span>
 
           {/* Inline summary — truncated */}

@@ -4,11 +4,13 @@ import type { IconComponent } from "../../../../components/icons";
 import {
   Bot,
   Brain,
+  Clock3,
   Eye,
   FilePenLine,
   FileText,
   FolderTree,
   ImageIcon,
+  Link2,
   Plug,
   Search,
   Server,
@@ -40,10 +42,14 @@ export function getToolMeta(name: string): {
       return { Icon: ImageIcon, accent: "var(--tool-file-accent)", category: "file" };
     case "SkillsManager":
       return { Icon: Eye, accent: "var(--tool-file-accent)", category: "file" };
+    case "CronTaskManager":
+      return { Icon: Clock3, accent: "var(--tool-list-accent)", category: "system" };
     case "MemoryManager":
       return { Icon: Brain, accent: "var(--tool-list-accent)", category: "system" };
     case "McpManager":
       return { Icon: Plug, accent: "var(--tool-list-accent)", category: "mcp" };
+    case "TunnelManager":
+      return { Icon: Link2, accent: "var(--tool-list-accent)", category: "system" };
     case "SSHManager":
     case "SshManager":
       return { Icon: Server, accent: "var(--tool-bash-accent)", category: "terminal" };
@@ -230,6 +236,39 @@ export function isAgentToolName(name: string) {
 export function getToolDisplayName(name: string) {
   if (name === "SshManager") return "SSHManager";
   return name;
+}
+
+const TOOL_CARD_ACTION_NAMES = new Set([
+  "SkillsManager",
+  "CronTaskManager",
+  "McpManager",
+  "MemoryManager",
+  "TunnelManager",
+  "SSHManager",
+]);
+
+export function getManagerToolActionName(toolCall: {
+  name: string;
+  arguments?: Record<string, unknown>;
+}) {
+  const name = getToolDisplayName(toolCall.name);
+  if (!TOOL_CARD_ACTION_NAMES.has(name)) return "";
+  const args = toolCall.arguments || {};
+  const action = displayString(args.action);
+  if (action) return action;
+  if (name === "SkillsManager") {
+    return displayString(args.path) ? "read" : "list";
+  }
+  return "";
+}
+
+export function getToolDisplayTitle(toolCall: {
+  name: string;
+  arguments?: Record<string, unknown>;
+}) {
+  const name = getToolDisplayName(toolCall.name);
+  const action = getManagerToolActionName(toolCall);
+  return { name, action };
 }
 
 export function groupRoundBlocks(blocks: UiRound["blocks"]): GroupedRoundBlock[] {

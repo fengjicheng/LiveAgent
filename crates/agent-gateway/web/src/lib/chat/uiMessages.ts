@@ -143,9 +143,10 @@ function summarizeBashTimeout(value: unknown) {
 
 export function summarizeToolCall(
   toolCall: ToolCall,
-  options?: { includeName?: boolean },
+  options?: { includeName?: boolean; includeManagerAction?: boolean },
 ) {
   const includeName = options?.includeName ?? true;
+  const includeManagerAction = options?.includeManagerAction ?? true;
   const args = toolCall.arguments || {};
   const name = toolCall.name;
   const path = summarizeToolArg(args.path);
@@ -207,7 +208,9 @@ export function summarizeToolCall(
         ]
       : name === "SkillsManager"
         ? [
-            typeof args.action === "string" ? `action=${args.action}` : null,
+            includeManagerAction && typeof args.action === "string"
+              ? `action=${args.action}`
+              : null,
             path ? `path=${path}` : null,
             typeof args.offset === "number" ? `start=${args.offset + 1}` : null,
             typeof args.length === "number" ? `limit=${args.length}` : null,
@@ -215,9 +218,20 @@ export function summarizeToolCall(
             typeof args.name === "string" ? `name=${summarizeToolArg(args.name)}` : null,
             typeof args.conflict === "string" ? `conflict=${summarizeToolArg(args.conflict)}` : null,
         ]
+      : name === "CronTaskManager"
+        ? [
+            includeManagerAction && typeof args.action === "string"
+              ? `action=${args.action}`
+              : null,
+            typeof args.task_id === "string" ? `task=${summarizeToolArg(args.task_id)}` : null,
+            typeof args.name === "string" ? `name=${summarizeToolArg(args.name)}` : null,
+            typeof args.type === "string" ? `type=${summarizeToolArg(args.type)}` : null,
+          ]
       : name === "MemoryManager"
         ? [
-            typeof args.action === "string" ? `action=${args.action}` : null,
+            includeManagerAction && typeof args.action === "string"
+              ? `action=${args.action}`
+              : null,
             typeof args.slug === "string" ? `slug=${summarizeToolArg(args.slug)}` : null,
             typeof args.scope === "string" ? `scope=${summarizeToolArg(args.scope)}` : null,
             typeof args.type === "string" ? `type=${summarizeToolArg(args.type)}` : null,
@@ -225,12 +239,41 @@ export function summarizeToolCall(
         ]
       : name === "McpManager"
         ? [
-            typeof args.action === "string" ? `action=${args.action}` : null,
+            includeManagerAction && typeof args.action === "string"
+              ? `action=${args.action}`
+              : null,
             typeof args.server_id === "string" ? `server=${summarizeToolArg(args.server_id)}` : null,
             Array.isArray(args.server_ids) ? `servers=${args.server_ids.length}` : null,
             typeof args.conflict === "string" ? `conflict=${summarizeToolArg(args.conflict)}` : null,
             args.include_schema === true ? "includeSchema=true" : null,
           ]
+        : name === "TunnelManager"
+          ? [
+              includeManagerAction && typeof args.action === "string"
+                ? `action=${args.action}`
+                : null,
+              typeof args.targetUrl === "string"
+                ? `target=${summarizeToolArg(args.targetUrl)}`
+                : null,
+              typeof args.slug === "string" ? `slug=${summarizeToolArg(args.slug)}` : null,
+              typeof args.id === "string" ? `id=${summarizeToolArg(args.id)}` : null,
+            ]
+          : name === "SSHManager" || name === "SshManager"
+            ? [
+                includeManagerAction && typeof args.action === "string"
+                  ? `action=${args.action}`
+                  : null,
+                typeof args.host_id === "string"
+                  ? `host=${summarizeToolArg(args.host_id)}`
+                  : null,
+                typeof args.session_id === "string"
+                  ? `session=${summarizeToolArg(args.session_id)}`
+                  : null,
+                typeof args.path === "string" ? `path=${path}` : null,
+                typeof args.command === "string"
+                  ? `command=${summarizeToolArg(args.command)}`
+                  : null,
+              ]
         : name === "Agent"
           ? [
               typeof args.agent_id === "string" ? `agent=${summarizeToolArg(args.agent_id)}` : null,

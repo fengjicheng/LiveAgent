@@ -3,6 +3,7 @@ import type { ImageContent, ToolResultMessage, Usage } from "../../lib/agentType
 import {
   Bot,
   Brain,
+  Clock3,
   ChevronRight,
   Eye,
   ImageIcon,
@@ -11,6 +12,7 @@ import {
   FilePenLine,
   FolderTree,
   Loader2,
+  Link2,
   Plug,
   Search,
   Server,
@@ -488,8 +490,10 @@ function getToolMeta(name: string): { Icon: IconComponent; accent: string; categ
     case "Read":   return { Icon: Eye,         accent: "var(--tool-file-accent)",   category: "file" };
     case "Image":  return { Icon: ImageIcon,   accent: "var(--tool-file-accent)",   category: "file" };
     case "SkillsManager": return { Icon: Eye,  accent: "var(--tool-file-accent)",   category: "file" };
+    case "CronTaskManager": return { Icon: Clock3, accent: "var(--tool-list-accent)", category: "system" };
     case "MemoryManager": return { Icon: Brain, accent: "var(--tool-list-accent)",   category: "system" };
     case "McpManager": return { Icon: Plug,     accent: "var(--tool-list-accent)",   category: "mcp" };
+    case "TunnelManager": return { Icon: Link2, accent: "var(--tool-list-accent)", category: "system" };
     case "SSHManager":
     case "SshManager": return { Icon: Server,   accent: "var(--tool-bash-accent)",   category: "terminal" };
     case "Agent":  return { Icon: Bot,         accent: "var(--tool-list-accent)",   category: "system" };
@@ -665,6 +669,39 @@ function isAgentToolName(name: string) {
 function getToolDisplayName(name: string) {
   if (name === "SshManager") return "SSHManager";
   return name;
+}
+
+const TOOL_CARD_ACTION_NAMES = new Set([
+  "SkillsManager",
+  "CronTaskManager",
+  "McpManager",
+  "MemoryManager",
+  "TunnelManager",
+  "SSHManager",
+]);
+
+function getManagerToolActionName(toolCall: {
+  name: string;
+  arguments?: Record<string, unknown>;
+}) {
+  const name = getToolDisplayName(toolCall.name);
+  if (!TOOL_CARD_ACTION_NAMES.has(name)) return "";
+  const args = toolCall.arguments || {};
+  const action = displayString(args.action);
+  if (action) return action;
+  if (name === "SkillsManager") {
+    return displayString(args.path) ? "read" : "list";
+  }
+  return "";
+}
+
+function getToolDisplayTitle(toolCall: {
+  name: string;
+  arguments?: Record<string, unknown>;
+}) {
+  const name = getToolDisplayName(toolCall.name);
+  const action = getManagerToolActionName(toolCall);
+  return { name, action };
 }
 
 function groupRoundBlocks(blocks: UiRound["blocks"]): GroupedRoundBlock[] {
@@ -2355,6 +2392,7 @@ function isBuiltinShareToolName(name: string) {
     "SkillsManager",
     "SSHManager",
     "SshManager",
+    "TunnelManager",
     "Write",
   ].includes(trimmed);
 }
@@ -2393,9 +2431,15 @@ function ToolCallItem({
     ? ""
     : isDelegateAgentCard
       ? getDelegateAgentInlineSummary(item)
-      : summarizeToolCall(item.toolCall, { includeName: false });
+      : summarizeToolCall(item.toolCall, {
+          includeName: false,
+          includeManagerAction: false,
+        });
   const meta = getToolMeta(item.toolCall.name);
   const ToolIcon = meta.Icon;
+  const title = isRedactedToolContent
+    ? { name: getToolDisplayName(item.toolCall.name), action: "" }
+    : getToolDisplayTitle(item.toolCall);
 
   const dotClass = isRunning
     ? "bg-[hsl(var(--chat-running))] animate-pulse"
@@ -2449,7 +2493,13 @@ function ToolCallItem({
 
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
         <span className="shrink-0 text-[12.5px] font-semibold tracking-[-0.01em] text-foreground/90">
-          {getToolDisplayName(item.toolCall.name)}
+          {title.name}
+          {title.action ? (
+            <span className="font-mono font-semibold text-muted-foreground/70">
+              {" · "}
+              {title.action}
+            </span>
+          ) : null}
         </span>
 
         {isBash && firstLine ? (
