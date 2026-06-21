@@ -202,7 +202,7 @@ export function WindowsTitleBar({ appUpdate }: { appUpdate?: AppUpdateController
         aria-label={t("window.controls")}
       >
         {appUpdate ? (
-          <AppUpdateButton appUpdate={appUpdate} className="my-1" />
+          <AppUpdateButton appUpdate={appUpdate} className="my-1 mr-1.5" />
         ) : null}
         <button
           type="button"
