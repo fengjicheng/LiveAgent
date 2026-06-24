@@ -1641,6 +1641,35 @@ test("omitEquivalentTailEntries removes live user and assistant overlap", () => 
   );
 });
 
+test("omitEquivalentTailEntries removes uploaded live user overlap", () => {
+  const historyAttachment = {
+    relativePath: ".liveagent/uploads/08-conclusion.png",
+    fileName: "08-conclusion.png",
+    kind: "image",
+    sizeBytes: 58368,
+    absolutePath: "/workspace/.liveagent/uploads/08-conclusion.png",
+  };
+  const liveAttachment = {
+    relativePath: ".liveagent/uploads/08-conclusion.png",
+    absolutePath: "/workspace/.liveagent/uploads/08-conclusion.png",
+    fileName: "08-conclusion.png",
+    kind: "image",
+    sizeBytes: 58368,
+  };
+  const existing = [
+    { id: "history-user-1", kind: "user", text: "这是什么", attachments: [historyAttachment] },
+    { id: "history-assistant-1", kind: "assistant", text: "reply", round: 1 },
+  ];
+  const liveEntries = [
+    { id: "live-user-1", kind: "user", text: "这是什么", attachments: [liveAttachment] },
+    { id: "live-assistant-1", kind: "assistant", text: "reply", round: 1 },
+  ];
+
+  const visibleHistory = liveCommit.omitEquivalentTailEntries(existing, liveEntries);
+
+  assert.deepEqual(visibleHistory, []);
+});
+
 test("appendCommittedLiveEntries does not duplicate optimistic user message overlaps", () => {
   const existing = [
     { id: "history-user-1", kind: "user", text: "first", attachments: [] },
@@ -1659,6 +1688,50 @@ test("appendCommittedLiveEntries does not duplicate optimistic user message over
   );
   assert.equal(merged[1].id, "optimistic-user-2");
   assert.equal(merged[2].kind, "assistant");
+});
+
+test("appendCommittedLiveEntries does not duplicate uploaded optimistic user overlaps", () => {
+  const existing = [
+    {
+      id: "optimistic-user-1",
+      kind: "user",
+      text: "这是什么",
+      attachments: [
+        {
+          relativePath: ".liveagent/uploads/08-conclusion.png",
+          fileName: "08-conclusion.png",
+          kind: "image",
+          sizeBytes: 58368,
+          absolutePath: "/workspace/.liveagent/uploads/08-conclusion.png",
+        },
+      ],
+    },
+  ];
+  const liveEntries = [
+    {
+      id: "live-user-1",
+      kind: "user",
+      text: "这是什么",
+      attachments: [
+        {
+          relativePath: ".liveagent/uploads/08-conclusion.png",
+          absolutePath: "/workspace/.liveagent/uploads/08-conclusion.png",
+          fileName: "08-conclusion.png",
+          kind: "image",
+          sizeBytes: 58368,
+        },
+      ],
+    },
+    { id: "live-assistant-1", kind: "assistant", text: "reply", round: 1 },
+  ];
+
+  const merged = liveCommit.appendCommittedLiveEntries(existing, liveEntries);
+
+  assert.deepEqual(
+    merged.map((entry) => entry.text),
+    ["这是什么", "reply"],
+  );
+  assert.equal(merged[0].id, "optimistic-user-1");
 });
 
 test("mergeHistorySnapshotEntries replaces stale local entries when an authoritative snapshot is shorter", () => {

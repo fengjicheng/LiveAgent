@@ -1,4 +1,5 @@
 import type { ChatEntry } from "./chatUi";
+import { normalizeUploadedFileForDisplayComparison } from "./chat/uploadedFiles";
 
 function cloneValue<T>(value: T): T {
   if (value == null) {
@@ -42,8 +43,13 @@ function buildVisualComparableEntry(entry: ChatEntry) {
     // post-stream history refresh would replace every user entry with a fresh
     // id, all article keys would change, and the `chat-bubble-enter`
     // animation would re-run for every user bubble at once).
-    const { messageRef: _messageRef, ...rest } = comparable;
-    return rest;
+    const { messageRef: _messageRef, attachments, ...rest } = comparable;
+    return {
+      ...rest,
+      attachments: Array.isArray(attachments)
+        ? attachments.map(normalizeUploadedFileForDisplayComparison)
+        : [],
+    };
   }
   return comparable;
 }

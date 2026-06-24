@@ -5,6 +5,7 @@ import {
   getUserMessageAttachments,
   getUserMessageDisplayText,
   type PendingUploadedFile,
+  uploadedFilesVisuallyEqual,
 } from "@/lib/chat/uploadedFiles";
 
 import {
@@ -246,13 +247,30 @@ function normalizeLiveUploadedFile(value: unknown): PendingUploadedFile | null {
     return null;
   }
   const absolutePath = readString(record.absolutePath ?? record.absolute_path).trim();
-  return {
+  const file: PendingUploadedFile = {
     relativePath,
     absolutePath: absolutePath || undefined,
     fileName,
     kind: kind as PendingUploadedFile["kind"],
     sizeBytes: Math.max(0, Math.floor(sizeBytes)),
   };
+  const displayMode = readString(record.displayMode ?? record.display_mode).trim();
+  if (displayMode === "largePaste") {
+    file.displayMode = "largePaste";
+  }
+  const displayLabel = readString(record.displayLabel ?? record.display_label).trim();
+  if (displayLabel) {
+    file.displayLabel = displayLabel;
+  }
+  const displayCharCount = readNumber(record.displayCharCount ?? record.display_char_count);
+  if (typeof displayCharCount === "number") {
+    file.displayCharCount = Math.max(0, Math.floor(displayCharCount));
+  }
+  const displayLineCount = readNumber(record.displayLineCount ?? record.display_line_count);
+  if (typeof displayLineCount === "number") {
+    file.displayLineCount = Math.max(0, Math.floor(displayLineCount));
+  }
+  return file;
 }
 
 function normalizeLiveUploadedFiles(value: unknown): PendingUploadedFile[] {
@@ -272,7 +290,7 @@ function liveUserEntryMatches(
   return (
     entry?.kind === "user" &&
     entry.text === text &&
-    JSON.stringify(entry.attachments) === JSON.stringify(attachments)
+    uploadedFilesVisuallyEqual(entry.attachments, attachments)
   );
 }
 

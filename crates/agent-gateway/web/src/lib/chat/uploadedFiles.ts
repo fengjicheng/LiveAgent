@@ -223,6 +223,37 @@ export function getUserMessageAttachments(
   });
 }
 
+export function normalizeUploadedFileForDisplayComparison(file: PendingUploadedFile) {
+  return {
+    relativePath: file.relativePath,
+    absolutePath: file.absolutePath || "",
+    fileName: file.fileName,
+    kind: file.kind,
+    sizeBytes: Number.isFinite(file.sizeBytes) ? Math.max(0, Math.floor(file.sizeBytes)) : 0,
+    displayMode: file.displayMode || "",
+    displayLabel: file.displayLabel || "",
+    displayCharCount:
+      typeof file.displayCharCount === "number" && Number.isFinite(file.displayCharCount)
+        ? Math.max(0, Math.floor(file.displayCharCount))
+        : 0,
+    displayLineCount:
+      typeof file.displayLineCount === "number" && Number.isFinite(file.displayLineCount)
+        ? Math.max(0, Math.floor(file.displayLineCount))
+        : 0,
+  };
+}
+
+function uploadedFilesDisplayKey(files: readonly PendingUploadedFile[]) {
+  return JSON.stringify(files.map(normalizeUploadedFileForDisplayComparison));
+}
+
+export function uploadedFilesVisuallyEqual(
+  left: readonly PendingUploadedFile[],
+  right: readonly PendingUploadedFile[],
+) {
+  return uploadedFilesDisplayKey(left) === uploadedFilesDisplayKey(right);
+}
+
 export function stripUploadedFilesMessageMetadata(message: Message): Message {
   if (message.role !== "user") return message;
   const userMessage = message as Message & Record<string, unknown>;

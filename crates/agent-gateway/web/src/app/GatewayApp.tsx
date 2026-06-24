@@ -466,7 +466,6 @@ export default function GatewayApp() {
     executionMode: settings.system.executionMode,
     conversationId,
     selectedHistoryId,
-    chatBusyRef,
     displayedConversationWorkdirRef,
     composerRef,
     setChatError,
@@ -5056,7 +5055,7 @@ export default function GatewayApp() {
         messages: buildPreviewMessages(current.messages),
       }));
 
-      try {
+      const hydrateEditPrefix = async () => {
         const detail = await api.getHistoryPrefix(activeConversationId, messageRef, {
           maxMessages: HISTORY_DETAIL_INITIAL_MAX_MESSAGES,
         });
@@ -5067,18 +5066,21 @@ export default function GatewayApp() {
         if (!isCurrentEditTransaction()) {
           return;
         }
-        const nextRuntime = createConversationRuntimeEntry({
-          messages: [...entries, optimisticEditUserEntry],
-          error: null,
-          toolStatus: null,
-          toolStatusIsCompaction: false,
-          isSending: false,
-        });
 
         setSelectedHistory(detail);
         setSelectedHistoryEntries(entries);
-        conversationRuntimeCacheRef.current.set(activeConversationId, nextRuntime);
-        syncVisibleConversationRuntime(activeConversationId, nextRuntime);
+        updateConversationRuntimeEntry(activeConversationId, (current) => {
+          if (
+            !current.isSending &&
+            !localRunningConversationIdsRef.current.has(activeConversationId)
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            messages: [...entries, optimisticEditUserEntry],
+          };
+        });
 
         const truncatedConversation = detail.conversation;
         if (truncatedConversation) {
@@ -5086,7 +5088,15 @@ export default function GatewayApp() {
             upsertConversationSummary(current, truncatedConversation),
           );
         }
+      };
 
+      void hydrateEditPrefix().catch((error) => {
+        if (isCurrentEditTransaction()) {
+          console.warn("edit resend history prefix hydration failed", error);
+        }
+      });
+
+      try {
         const resendPromise =
           sendChatRef.current?.(normalized, {
             conversationId: activeConversationId,
@@ -5104,7 +5114,7 @@ export default function GatewayApp() {
           });
         }
       } catch (error) {
-        const message = asErrorMessage(error, "回溯历史消息失败");
+        const message = asErrorMessage(error, "编辑后重发失败");
         setChatError(message);
         updateConversationRuntimeEntry(activeConversationId, (current) => ({
           ...current,
@@ -5131,7 +5141,6 @@ export default function GatewayApp() {
       invalidateHistoryLoad,
       markVisibleConversationRevision,
       refreshVisibleConversationHistorySnapshot,
-      syncVisibleConversationRuntime,
       updateHistoryItems,
       updateConversationRuntimeEntry,
     ],
@@ -5739,7 +5748,6 @@ export default function GatewayApp() {
     status?.online === true &&
     isAgentMode &&
     Boolean(displayedConversationWorkdir.trim()) &&
-    !composerIsSending &&
     !isUploadingFiles &&
     !composerInputDisabled;
   const fileDropTitle = canDropUpload
