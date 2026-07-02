@@ -4,7 +4,7 @@ import { createWebModuleLoader } from "../helpers/load-web-module.mjs";
 
 const loader = createWebModuleLoader();
 const { ChatCommandPipeline } = loader.loadModule("src/lib/chat/stream/chatCommandPipeline.ts");
-const { createTranscriptStore } = loader.loadModule("src/lib/chat/stream/transcriptStore.ts");
+const { createTranscriptStore } = loader.loadModule("src/lib/chat/transcript/transcriptStore.ts");
 
 function createHarness() {
   const stores = new Map();
@@ -31,9 +31,21 @@ function createHarness() {
   return { pipeline, stores, outcomes };
 }
 
+function rowText(row) {
+  if (row.kind === "assistant") {
+    return row.rounds
+      .map((round) =>
+        round.blocks.flatMap((block) => (block.kind === "text" ? [block.text] : [])).join(""),
+      )
+      .join("\n");
+  }
+  return row.text ?? "";
+}
+
+// Live-flow texts (the region the old snapshot exposed as `tail`).
 function tailTexts(store) {
   store.flush();
-  return store.getSnapshot().tail.map((entry) => entry.text ?? "");
+  return store.getSnapshot().liveRows.map((row) => rowText(row));
 }
 
 test("submit inserts the optimistic bubble and resolves the accepted run", async () => {

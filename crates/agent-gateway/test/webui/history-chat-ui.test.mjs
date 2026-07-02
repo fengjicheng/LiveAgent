@@ -5,10 +5,28 @@ import { createWebModuleLoader } from "../helpers/load-web-module.mjs";
 const loader = createWebModuleLoader();
 const historySync = loader.loadModule("src/lib/historySync.ts");
 const chatUi = loader.loadModule("src/lib/chatUi.ts");
-const transcriptStoreModule = loader.loadModule("src/lib/chat/stream/transcriptStore.ts");
+const transcriptStoreModule = loader.loadModule("src/lib/chat/transcript/transcriptStore.ts");
+const { createTurn, applyEventToTurn } = loader.loadModule(
+  "src/lib/chat/transcript/turnReducer.ts",
+);
+const { buildRowsFromEntries } = loader.loadModule("src/lib/chat/transcript/rows.ts");
 const historyShare = loader.loadModule("src/lib/historyShare.ts");
 const requestContextSanitizer = loader.loadModule("src/lib/chat/requestContextSanitizer.ts");
 const conversationState = loader.loadModule("src/lib/chat/conversationState.ts");
+
+// Live-stream reducer harness: the createTurn/applyEventToTurn pair replaces
+// the old flat pushChatEvent pipeline — one Turn holds a single run's entries.
+function reduceTurnEvents(events) {
+  let turn = createTurn({ key: "req:test", runId: "run-test" });
+  for (const event of events) {
+    turn = applyEventToTurn(turn, event);
+  }
+  return turn;
+}
+
+function findAssistantRow(rows) {
+  return rows.find((row) => row.kind === "assistant");
+}
 
 test("history share helpers parse and build share URLs", () => {
   assert.equal(historyShare.parseHistoryShareToken("/share/abc123"), "abc123");
@@ -533,8 +551,7 @@ test("parseHistoryMessagesJson preserves provider tool_use input arguments", () 
     },
   ]));
 
-  const transcript = chatUi.buildTranscriptItems(entries);
-  const assistant = transcript.find((entry) => entry.kind === "assistant");
+  const assistant = findAssistantRow(buildRowsFromEntries(entries, "history"));
   const toolBlock = assistant.rounds[0].blocks.find((block) => block.kind === "tool");
 
   assert.ok(toolBlock);
@@ -654,8 +671,7 @@ test("WebUI transcript strips leaked DSML tool call markup from text and thinkin
       ],
     },
   ]));
-  const transcript = chatUi.buildTranscriptItems(entries);
-  const assistant = transcript.find((entry) => entry.kind === "assistant");
+  const assistant = findAssistantRow(buildRowsFromEntries(entries, "history"));
   const round = assistant.rounds[0];
   const allText = JSON.stringify(round.blocks);
 
@@ -701,8 +717,7 @@ test("WebUI transcript hides provider-native web_search tool traces when hosted 
     },
   ]));
 
-  const transcript = chatUi.buildTranscriptItems(entries);
-  const assistant = transcript.find((entry) => entry.kind === "assistant");
+  const assistant = findAssistantRow(buildRowsFromEntries(entries, "history"));
   const round = assistant.rounds[0];
 
   assert.equal(round.blocks.some((block) => block.kind === "tool"), false);
@@ -710,8 +725,8 @@ test("WebUI transcript hides provider-native web_search tool traces when hosted 
 });
 
 test("WebUI live transcript removes provider-native web_search when hosted search arrives later", () => {
-  let entries = [];
-  entries = chatUi.pushChatEvent(entries, {
+  let turn = createTurn({ key: "req:test", runId: "run-test" });
+  turn = applyEventToTurn(turn, {
     type: "tool_call",
     id: "call_00_webui_search",
     name: "web_search",
@@ -719,10 +734,10 @@ test("WebUI live transcript removes provider-native web_search when hosted searc
     round: 1,
   });
 
-  let assistant = chatUi.buildTranscriptItems(entries).find((entry) => entry.kind === "assistant");
+  let assistant = findAssistantRow(buildRowsFromEntries(turn.entries, "stream"));
   assert.equal(assistant.rounds[0].blocks.some((block) => block.kind === "tool"), true);
 
-  entries = chatUi.pushChatEvent(entries, {
+  turn = applyEventToTurn(turn, {
     type: "hosted_search",
     id: "hosted-search-live",
     provider: "claude_code",
@@ -732,7 +747,7 @@ test("WebUI live transcript removes provider-native web_search when hosted searc
     round: 1,
   });
 
-  assistant = chatUi.buildTranscriptItems(entries).find((entry) => entry.kind === "assistant");
+  assistant = findAssistantRow(buildRowsFromEntries(turn.entries, "stream"));
   const round = assistant.rounds[0];
 
   assert.equal(round.blocks.some((block) => block.kind === "tool"), false);
@@ -741,53 +756,54 @@ test("WebUI live transcript removes provider-native web_search when hosted searc
 });
 
 test("WebUI live transcript hides recovered provider-native web_search results without hosted search", () => {
-  let entries = [];
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_call",
-    id: "call_00_webui_recovered_search",
-    name: "WebSearch",
-    arguments: { query: "LiveAgent recovered search" },
-    round: 1,
-  });
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_result",
-    id: "call_00_webui_recovered_search",
-    name: "WebSearch",
-    content: [{ type: "text", text: "Recovered provider-native web search." }],
-    details: { recoveredProviderNativeWebSearch: true },
-    isError: false,
-    round: 1,
-  });
+  const turn = reduceTurnEvents([
+    {
+      type: "tool_call",
+      id: "call_00_webui_recovered_search",
+      name: "WebSearch",
+      arguments: { query: "LiveAgent recovered search" },
+      round: 1,
+    },
+    {
+      type: "tool_result",
+      id: "call_00_webui_recovered_search",
+      name: "WebSearch",
+      content: [{ type: "text", text: "Recovered provider-native web search." }],
+      details: { recoveredProviderNativeWebSearch: true },
+      isError: false,
+      round: 1,
+    },
+  ]);
 
-  const transcript = chatUi.buildTranscriptItems(entries);
-  const assistant = transcript.find((entry) => entry.kind === "assistant");
-  const round = assistant.rounds[0];
-
-  assert.equal(round.blocks.some((block) => block.kind === "tool"), false);
-  assert.deepEqual(round.runningToolCallIds, []);
+  // The recovered result hides the whole trace; with nothing else in the
+  // round the content gate drops it entirely — no avatar-only assistant row
+  // (stronger than the old "row without tool blocks" rendering).
+  const rows = buildRowsFromEntries(turn.entries, "stream");
+  assert.equal(findAssistantRow(rows), undefined, "fully hidden trace renders no assistant row");
+  assert.equal(rows.length, 0);
 });
 
 test("WebUI live transcript hides recovered DSML provider-native web_search calls immediately", () => {
-  let entries = [];
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_call",
-    id: "dsml-tool-call-webui-live-search",
-    name: "builtin_web_search",
-    arguments: { query: "LiveAgent DSML hidden search" },
-    round: 1,
-  });
+  const turn = reduceTurnEvents([
+    {
+      type: "tool_call",
+      id: "dsml-tool-call-webui-live-search",
+      name: "builtin_web_search",
+      arguments: { query: "LiveAgent DSML hidden search" },
+      round: 1,
+    },
+  ]);
 
-  const transcript = chatUi.buildTranscriptItems(entries);
-  const assistant = transcript.find((entry) => entry.kind === "assistant");
-  const round = assistant.rounds[0];
-
-  assert.equal(round.blocks.some((block) => block.kind === "tool"), false);
-  assert.deepEqual(round.runningToolCallIds, []);
+  // The DSML-recovered call is hidden immediately; the content-less round is
+  // dropped so no assistant row (avatar) can appear for it.
+  const rows = buildRowsFromEntries(turn.entries, "stream");
+  assert.equal(findAssistantRow(rows), undefined, "fully hidden call renders no assistant row");
+  assert.equal(rows.length, 0);
 });
 
-test("pushChatEvent appends streaming text, dedupes tool cards, and dedupes compaction checkpoints", () => {
-  let entries = [];
-  entries = chatUi.pushChatEvent(entries, {
+test("turn reducer appends streaming text, dedupes tool cards, and dedupes compaction checkpoints", () => {
+  let turn = createTurn({ key: "req:test", runId: "run-test" });
+  turn = applyEventToTurn(turn, {
     type: "token",
     text: "hello ",
     round: 1,
@@ -795,16 +811,16 @@ test("pushChatEvent appends streaming text, dedupes tool cards, and dedupes comp
     model: "gpt-test",
     usage: { totalTokens: 12 },
   });
-  entries = chatUi.pushChatEvent(entries, { type: "token", text: "world", round: 1 });
-  assert.equal(entries.length, 1);
-  assert.equal(entries[0].kind, "assistant");
-  assert.equal(entries[0].text, "hello world");
-  assert.equal(entries[0].meta.usageTotalTokens, 12);
+  turn = applyEventToTurn(turn, { type: "token", text: "world", round: 1 });
+  assert.equal(turn.entries.length, 1);
+  assert.equal(turn.entries[0].kind, "assistant");
+  assert.equal(turn.entries[0].text, "hello world");
+  assert.equal(turn.entries[0].meta.usageTotalTokens, 12);
 
   const toolCall = { type: "tool_call", id: "call-1", name: "Read", arguments: { path: "README.md" }, round: 1 };
-  entries = chatUi.pushChatEvent(entries, toolCall);
-  entries = chatUi.pushChatEvent(entries, toolCall);
-  assert.equal(entries.filter((entry) => entry.kind === "tool_call").length, 1);
+  turn = applyEventToTurn(turn, toolCall);
+  turn = applyEventToTurn(turn, toolCall);
+  assert.equal(turn.entries.filter((entry) => entry.kind === "tool_call").length, 1);
 
   const checkpoint = {
     type: "token",
@@ -815,53 +831,54 @@ test("pushChatEvent appends streaming text, dedupes tool cards, and dedupes comp
       generatedBy: { providerId: "liveagent", model: "summary" },
     },
   };
-  entries = chatUi.pushChatEvent(entries, checkpoint);
-  entries = chatUi.pushChatEvent(entries, checkpoint);
-  assert.equal(entries.filter((entry) => entry.kind === "checkpoint").length, 1);
+  turn = applyEventToTurn(turn, checkpoint);
+  turn = applyEventToTurn(turn, checkpoint);
+  assert.equal(turn.entries.filter((entry) => entry.kind === "checkpoint").length, 1);
 });
 
-test("pushChatEvent preserves tool call arguments from JSON string and input aliases", () => {
-  let entries = [];
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_call",
-    id: "bash-call",
-    name: "Bash",
-    arguments: JSON.stringify({
-      command: "echo gateway",
-      cwd: "crates/agent-gateway",
-      root: "workspace",
-    }),
-    round: 1,
-  });
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_call",
-    id: "read-call",
-    name: "Read",
-    input: {
-      path: "README.md",
-      root: "workspace",
+test("turn reducer preserves tool call arguments from JSON string and input aliases", () => {
+  const turn = reduceTurnEvents([
+    {
+      type: "tool_call",
+      id: "bash-call",
+      name: "Bash",
+      arguments: JSON.stringify({
+        command: "echo gateway",
+        cwd: "crates/agent-gateway",
+        root: "workspace",
+      }),
+      round: 1,
     },
-    round: 1,
-  });
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_call",
-    data: JSON.stringify({
-      id: "glob-call",
-      name: "Glob",
-      args: {
-        pattern: "**/*.ts",
-        path: "src",
+    {
+      type: "tool_call",
+      id: "read-call",
+      name: "Read",
+      input: {
+        path: "README.md",
         root: "workspace",
       },
-    }),
-    round: 1,
-  });
+      round: 1,
+    },
+    {
+      type: "tool_call",
+      data: JSON.stringify({
+        id: "glob-call",
+        name: "Glob",
+        args: {
+          pattern: "**/*.ts",
+          path: "src",
+          root: "workspace",
+        },
+      }),
+      round: 1,
+    },
+  ]);
+  const entries = turn.entries;
 
   const bashCall = entries.find((entry) => entry.kind === "tool_call" && entry.toolCall.id === "bash-call");
   const readCall = entries.find((entry) => entry.kind === "tool_call" && entry.toolCall.id === "read-call");
   const globCall = entries.find((entry) => entry.kind === "tool_call" && entry.toolCall.id === "glob-call");
-  const transcript = chatUi.buildTranscriptItems(entries);
-  const assistant = transcript.find((entry) => entry.kind === "assistant");
+  const assistant = findAssistantRow(buildRowsFromEntries(entries, "stream"));
   const toolBlocks = assistant.rounds[0].blocks.filter((block) => block.kind === "tool");
 
   assert.ok(bashCall);
@@ -876,29 +893,30 @@ test("pushChatEvent preserves tool call arguments from JSON string and input ali
   assert.equal(toolBlocks[2].item.toolCall.arguments.pattern, "**/*.ts");
 });
 
-test("pushChatEvent reconstructs a parameterized tool card from tool_result arguments", () => {
-  let entries = [];
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_result",
-    id: "bash-result-only",
-    name: "Bash",
-    arguments: {
-      command: "printf live",
-      cwd: "crates/agent-gateway",
-      root: "workspace",
+test("turn reducer reconstructs a parameterized tool card from tool_result arguments", () => {
+  const turn = reduceTurnEvents([
+    {
+      type: "tool_result",
+      id: "bash-result-only",
+      name: "Bash",
+      arguments: {
+        command: "printf live",
+        cwd: "crates/agent-gateway",
+        root: "workspace",
+      },
+      content: [{ type: "text", text: "live" }],
+      isError: false,
+      round: 1,
     },
-    content: [{ type: "text", text: "live" }],
-    isError: false,
-    round: 1,
-  });
+  ]);
+  const entries = turn.entries;
 
   assert.equal(entries.length, 2);
   assert.equal(entries[0].kind, "tool_call");
   assert.equal(entries[0].toolCall.arguments.command, "printf live");
   assert.equal(entries[1].kind, "tool_result");
 
-  const transcript = chatUi.buildTranscriptItems(entries);
-  const assistant = transcript.find((entry) => entry.kind === "assistant");
+  const assistant = findAssistantRow(buildRowsFromEntries(entries, "stream"));
   const toolBlock = assistant.rounds[0].blocks.find((block) => block.kind === "tool");
 
   assert.ok(toolBlock);
@@ -907,36 +925,36 @@ test("pushChatEvent reconstructs a parameterized tool card from tool_result argu
   assert.equal(toolBlock.item.toolResult.content[0].text, "live");
 });
 
-test("pushChatEvent does not duplicate tool cards when tool_call precedes parameterized tool_result", () => {
-  let entries = [];
+test("turn reducer does not duplicate tool cards when tool_call precedes parameterized tool_result", () => {
   const toolArguments = {
     command: "printf once",
     cwd: "crates/agent-gateway",
     root: "workspace",
   };
-
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_call",
-    id: "bash-no-duplicate",
-    name: "Bash",
-    arguments: toolArguments,
-    round: 1,
-  });
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_result",
-    id: "bash-no-duplicate",
-    name: "Bash",
-    arguments: toolArguments,
-    content: [{ type: "text", text: "once" }],
-    isError: false,
-    round: 1,
-  });
+  const turn = reduceTurnEvents([
+    {
+      type: "tool_call",
+      id: "bash-no-duplicate",
+      name: "Bash",
+      arguments: toolArguments,
+      round: 1,
+    },
+    {
+      type: "tool_result",
+      id: "bash-no-duplicate",
+      name: "Bash",
+      arguments: toolArguments,
+      content: [{ type: "text", text: "once" }],
+      isError: false,
+      round: 1,
+    },
+  ]);
+  const entries = turn.entries;
 
   assert.equal(entries.filter((entry) => entry.kind === "tool_call").length, 1);
   assert.equal(entries.filter((entry) => entry.kind === "tool_result").length, 1);
 
-  const transcript = chatUi.buildTranscriptItems(entries);
-  const assistant = transcript.find((entry) => entry.kind === "assistant");
+  const assistant = findAssistantRow(buildRowsFromEntries(entries, "stream"));
   const toolBlocks = assistant.rounds[0].blocks.filter((block) => block.kind === "tool");
 
   assert.equal(toolBlocks.length, 1);
@@ -944,59 +962,62 @@ test("pushChatEvent does not duplicate tool cards when tool_call precedes parame
   assert.equal(toolBlocks[0].item.toolResult.content[0].text, "once");
 });
 
-test("pushChatEvent upgrades an existing live tool card when execution start carries arguments", () => {
-  let entries = [];
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_call",
-    id: "bash-late-args",
-    name: "Bash",
-    round: 1,
-  });
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_call",
-    id: "bash-late-args",
-    name: "Bash",
-    arguments: {
-      command: "printf from-start",
-      cwd: "crates/agent-gateway",
-      root: "workspace",
+test("turn reducer upgrades an existing live tool card when execution start carries arguments", () => {
+  const turn = reduceTurnEvents([
+    {
+      type: "tool_call",
+      id: "bash-late-args",
+      name: "Bash",
+      round: 1,
     },
-    round: 1,
-  });
+    {
+      type: "tool_call",
+      id: "bash-late-args",
+      name: "Bash",
+      arguments: {
+        command: "printf from-start",
+        cwd: "crates/agent-gateway",
+        root: "workspace",
+      },
+      round: 1,
+    },
+  ]);
+  const entries = turn.entries;
 
   assert.equal(entries.filter((entry) => entry.kind === "tool_call").length, 1);
   assert.equal(entries[0].toolCall.arguments.command, "printf from-start");
   assert.match(entries[0].summary, /command=printf from-start/);
 });
 
-test("pushChatEvent upgrades an existing live tool card when tool_result carries arguments", () => {
-  let entries = [];
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_call",
-    id: "bash-result-args",
-    name: "Bash",
-    round: 1,
-  });
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_result",
-    id: "bash-result-args",
-    name: "Bash",
-    arguments: {
-      command: "printf from-result",
-      cwd: "crates/agent-gateway",
-      root: "workspace",
+test("turn reducer upgrades an existing live tool card when tool_result carries arguments", () => {
+  const turn = reduceTurnEvents([
+    {
+      type: "tool_call",
+      id: "bash-result-args",
+      name: "Bash",
+      round: 1,
     },
-    content: [{ type: "text", text: "from-result" }],
-    isError: false,
-    round: 1,
-  });
+    {
+      type: "tool_result",
+      id: "bash-result-args",
+      name: "Bash",
+      arguments: {
+        command: "printf from-result",
+        cwd: "crates/agent-gateway",
+        root: "workspace",
+      },
+      content: [{ type: "text", text: "from-result" }],
+      isError: false,
+      round: 1,
+    },
+  ]);
+  const entries = turn.entries;
 
   assert.equal(entries.filter((entry) => entry.kind === "tool_call").length, 1);
   assert.equal(entries.filter((entry) => entry.kind === "tool_result").length, 1);
   assert.equal(entries[0].toolCall.arguments.command, "printf from-result");
 
-  const transcript = chatUi.buildTranscriptItems(entries);
-  const assistant = transcript.find((entry) => entry.kind === "assistant");
+  const assistant = findAssistantRow(buildRowsFromEntries(entries, "stream"));
   const toolBlock = assistant.rounds[0].blocks.find((block) => block.kind === "tool");
 
   assert.ok(toolBlock);
@@ -1004,35 +1025,37 @@ test("pushChatEvent upgrades an existing live tool card when tool_result carries
   assert.equal(toolBlock.item.toolResult.content[0].text, "from-result");
 });
 
-test("pushChatEvent keeps a deduped result while applying late result arguments", () => {
-  let entries = [];
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_call",
-    id: "bash-duplicate-result",
-    name: "Bash",
-    round: 1,
-  });
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_result",
-    id: "bash-duplicate-result",
-    name: "Bash",
-    content: [{ type: "text", text: "duplicate" }],
-    isError: false,
-    round: 1,
-  });
-  entries = chatUi.pushChatEvent(entries, {
-    type: "tool_result",
-    id: "bash-duplicate-result",
-    name: "Bash",
-    arguments: {
-      command: "printf duplicate",
-      cwd: "crates/agent-gateway",
-      root: "workspace",
+test("turn reducer keeps a deduped result while applying late result arguments", () => {
+  const turn = reduceTurnEvents([
+    {
+      type: "tool_call",
+      id: "bash-duplicate-result",
+      name: "Bash",
+      round: 1,
     },
-    content: [{ type: "text", text: "duplicate" }],
-    isError: false,
-    round: 1,
-  });
+    {
+      type: "tool_result",
+      id: "bash-duplicate-result",
+      name: "Bash",
+      content: [{ type: "text", text: "duplicate" }],
+      isError: false,
+      round: 1,
+    },
+    {
+      type: "tool_result",
+      id: "bash-duplicate-result",
+      name: "Bash",
+      arguments: {
+        command: "printf duplicate",
+        cwd: "crates/agent-gateway",
+        root: "workspace",
+      },
+      content: [{ type: "text", text: "duplicate" }],
+      isError: false,
+      round: 1,
+    },
+  ]);
+  const entries = turn.entries;
 
   assert.equal(entries.filter((entry) => entry.kind === "tool_call").length, 1);
   assert.equal(entries.filter((entry) => entry.kind === "tool_result").length, 1);
@@ -1115,7 +1138,7 @@ test("buildOptimisticConversationTitle uses the first ten characters of the firs
   assert.equal(chatUi.buildOptimisticConversationTitle("   \n\n  "), "新对话");
 });
 
-test("GatewayTranscript renders committed and tail regions from disjoint inputs", () => {
+test("GatewayTranscript renders folded and live regions as slices of one row list", () => {
   const fakeReact = {
     createContext(defaultValue) {
       return { defaultValue };
@@ -1188,34 +1211,84 @@ test("GatewayTranscript renders committed and tail regions from disjoint inputs"
   globalThis.window = undefined;
   globalThis.document = { visibilityState: "visible" };
 
-  // Tail entries carry a run-id prefix (live-born ids from the transcript
-  // store); committed entries came from parsed history.
-  const committed = [
-    { id: "user-1", kind: "user", text: "earlier question", attachments: [] },
-    { id: "assistant-1", kind: "assistant", text: "earlier answer", round: 1 },
-  ];
-  const tail = [
-    { id: "run-1/live-user-1", kind: "user", text: "queued from gui", attachments: [] },
-    { id: "run-1/live-assistant-1", kind: "assistant", text: "reply", round: 1 },
-  ];
+  // Folded rows come from parsed history; live rows are born from the
+  // stream (a seeded prompt plus its streaming reply). Both regions come
+  // from one store assembly: foldedRows + liveRows.
+  const store = transcriptStoreModule.createTranscriptStore();
+  store.applyHistorySnapshot(
+    [
+      { id: "hu:m1", kind: "user", text: "earlier question", attachments: [] },
+      { id: "ht:hu:m1>0", kind: "assistant", text: "earlier answer", round: 1 },
+    ],
+    { mode: "replace" },
+  );
+  store.applyEvent({
+    type: "user_message",
+    conversation_id: "conversation-1",
+    run_id: "run-1",
+    seq: 1,
+    message: "queued from gui",
+  });
+  store.applyEvent({
+    type: "run_started",
+    conversation_id: "conversation-1",
+    run_id: "run-1",
+    seq: 2,
+  });
+  store.applyEvent({
+    type: "token",
+    conversation_id: "conversation-1",
+    run_id: "run-1",
+    seq: 3,
+    text: "reply",
+  });
+  store.flush();
+  const snapshot = store.getSnapshot();
+  assert.equal(snapshot.foldedRows.length, 2, "history rows fold; the live exchange stays below");
+  assert.deepEqual(
+    [...snapshot.foldedRows, ...snapshot.liveRows].map((row) => row.kind),
+    ["user", "assistant", "user", "assistant"],
+  );
 
   const transcriptTree = GatewayTranscript({
     conversationId: "conversation-1",
-    entries: committed,
-    tailEntries: tail,
+    foldedRows: snapshot.foldedRows,
+    liveRows: snapshot.liveRows,
+    activeTurnKey: snapshot.activeTurnKey,
     isStreaming: true,
   });
-  const liveStateNode = findTreeNode(
+
+  const foldedRegionNode = findTreeNode(
     transcriptTree,
-    (node) => typeof node.type === "function" && Array.isArray(node.props?.tailEntries),
+    (node) =>
+      typeof node.type === "function" &&
+      Array.isArray(node.props?.rows) &&
+      node.props?.conversationId === "conversation-1",
   );
-  assert.ok(liveStateNode, "live region receives the tail entries");
+  assert.ok(foldedRegionNode, "virtualized region receives the folded rows");
   assert.deepEqual(
-    liveStateNode.props.tailEntries.map((entry) => entry.id),
-    ["run-1/live-user-1", "run-1/live-assistant-1"],
+    foldedRegionNode.props.rows.map((row) => row.key),
+    snapshot.foldedRows.map((row) => row.key),
   );
 
-  const liveTree = liveStateNode.type(liveStateNode.props);
+  const liveRegionNode = findTreeNode(
+    transcriptTree,
+    (node) =>
+      typeof node.type === "function" &&
+      Array.isArray(node.props?.rows) &&
+      node.props?.isAgentMode !== undefined,
+  );
+  assert.ok(liveRegionNode, "live region receives the rows past the fold boundary");
+  assert.deepEqual(
+    liveRegionNode.props.rows.map((row) => row.key),
+    snapshot.liveRows.map((row) => row.key),
+  );
+  assert.deepEqual(
+    liveRegionNode.props.rows.map((row) => row.kind),
+    ["user", "assistant"],
+  );
+
+  const liveTree = liveRegionNode.type(liveRegionNode.props);
   assert.ok(
     findTreeNode(
       liveTree,
@@ -1223,7 +1296,7 @@ test("GatewayTranscript renders committed and tail regions from disjoint inputs"
         typeof node.props?.className === "string" &&
         node.props.className.includes("gateway-transcript-row-user"),
     ),
-    "tail user bubble renders before the live assistant output",
+    "live user bubble renders before the live assistant output",
   );
   assert.ok(
     findTreeNode(
@@ -1235,37 +1308,59 @@ test("GatewayTranscript renders committed and tail regions from disjoint inputs"
     liveTree,
     (node) => typeof node.type === "function" && node.props?.renderMode !== undefined,
   );
-  assert.ok(assistantBubble, "tail assistant bubble rendered");
+  assert.ok(assistantBubble, "live assistant bubble rendered");
   assert.equal(
     assistantBubble.props.renderMode,
     "streaming",
-    "live-born entries keep the streaming render mode",
+    "live-born rows keep the streaming render mode",
   );
 });
 
-test("transcript store history snapshot merge stays quiet for identical content", () => {
+test("transcript store history refresh stays quiet for identical content", () => {
+  // The old pipeline kept a quiet refresh stable via text-hash dedup keys
+  // (renamed incoming ids were re-mapped onto the rendered ones). The new
+  // parser makes ids deterministic instead: reparsing the same persisted
+  // JSON yields identical ids, so an idle "enrich" refresh with unchanged
+  // content is a structural no-op — same snapshot, same row keys, and the
+  // exchange still renders exactly once.
   globalThis.window = undefined;
   globalThis.document = { visibilityState: "visible" };
   const store = transcriptStoreModule.createTranscriptStore();
 
-  store.applyHistorySnapshot([
-    { id: "user-1", kind: "user", text: "hello", attachments: [] },
-    { id: "assistant-1", kind: "assistant", text: "world", round: 1 },
+  const messagesJson = JSON.stringify([
+    { role: "user", content: "hello" },
+    { role: "assistant", content: "world" },
   ]);
+  const firstParse = chatUi.parseHistoryMessagesJson(messagesJson);
+  store.applyHistorySnapshot(firstParse, { mode: "replace" });
   store.flush();
   const first = store.getSnapshot();
-  assert.equal(first.committed.length, 2);
+  assert.deepEqual(
+    first.foldedRows.map((row) => row.kind),
+    ["user", "assistant"],
+  );
+  assert.equal(first.liveRows.length, 0, "history renders in the folded region");
 
-  // The quiet upsert merge preserves rendered ids even when the incoming
-  // parse assigned fresh ones (dedup key identity, not id identity).
-  store.applyHistorySnapshot([
-    { id: "user-renamed", kind: "user", text: "hello", attachments: [] },
-    { id: "assistant-renamed", kind: "assistant", text: "world", round: 1 },
-  ]);
+  const secondParse = chatUi.parseHistoryMessagesJson(messagesJson);
+  assert.deepEqual(
+    secondParse.map((entry) => entry.id),
+    firstParse.map((entry) => entry.id),
+    "reparsing the same JSON yields identical deterministic ids",
+  );
+
+  // Idle quiet refresh with identical content: nothing re-renders.
+  store.applyHistorySnapshot(secondParse, { mode: "enrich" });
   store.flush();
   const second = store.getSnapshot();
+  assert.equal(second, first, "identical content leaves the snapshot untouched");
   assert.deepEqual(
-    second.committed.map((entry) => entry.id),
-    ["user-1", "assistant-1"],
+    second.foldedRows.map((row) => row.key),
+    first.foldedRows.map((row) => row.key),
+    "row keys are stable across the refresh",
+  );
+  assert.equal(
+    [...second.foldedRows, ...second.liveRows].filter((row) => row.kind === "user").length,
+    1,
+    "the exchange renders exactly once (no duplicate prompt)",
   );
 });

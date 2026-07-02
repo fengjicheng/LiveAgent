@@ -1,5 +1,5 @@
 import type { ChatCommandAccepted, ChatCommandUpdate } from "./streamTypes";
-import type { TranscriptStore } from "./transcriptStore";
+import type { TranscriptStore } from "../transcript/transcriptStore";
 
 // Command lifecycle for chat submissions from this client. The pipeline owns
 // the optimistic user echo and reacts to pre-stream outcomes

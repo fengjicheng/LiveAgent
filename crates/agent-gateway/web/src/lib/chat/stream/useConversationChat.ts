@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "r
 import type { GatewayWebSocketClientLike } from "@/lib/gatewaySocket";
 import type { ActivityStore } from "./activityStore";
 import type { ConversationStreamEvent, ConversationSubscribeResult } from "./streamTypes";
-import type { TranscriptSnapshot, TranscriptStore } from "./transcriptStore";
-import { createTranscriptStore } from "./transcriptStore";
+import type { TranscriptSnapshot, TranscriptStore } from "../transcript/transcriptStore";
+import { createTranscriptStore } from "../transcript/transcriptStore";
 
 // Registry of transcript stores, one per conversation. Stores persist across
 // conversation switches so revisiting a conversation keeps its tail state;
@@ -48,8 +48,10 @@ export function createTranscriptStoreRegistry(): TranscriptStoreRegistry {
 }
 
 const EMPTY_TRANSCRIPT: TranscriptSnapshot = {
-  committed: [],
-  tail: [],
+  foldedRows: [],
+  liveRows: [],
+  activeTurnKey: null,
+  entryCount: 0,
   activeRun: null,
   toolStatus: null,
   toolStatusIsCompaction: false,

@@ -734,15 +734,11 @@ export default function GatewayApp() {
     [lockHistoryTitlePosition, updateHistoryItems],
   );
 
-  // Committed + tail entry count of a conversation's transcript store.
+  // Total entry count of a conversation's transcript store.
   const getConversationTranscriptEntryCount = useCallback(
     (targetConversationId: string) => {
       const store = transcriptStoreRegistry.peek(targetConversationId.trim());
-      if (!store) {
-        return 0;
-      }
-      const snapshot = store.getSnapshot();
-      return snapshot.committed.length + snapshot.tail.length;
+      return store ? store.getSnapshot().entryCount : 0;
     },
     [transcriptStoreRegistry],
   );
@@ -854,7 +850,9 @@ export default function GatewayApp() {
         selectedHistoryRef.current = detail;
         setSelectedHistory(detail);
       }
-      transcriptStoreRegistry.get(conversationIdValue).applyHistorySnapshot(entries);
+      transcriptStoreRegistry
+        .get(conversationIdValue)
+        .applyHistorySnapshot(entries, { mode: "enrich" });
     },
     [api, getConversationTranscriptEntryCount, isConversationBusy, transcriptStoreRegistry],
   );
@@ -1716,9 +1714,9 @@ export default function GatewayApp() {
       pendingDisplayedConversationAutoBottomRef.current = conversationIdValue;
     }
     if (isChangingConversation && previousDisplayedConversationId) {
-      // Fold the previous conversation's settled tail so a revisit starts
-      // with a clean committed transcript.
-      transcriptStoreRegistry.peek(previousDisplayedConversationId)?.foldSettledTail();
+      // Fold the previous conversation's settled turns so a revisit starts
+      // with a clean virtualized transcript.
+      transcriptStoreRegistry.peek(previousDisplayedConversationId)?.foldSettledTurns();
     }
 
     draftConversationPinnedRef.current = false;
@@ -1752,7 +1750,9 @@ export default function GatewayApp() {
         return;
       }
       setSelectedHistory(detail);
-      transcriptStoreRegistry.get(conversationIdValue).applyHistorySnapshot(entries);
+      transcriptStoreRegistry
+        .get(conversationIdValue)
+        .applyHistorySnapshot(entries, { mode: "replace" });
       const detailWorkdir = detail.conversation?.cwd?.trim();
       if (detailWorkdir) {
         conversationWorkdirsRef.current.set(conversationIdValue, detailWorkdir);
@@ -2624,7 +2624,7 @@ export default function GatewayApp() {
   function startNewConversation(options?: { workdir?: string }) {
     const currentConversationId = conversationIdRef.current.trim();
     if (currentConversationId) {
-      transcriptStoreRegistry.peek(currentConversationId)?.foldSettledTail();
+      transcriptStoreRegistry.peek(currentConversationId)?.foldSettledTurns();
       optimisticTitleConversationIdsRef.current.delete(currentConversationId);
       clearCachedComposerDraft(currentConversationId);
     }
@@ -2966,7 +2966,7 @@ export default function GatewayApp() {
       invalidateHistoryLoad();
       markVisibleConversationRevision();
       if (currentConversationId && currentConversationId !== targetConversationId) {
-        transcriptStoreRegistry.peek(currentConversationId)?.foldSettledTail();
+        transcriptStoreRegistry.peek(currentConversationId)?.foldSettledTurns();
       }
       protectedConversationRef.current = targetConversationId;
       conversationIdRef.current = targetConversationId;
@@ -3806,19 +3806,22 @@ export default function GatewayApp() {
     const item = historyItems.find((candidate) => candidate.id === selectedId);
     return item ? resolveConversationTitle(item, item.id) : "";
   }, [historyItems, selectedHistoryId]);
-  const visibleTranscriptEntries = displayedTranscript.committed;
-  const transcriptTailEntries = displayedTranscript.tail;
-  const displayedTranscriptEntryCount =
-    visibleTranscriptEntries.length + transcriptTailEntries.length;
+  const transcriptFoldedRows = displayedTranscript.foldedRows;
+  const transcriptLiveRows = displayedTranscript.liveRows;
+  // Row count gates everything visual (empty state, error banner, loading
+  // screen): entryCount can be non-zero while nothing renders (meta-only
+  // entries), and hiding an error behind an invisible entry would strand it.
+  const displayedTranscriptRowCount =
+    transcriptFoldedRows.length + transcriptLiveRows.length;
   const transcriptHistoryLoading =
-    historyDetailLoading && displayedTranscriptEntryCount === 0;
+    historyDetailLoading && displayedTranscriptRowCount === 0;
   const selectedHistoryHasMore =
     selectedHistory?.conversation_id === displayedConversationId &&
     selectedHistory.has_more === true;
   const loadingOlderHistory =
     historyDetailLoading &&
     selectedHistory?.conversation_id === displayedConversationId &&
-    displayedTranscriptEntryCount > 0;
+    displayedTranscriptRowCount > 0;
   const handleLoadFullHistory = useCallback(() => {
     if (!api || !displayedConversationId) {
       return;
@@ -3827,7 +3830,7 @@ export default function GatewayApp() {
       fullHistory: true,
     });
   }, [api, displayedConversationId]);
-  const transcriptTailHasEntries = transcriptTailEntries.length > 0;
+  const transcriptHasLiveRows = transcriptLiveRows.length > 0;
   useEffect(() => {
     if (typeof document === "undefined") {
       return;
@@ -3844,7 +3847,7 @@ export default function GatewayApp() {
     (displayedHasPendingCommand ? CHAT_RUNTIME_PREPARING_STATUS : null);
   const transcriptToolStatusIsCompaction = displayedTranscript.toolStatusIsCompaction;
   const composerIsSending = transcriptBusy;
-  const transcriptError = displayedTranscriptEntryCount === 0 ? null : chatError;
+  const transcriptError = displayedTranscriptRowCount === 0 ? null : chatError;
   const composerCompactionBlocked = transcriptToolStatusIsCompaction;
   const composerInputDisabled =
     !status?.online || historyDetailLoading || composerCompactionBlocked;
@@ -3905,8 +3908,8 @@ export default function GatewayApp() {
     ) {
       return;
     }
-    // Switching away folds the settled tail so revisits start clean.
-    transcriptStoreRegistry.peek(previousDisplayedConversationId)?.foldSettledTail();
+    // Switching away folds the settled turns so revisits start clean.
+    transcriptStoreRegistry.peek(previousDisplayedConversationId)?.foldSettledTurns();
     pendingDisplayedConversationAutoBottomRef.current = nextDisplayedConversationId;
   }, [displayedConversationId, transcriptStoreRegistry]);
 
@@ -3916,7 +3919,7 @@ export default function GatewayApp() {
       !targetConversationId ||
       historyDetailLoading ||
       displayedConversationId.trim() !== targetConversationId ||
-      displayedTranscriptEntryCount === 0
+      displayedTranscriptRowCount === 0
     ) {
       return;
     }
@@ -3926,7 +3929,7 @@ export default function GatewayApp() {
     pendingDisplayedConversationAutoBottomRef.current = null;
   }, [
     displayedConversationId,
-    displayedTranscriptEntryCount,
+    displayedTranscriptRowCount,
     historyDetailLoading,
     refreshTranscriptScrollState,
     stickTranscriptToBottom,
@@ -3987,7 +3990,7 @@ export default function GatewayApp() {
   ]);
 
   useLayoutEffect(() => {
-    if (transcriptBusy || transcriptTailHasEntries) {
+    if (transcriptBusy || transcriptHasLiveRows) {
       syncTranscriptAutoScroll();
     }
     refreshTranscriptScrollState();
@@ -3996,9 +3999,9 @@ export default function GatewayApp() {
     refreshTranscriptScrollState,
     syncTranscriptAutoScroll,
     transcriptBusy,
-    transcriptTailEntries,
-    transcriptTailHasEntries,
-    visibleTranscriptEntries,
+    transcriptHasLiveRows,
+    transcriptFoldedRows,
+    transcriptLiveRows,
     transcriptToolStatus,
   ]);
 
@@ -4336,7 +4339,7 @@ export default function GatewayApp() {
                 {settingsSyncError ? (
                   <div className="gateway-banner-error">{settingsSyncError}</div>
                 ) : null}
-                {chatError && displayedTranscriptEntryCount === 0 ? (
+                {chatError && displayedTranscriptRowCount === 0 ? (
                   <div className="gateway-banner-error">{chatError}</div>
                 ) : null}
 
@@ -4345,8 +4348,9 @@ export default function GatewayApp() {
                     <ScrollArea ref={transcriptScrollAreaRef} className="gateway-transcript-scroll">
                       <GatewayTranscript
                         conversationId={displayedConversationId}
-                        entries={visibleTranscriptEntries}
-                        tailEntries={transcriptTailEntries}
+                        foldedRows={transcriptFoldedRows}
+                        liveRows={transcriptLiveRows}
+                        activeTurnKey={displayedTranscript.activeTurnKey}
                         error={transcriptError}
                         toolStatus={transcriptToolStatus}
                         toolStatusIsCompaction={transcriptToolStatusIsCompaction}
