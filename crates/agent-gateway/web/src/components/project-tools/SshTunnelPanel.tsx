@@ -184,9 +184,6 @@ function HostMetaTags(props: { host: SshHostConfig }) {
   if (host.privateKeyPassphraseConfigured) {
     tags.push(t("settings.sshPrivateKeyPassphraseConfigured"));
   }
-  if (hostHasProxy(host)) {
-    tags.push(t("settings.sshAdvancedProxy"));
-  }
   if (tags.length === 0) return null;
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -642,6 +639,11 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
                         <span className="shrink-0 rounded-md bg-muted/70 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">
                           {authLabel(host, t)}
                         </span>
+                        {hostHasProxy(host) ? (
+                          <span className="shrink-0 rounded-md bg-muted/70 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">
+                            {t("settings.sshAdvancedProxy")}
+                          </span>
+                        ) : null}
                       </div>
                       <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
                         {endpointLabel(host)}
