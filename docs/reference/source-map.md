@@ -94,7 +94,8 @@
 | WebUI entry | `crates/agent-gateway/web/src/main.tsx` |
 | App shell | `crates/agent-gateway/web/src/App.tsx` |
 | Gateway socket | `crates/agent-gateway/web/src/lib/gatewaySocket.ts` |
-| SharedWorker | `crates/agent-gateway/web/src/lib/gatewaySocket.worker.ts` |
+| Conversation stream client | `crates/agent-gateway/web/src/lib/chat/stream/conversationStreamClient.ts` |
+| Terminal stream client | `crates/agent-gateway/web/src/lib/terminal/gatewayTerminalStreamClient.ts` |
 | Gateway types | `crates/agent-gateway/web/src/lib/gatewayTypes.ts` |
 | Web settings | `crates/agent-gateway/web/src/lib/webSettings.ts`、`web/src/lib/settings/*` |
 | History sync/parser | `crates/agent-gateway/web/src/lib/historySync.ts`、`historyParser.ts` |
