@@ -7,3 +7,4 @@ pub mod power_activity;
 pub mod proxy;
 pub mod skills;
 pub mod tunnel;
+pub mod workspace_watch;

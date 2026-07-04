@@ -69,6 +69,7 @@ message GatewayEnvelope {
     TunnelStateSnapshot tunnel_state = 80;
     TunnelMutation tunnel_mutation = 81;
     TunnelFrame tunnel_frame = 82;
+    WorkspaceWatchRequest workspace_watch = 90;
   }
 
   // Legacy tunnel control/frame payloads (pre-rewrite protocol) and the
@@ -132,6 +133,7 @@ message AgentEnvelope {
     TunnelMutationResult tunnel_mutation_result = 81;
     TunnelFrame tunnel_frame = 82;
     TunnelProbeReport tunnel_probe_report = 83;
+    WorkspaceActivityEvent workspace_activity = 90;
     ErrorResponse error = 99;
   }
 
@@ -306,6 +308,22 @@ message TunnelFrame {
   string ws_subprotocol = 11;
   uint32 ws_close_code = 12;
   string ws_close_reason = 13;
+}
+
+// ---- Workspace activity watch (gateway -> agent declarative full set,
+// ---- agent -> gateway debounced change events) ----
+
+message WorkspaceWatchRequest {
+  repeated string workdirs = 1;  // full desired set; replaces the previous one
+}
+
+message WorkspaceActivityEvent {
+  string workdir = 1;
+  uint64 revision = 2;           // per-workdir monotonic within one agent process
+  bool fs = 3;                   // working-tree content changed
+  bool git = 4;                  // git state (HEAD/refs/index/...) changed
+  repeated string changed_paths = 5;  // relative to workdir, deduped, capped
+  bool truncated = 6;            // changed_paths hit the cap or is unknown
 }
 
 message MemoryManageRequest {

@@ -15,6 +15,7 @@ use crate::services::chat_run_ledger::{ChatRunLedger, ChatRunLedgerState};
 use crate::services::cron::CronManager;
 use crate::services::memory::MemoryStore;
 use crate::services::tunnel::{TunnelProxy, TunnelStore};
+use crate::services::workspace_watch::WorkspaceWatchService;
 
 use super::*;
 
@@ -29,6 +30,7 @@ impl GatewayController {
         let initial_config = RemoteSettingsPayload::default();
         let (config_tx, _) = watch::channel(initial_config);
         let tunnel_store = TunnelStore::new(app_handle.clone());
+        let workspace_watch = Arc::new(WorkspaceWatchService::new(app_handle.clone()));
         Self {
             app_handle,
             cron_manager,
@@ -55,6 +57,7 @@ impl GatewayController {
             chat_run_ledger: Mutex::new(ChatRunLedger::new()),
             tunnel_store,
             tunnel_proxy: TunnelProxy::new(),
+            workspace_watch,
             pending_chat_queue_requests: Mutex::new(HashMap::new()),
             terminal_forwarder_once: Once::new(),
             terminal_stream_forwarder_once: Once::new(),
@@ -65,6 +68,7 @@ impl GatewayController {
     }
 
     pub fn start(self: &Arc<Self>) -> Result<(), String> {
+        self.workspace_watch.attach_gateway(Arc::downgrade(self));
         self.start_terminal_forwarder();
         self.start_terminal_stream_forwarder();
         self.start_sftp_forwarder();

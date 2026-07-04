@@ -56,6 +56,12 @@ func (m *Manager) SetSession(s *AgentSession) {
 	}
 	if s != nil && sessionChanged {
 		m.cmdQueue.DrainTo(s)
+		// Replay the watched-workdir set: a freshly connected agent starts
+		// with an empty watch set and only learns a non-empty one from this
+		// push. An empty set needs no replay.
+		if m.hasWorkspaceWatchInterest() {
+			go m.pushWorkspaceWatchSet()
+		}
 	}
 }
 

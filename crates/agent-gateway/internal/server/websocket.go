@@ -132,6 +132,9 @@ type websocketConnection struct {
 
 	chatStreamsMu sync.Mutex
 	chatStreams   map[string]*chatStreamSubscription
+
+	workspaceSubsMu sync.Mutex
+	workspaceSubs   map[string]*workspaceActivitySubscription
 }
 
 const maxHistoryListLimit = 200
@@ -218,9 +221,10 @@ func (c *websocketConnection) serve() {
 		// Subscription lifecycle must keep the client's frame order: a
 		// re-subscribe emits [unsubscribe, subscribe] back to back, and
 		// concurrent dispatch could let the stale unsubscribe cancel the fresh
-		// subscription. Both handlers are lock-only and non-blocking, so they
+		// subscription. These handlers are lock-only and non-blocking, so they
 		// run inline on the read loop.
-		if req.Type == "chat.subscribe" || req.Type == "chat.unsubscribe" {
+		if req.Type == "chat.subscribe" || req.Type == "chat.unsubscribe" ||
+			req.Type == "workspace.subscribe" || req.Type == "workspace.unsubscribe" {
 			c.dispatch(req)
 			continue
 		}
@@ -261,6 +265,7 @@ func (c *websocketConnection) close() {
 			c.tunnelStateEventsCleanup = nil
 		}
 		c.cleanupChatStreamSubscriptions()
+		c.cleanupWorkspaceSubscriptions()
 		_ = c.conn.Close()
 	})
 }

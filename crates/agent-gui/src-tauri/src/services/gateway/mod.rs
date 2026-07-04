@@ -26,6 +26,7 @@ use crate::services::chat_run_ledger::ChatRunLedger;
 use crate::services::cron::CronManager;
 use crate::services::memory::MemoryStore;
 use crate::services::tunnel::{TunnelProxy, TunnelStore};
+use crate::services::workspace_watch::WorkspaceWatchService;
 
 pub mod proto {
     tonic::include_proto!("liveagent.gateway.v1");
@@ -90,6 +91,7 @@ pub struct GatewayController {
     chat_run_ledger: Mutex<ChatRunLedger>,
     pub(crate) tunnel_store: TunnelStore,
     pub(crate) tunnel_proxy: TunnelProxy,
+    pub(crate) workspace_watch: Arc<WorkspaceWatchService>,
     pending_chat_queue_requests: Mutex<HashMap<String, oneshot::Sender<proto::ChatQueueResponse>>>,
     terminal_forwarder_once: Once,
     terminal_stream_forwarder_once: Once,

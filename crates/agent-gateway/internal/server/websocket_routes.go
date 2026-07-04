@@ -87,6 +87,8 @@ var websocketRequestHandlers = map[string]websocketRequestHandler{
 	"provider.models":                (*websocketConnection).handleProviderModels,
 	"chat.subscribe":                 (*websocketConnection).handleChatSubscribe,
 	"chat.unsubscribe":               (*websocketConnection).handleChatUnsubscribe,
+	"workspace.subscribe":            (*websocketConnection).handleWorkspaceSubscribe,
+	"workspace.unsubscribe":          (*websocketConnection).handleWorkspaceUnsubscribe,
 	"chat.activities":                (*websocketConnection).handleChatActivities,
 	"chat.command":                   (*websocketConnection).handleChatCommand,
 	"chat.cancel":                    (*websocketConnection).handleChatCancel,

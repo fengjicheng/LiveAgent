@@ -240,6 +240,7 @@ macro_rules! app_invoke_handler {
             commands::gateway::gateway_tunnel_update,
             commands::gateway::gateway_tunnel_close,
             commands::gateway::gateway_tunnel_check,
+            commands::gateway::workspace_watch_set,
             services::proxy::proxy_get_server_info,
         ]
     };

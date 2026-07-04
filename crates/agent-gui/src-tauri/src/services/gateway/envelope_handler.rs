@@ -9,6 +9,7 @@ use crate::commands::settings::{
     reset_runtime_ssh_known_host, SSH_PATCH_FIELD,
 };
 use crate::services::gateway_bridge;
+use crate::services::workspace_watch::WatchSource;
 
 use super::*;
 
@@ -45,6 +46,11 @@ impl GatewayController {
             }
             Some(proto::gateway_envelope::Payload::TunnelFrame(frame)) => {
                 self.tunnel_proxy.handle_frame(self, frame)
+            }
+            Some(proto::gateway_envelope::Payload::WorkspaceWatch(request)) => {
+                self.workspace_watch
+                    .set_desired(WatchSource::Gateway, request.workdirs);
+                Ok(())
             }
             Some(proto::gateway_envelope::Payload::ChatCommand(command)) => {
                 self.handle_chat_command(request_id, command).await

@@ -83,6 +83,11 @@ func (m *Manager) dispatchFromAgent(expected *AgentSession, env *gatewayv1.Agent
 		return
 	}
 
+	if workspaceActivity := env.GetWorkspaceActivity(); workspaceActivity != nil {
+		m.broadcastWorkspaceActivity(workspaceActivity)
+		return
+	}
+
 	// Desired-state and probe payloads fan out broadcasts and relay probes;
 	// run them off the gRPC read loop so tunnel frames keep flowing.
 	if tunnelDesired := env.GetTunnelDesired(); tunnelDesired != nil {

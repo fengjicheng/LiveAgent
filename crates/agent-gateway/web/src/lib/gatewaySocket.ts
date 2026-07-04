@@ -44,6 +44,10 @@ import type {
   TunnelUpdateInput,
 } from "@/lib/tunnels/constants";
 import type {
+  WorkspaceActivity,
+  WorkspaceActivityEventPayload,
+} from "@/lib/workspace-activity/types";
+import type {
   AgentStatus,
   ChatQueueResponse,
   ChatQueueSnapshot,
@@ -83,6 +87,7 @@ type SftpTransferListener = (event: SftpTransferEvent) => void;
 type ChatQueueListener = (snapshot: ChatQueueSnapshot) => void;
 type ChatActivityListener = (event: ConversationActivityEvent) => void;
 type ChatCommandUpdateListener = (update: ChatCommandUpdate) => void;
+type WorkspaceActivityListener = (event: WorkspaceActivityEventPayload) => void;
 
 type PendingRequest = {
   resolve: (value: any) => void;
@@ -239,6 +244,15 @@ type RawTunnelStatePayload = {
   agent_online?: boolean;
   relay?: RawTunnelHealth | null;
   tunnels?: RawTunnelStatus[];
+};
+
+type RawWorkspaceActivityPayload = {
+  workdir?: string;
+  revision?: number;
+  fs?: boolean;
+  git?: boolean;
+  changedPaths?: unknown;
+  truncated?: boolean;
 };
 
 type HistoryGetOptions = {
@@ -1012,6 +1026,23 @@ function normalizeTunnelStateSnapshot(input: RawTunnelStatePayload): TunnelState
   };
 }
 
+function normalizeWorkspaceActivity(input: RawWorkspaceActivityPayload): WorkspaceActivity | null {
+  const workdir = typeof input.workdir === "string" ? input.workdir : "";
+  if (!workdir) {
+    return null;
+  }
+  return {
+    workdir,
+    revision: Number(input.revision ?? 0),
+    fs: input.fs === true,
+    git: input.git === true,
+    changedPaths: Array.isArray(input.changedPaths)
+      ? input.changedPaths.filter((path): path is string => typeof path === "string")
+      : [],
+    truncated: input.truncated === true,
+  };
+}
+
 function normalizeOptionalOffset(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
@@ -1083,6 +1114,7 @@ export class GatewayWebSocketClient {
   private connectionListeners = new Set<(connected: boolean) => void>();
   private connectionState = false;
   private tunnelStateListeners = new Set<TunnelStateListener>();
+  private workspaceActivityListeners = new Map<string, Set<WorkspaceActivityListener>>();
   private lastTunnelState: TunnelStateSnapshot | null = null;
   // Server tunnel.state revisions are only monotonic within one gateway
   // process; this guard is reset on disconnect so a restarted gateway's
@@ -1207,6 +1239,87 @@ export class GatewayWebSocketClient {
     return () => {
       this.sftpTransferListeners.delete(listener);
     };
+  }
+
+  // Per-workdir workspace activity subscription. The first listener of a
+  // workdir sends workspace.subscribe; the last one leaving sends
+  // workspace.unsubscribe. On reconnect every registered workdir is
+  // re-subscribed and its listeners receive `{ kind: "reset" }` because
+  // events may have been missed while the socket was down.
+  subscribeWorkspaceActivity(workdir: string, listener: WorkspaceActivityListener): () => void {
+    const normalized = workdir.trim();
+    if (!normalized) {
+      return () => {};
+    }
+    let listeners = this.workspaceActivityListeners.get(normalized);
+    const isFirst = !listeners;
+    if (!listeners) {
+      listeners = new Set();
+      this.workspaceActivityListeners.set(normalized, listeners);
+    }
+    listeners.add(listener);
+    if (isFirst) {
+      if (this.socket?.readyState === WebSocket.OPEN && this.authenticated) {
+        void this.sendWorkspaceSubscribe(normalized);
+      } else {
+        // The post-auth replay issues the subscribe for every registered
+        // workdir, this one included.
+        void this.ensureConnected().catch(() => {
+          this.scheduleReconnect();
+        });
+      }
+    }
+    return () => {
+      const current = this.workspaceActivityListeners.get(normalized);
+      if (!current?.delete(listener)) {
+        return;
+      }
+      if (current.size === 0) {
+        this.workspaceActivityListeners.delete(normalized);
+        void this.sendWorkspaceUnsubscribe(normalized);
+      }
+    };
+  }
+
+  private async sendWorkspaceSubscribe(workdir: string) {
+    try {
+      await this.request("workspace.subscribe", { workdir });
+    } catch {
+      // The post-auth replay retries every registered subscription.
+    }
+  }
+
+  private async sendWorkspaceUnsubscribe(workdir: string) {
+    // Never resurrect a connection just to unsubscribe: a dead socket already
+    // dropped the server-side subscription.
+    if (this.socket?.readyState !== WebSocket.OPEN || !this.authenticated) {
+      return;
+    }
+    try {
+      await this.request("workspace.unsubscribe", { workdir });
+    } catch {
+      // Connection loss clears server-side subscriptions anyway.
+    }
+  }
+
+  private handleWorkspaceActivityConnected() {
+    const reset: WorkspaceActivityEventPayload = { kind: "reset" };
+    for (const [workdir, listeners] of this.workspaceActivityListeners) {
+      void this.sendWorkspaceSubscribe(workdir);
+      for (const listener of [...listeners]) {
+        listener(reset);
+      }
+    }
+  }
+
+  private emitWorkspaceActivity(activity: WorkspaceActivity) {
+    const listeners = this.workspaceActivityListeners.get(activity.workdir);
+    if (!listeners) {
+      return;
+    }
+    for (const listener of [...listeners]) {
+      listener(activity);
+    }
   }
 
   subscribeChatQueue(listener: ChatQueueListener): () => void {
@@ -2119,6 +2232,7 @@ export class GatewayWebSocketClient {
         this.sftpTransferListeners.size > 0 ||
         this.chatActivityListeners.size > 0 ||
         this.tunnelStateListeners.size > 0 ||
+        this.workspaceActivityListeners.size > 0 ||
         this.conversationStreams.size > 0)
     );
   }
@@ -2402,6 +2516,7 @@ export class GatewayWebSocketClient {
             this.reconnectAttempt = 0;
             this.setConnectionState(true);
             this.conversationStreams.handleConnected();
+            this.handleWorkspaceActivityConnected();
             if (!settled) {
               settled = true;
               resolve();
@@ -2505,6 +2620,18 @@ export class GatewayWebSocketClient {
           : null;
       if (payload) {
         this.emitTunnelState(normalizeTunnelStateSnapshot(payload));
+      }
+      return;
+    }
+
+    if (envelope.type === "workspace.activity") {
+      const payload =
+        envelope.payload && typeof envelope.payload === "object"
+          ? (envelope.payload as RawWorkspaceActivityPayload)
+          : null;
+      const activity = payload ? normalizeWorkspaceActivity(payload) : null;
+      if (activity) {
+        this.emitWorkspaceActivity(activity);
       }
       return;
     }
@@ -2815,6 +2942,10 @@ export type GatewayWebSocketClientLike = {
   closeTerminal(sessionId: string, projectPathKey?: string): Promise<TerminalSession>;
   closeProjectTerminals(projectPathKey: string): Promise<TerminalSession[]>;
   subscribeTunnelState(listener: (snapshot: TunnelStateSnapshot) => void): () => void;
+  subscribeWorkspaceActivity(
+    workdir: string,
+    listener: (event: WorkspaceActivityEventPayload) => void,
+  ): () => void;
   createTunnel(input: TunnelCreateInput): Promise<void>;
   updateTunnel(input: TunnelUpdateInput): Promise<void>;
   closeTunnel(id: string): Promise<void>;

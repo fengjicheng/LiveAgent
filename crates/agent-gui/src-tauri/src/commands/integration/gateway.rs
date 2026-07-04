@@ -10,6 +10,7 @@ use crate::services::gateway::{
 use crate::services::tunnel::{
     GatewayTunnelCreateInput, GatewayTunnelUpdateInput, TunnelStatePayload,
 };
+use crate::services::workspace_watch::WatchSource;
 
 #[tauri::command]
 pub async fn gateway_connect(
@@ -249,4 +250,15 @@ pub async fn gateway_tunnel_check(
     gateway_controller: tauri::State<'_, Arc<GatewayController>>,
 ) -> Result<(), String> {
     gateway_controller.tunnel_check(tunnel_id).await
+}
+
+#[tauri::command]
+pub fn workspace_watch_set(
+    workdirs: Vec<String>,
+    gateway_controller: tauri::State<'_, Arc<GatewayController>>,
+) -> Result<(), String> {
+    gateway_controller
+        .workspace_watch
+        .set_desired(WatchSource::Local, workdirs);
+    Ok(())
 }
