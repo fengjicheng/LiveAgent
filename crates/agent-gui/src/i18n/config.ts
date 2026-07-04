@@ -34,6 +34,9 @@ export const translations: Record<Locale, Record<string, string>> = {
     /* ── Chat Page ── */
     "chat.newConversation": "新对话",
     "chat.pendingTitle": "新会话",
+    "chat.memoryExtraction.done": "记忆整理完成。",
+    "chat.memoryExtraction.noop": "本轮无需更新记忆。",
+    "chat.memoryExtraction.partial": "记忆部分更新（{accepted} 条已应用，{rejected} 条被拒）。",
     "chat.recentConversation": "最近会话",
     "chat.workspaceSection": "工作空间",
     "chat.workspaceCreate": "新建工作空间",
@@ -1555,6 +1558,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     /* ── Chat Page ── */
     "chat.newConversation": "New Conversation",
     "chat.pendingTitle": "New Chat",
+    "chat.memoryExtraction.done": "Memory updated.",
+    "chat.memoryExtraction.noop": "No memory updates needed this turn.",
+    "chat.memoryExtraction.partial":
+      "Memory partially updated ({accepted} applied, {rejected} rejected).",
     "chat.recentConversation": "Recent conversations",
     "chat.workspaceSection": "Workspaces",
     "chat.workspaceCreate": "New workspace",

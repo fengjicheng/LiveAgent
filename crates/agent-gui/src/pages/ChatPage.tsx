@@ -78,9 +78,8 @@ import {
   CHAT_HISTORY_SYNC_EVENT,
   type ChatHistorySyncEvent,
 } from "../lib/chat/history/chatHistorySync";
-import { clearSilentMemoryDecisions } from "../lib/chat/memory/memoryDecisionLog";
-import { clearMemoryExtractorState } from "../lib/chat/memory/memoryExtractor";
-import { buildMemoryOverviewSection } from "../lib/memory/prompts/injection";
+import { memoryExtraction } from "../lib/chat/memory/extractionController";
+import type { MemoryExtractionStatusKey } from "../lib/chat/memory/extractionEngine";
 import {
   escapeMarkdownReferenceLabel,
   formatFileMentionToken,
@@ -112,6 +111,7 @@ import { createStreamDebugLogger } from "../lib/debug/agentDebug";
 import { tauriGitClient } from "../lib/git/tauriGitClient";
 import { createConversationHookDispatcher } from "../lib/hooks/conversationHooks";
 import { memoryDeleteProject } from "../lib/memory/api";
+import { buildMemoryOverviewSection } from "../lib/memory/prompts/injection";
 import {
   lockMonacoNlsLocale,
   preparePreferredMonacoNlsLocale,
@@ -196,7 +196,6 @@ import {
   ChatHeader,
   type ChatQueueTurnPreview,
   ChatTranscript,
-  clearSilentMemoryExtractionState,
   createChatRuntimeHost,
   createConversationRuntimeEntry,
   type EffectiveChatModelSelection,
@@ -2094,9 +2093,7 @@ export function ChatPage(props: ChatPageProps) {
       locallySyncedHistoryUpdatedAtRef.current.delete(key);
       gatewayBridgeHistorySummaryRef.current.delete(key);
       pendingUploadsByConversationRef.current.delete(key);
-      clearMemoryExtractorState(key);
-      clearSilentMemoryExtractionState(key);
-      clearSilentMemoryDecisions(key);
+      memoryExtraction.dispose(key);
       deleteConversationArtifacts(key);
       setQueuedChatTurnsState((current) => removeQueuedChatTurnsForConversation(current, key));
     },
@@ -3917,6 +3914,13 @@ export function ChatPage(props: ChatPageProps) {
           });
         }
       : undefined;
+    const memoryExtractionStatusText = (
+      key: MemoryExtractionStatusKey,
+      counts: { accepted: number; rejected: number },
+    ) =>
+      t(`chat.memoryExtraction.${key}`)
+        .replace("{accepted}", String(counts.accepted))
+        .replace("{rejected}", String(counts.rejected));
     const runtimeModel = createModelFromConfig(
       providerId,
       model,
@@ -4824,6 +4828,7 @@ export function ChatPage(props: ChatPageProps) {
             selectedModel,
             memoryExtractionModel,
             onMemoryExtractionModelFailure: handleMemoryExtractionModelFailure,
+            memoryExtractionStatusText,
             effectiveWorkdir,
             effectiveSkillsEnabled,
             showSilentMemoryExtraction: effectiveIsAgentDevExecutionMode,
@@ -4907,6 +4912,7 @@ export function ChatPage(props: ChatPageProps) {
             selectedModel,
             memoryExtractionModel,
             onMemoryExtractionModelFailure: handleMemoryExtractionModelFailure,
+            memoryExtractionStatusText,
             sessionId,
             conversationId,
             conversationCwd,

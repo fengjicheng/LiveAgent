@@ -14,7 +14,6 @@ export { useChatSkills } from "./hooks/useChatSkills";
 export { useEditResend } from "./hooks/useEditResend";
 export { useLiveTranscriptController } from "./hooks/useLiveTranscriptController";
 export { MAX_UPLOAD_FILES, usePendingUploads } from "./hooks/usePendingUploads";
-export { clearSilentMemoryExtractionState } from "./memory/silentMemoryExtraction";
 export { createChatRuntimeHost } from "./runtime/ChatRuntimeHost";
 export {
   appendSystemPrompt,

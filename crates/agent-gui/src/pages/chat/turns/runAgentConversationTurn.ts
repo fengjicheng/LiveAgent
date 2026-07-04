@@ -22,6 +22,12 @@ import type {
   ConversationHookLifecycle,
   GatewayBridgeEventController,
 } from "../../../lib/chat/conversation/run";
+import { memoryExtraction } from "../../../lib/chat/memory/extractionController";
+import type {
+  MemoryExtractionModelConfig,
+  MemoryExtractionStatusText,
+  MemoryExtractionVisibleEvents,
+} from "../../../lib/chat/memory/extractionEngine";
 import type { HostedSearchBlock } from "../../../lib/chat/messages/hostedSearch";
 import {
   appendTextDeltaToRound,
@@ -65,12 +71,6 @@ import { createFileToolState } from "../../../lib/tools/fileToolState";
 import type { SkillAccessPolicy } from "../../../lib/tools/skillAccessPolicy";
 import type { SshManagerSessionChange } from "../../../lib/tools/sshManagerTools";
 import type { TunnelManagerChange } from "../../../lib/tools/tunnelManagerTools";
-import {
-  recordSilentMemoryTurnBoundary,
-  type runSilentMemoryExtraction,
-  type SilentMemoryExtractionModelConfig,
-} from "../memory/silentMemoryExtraction";
-import { runSilentMemoryExtractionWithFallback } from "../memory/silentMemoryExtractionFallback";
 import {
   appendSystemPrompt,
   buildPartialAssistantMessage,
@@ -402,8 +402,9 @@ export type RunAgentConversationTurnParams = {
     updater: (prev: ConversationRuntimeEntry) => ConversationRuntimeEntry,
   ) => ConversationRuntimeEntry;
   persistConversationWithHistorySync: (params: PersistConversationParams) => Promise<boolean>;
-  memoryExtractionModel?: SilentMemoryExtractionModelConfig;
-  onMemoryExtractionModelFailure?: (model: SilentMemoryExtractionModelConfig) => void;
+  memoryExtractionModel?: MemoryExtractionModelConfig;
+  onMemoryExtractionModelFailure?: (model: MemoryExtractionModelConfig) => void;
+  memoryExtractionStatusText?: MemoryExtractionStatusText;
 };
 
 export async function runAgentConversationTurn(params: RunAgentConversationTurnParams) {
@@ -464,15 +465,16 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
     persistConversationWithHistorySync,
     memoryExtractionModel,
     onMemoryExtractionModelFailure,
+    memoryExtractionStatusText,
   } = params;
 
   if (!effectiveWorkdir) {
     throw new Error("Tool mode requires a project directory from the chat sidebar.");
   }
 
-  // Clear the per-conversation slug tracker before a fresh user turn so the
-  // <already-written-this-turn> block reflects only writes made in this turn.
-  recordSilentMemoryTurnBoundary(conversationId);
+  // Reset per-turn dedup state so <already-written-this-turn> reflects only
+  // this turn. In-flight extraction from the previous turn keeps running.
+  memoryExtraction.noteTurnBoundary(conversationId);
 
   const transcriptSubagentRuns = extractConversationSubagentRuns({
     state: getNextConversationState(),
@@ -1127,24 +1129,24 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
     1,
   );
 
-  const runPostTurnMemoryExtraction = (
-    visibleEvents?: Parameters<typeof runSilentMemoryExtraction>[0]["visibleEvents"],
-  ) => {
-    const currentMemoryExtractionModel: SilentMemoryExtractionModelConfig = {
+  const runPostTurnMemoryExtraction = (visibleEvents?: MemoryExtractionVisibleEvents) => {
+    const currentMemoryExtractionModel: MemoryExtractionModelConfig = {
       providerId,
       model,
       runtime,
       selectedModel,
     };
-    return runSilentMemoryExtractionWithFallback({
+    // No chat signal: the controller owns the run's AbortController, so the
+    // next user turn cannot kill an in-flight extraction mid-write.
+    return memoryExtraction.requestExtraction({
       primary: memoryExtractionModel ?? currentMemoryExtractionModel,
       fallback: memoryExtractionModel ? currentMemoryExtractionModel : undefined,
       onPrimaryFailure: memoryExtractionModel ? onMemoryExtractionModelFailure : undefined,
       sessionId,
       conversationId,
       workdir: conversationCwd ?? effectiveWorkdir,
-      buildContext: (tools) => buildPreparedContext(finalState, tools),
-      signal: getRequestController().signal,
+      messages: buildPreparedContext(finalState).messages,
+      statusText: memoryExtractionStatusText,
       debugLogger: conversationDebugLogger,
       visibleEvents,
     });
