@@ -1,7 +1,5 @@
 use serde::Serialize;
 use std::collections::HashMap;
-#[cfg(windows)]
-use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
@@ -12,8 +10,6 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-#[cfg(windows)]
-use crate::runtime::platform::resolve_program_path_with_current_dir;
 use crate::runtime::platform::{expand_tilde_path, maybe_augment_macos_path, shell_basename};
 use crate::runtime::process::{configure_child_process_group, terminate_child_process_tree};
 
@@ -312,79 +308,6 @@ fn windows_powershell_command(cmd: &str) -> String {
 #[cfg(windows)]
 fn windows_cmd_command(cmd: &str) -> String {
     format!("chcp 65001>nul & {cmd}")
-}
-
-#[cfg(windows)]
-fn push_existing_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if !path.is_file() {
-        return;
-    }
-    let normalized = path.to_string_lossy().to_ascii_lowercase();
-    if paths
-        .iter()
-        .any(|existing| existing.to_string_lossy().to_ascii_lowercase() == normalized)
-    {
-        return;
-    }
-    paths.push(path);
-}
-
-#[cfg(windows)]
-fn push_git_bash_install_root(paths: &mut Vec<PathBuf>, root: PathBuf) {
-    let git_root = root.join("Git");
-    push_existing_unique_path(paths, git_root.join("bin").join("bash.exe"));
-    push_existing_unique_path(paths, git_root.join("usr").join("bin").join("bash.exe"));
-}
-
-#[cfg(windows)]
-fn normalize_configured_path(raw: &str) -> Option<PathBuf> {
-    let trimmed = raw.trim().trim_matches('"');
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(expand_tilde_path(trimmed))
-}
-
-#[cfg(windows)]
-fn is_probable_git_bash_path(path: &Path) -> bool {
-    let normalized = path
-        .to_string_lossy()
-        .replace('/', "\\")
-        .to_ascii_lowercase();
-    normalized.ends_with("\\git\\bin\\bash.exe")
-        || normalized.ends_with("\\git\\usr\\bin\\bash.exe")
-}
-
-#[cfg(windows)]
-#[allow(dead_code)]
-fn find_windows_git_bash() -> Option<PathBuf> {
-    let mut paths = Vec::new();
-
-    for var in ["LIVEAGENT_GIT_BASH_PATH", "CLAUDE_CODE_GIT_BASH_PATH"] {
-        if let Some(raw) = env::var_os(var) {
-            let raw = raw.to_string_lossy();
-            if let Some(path) = normalize_configured_path(&raw) {
-                push_existing_unique_path(&mut paths, path);
-            }
-        }
-    }
-
-    for var in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
-        if let Some(root) = env::var_os(var) {
-            push_git_bash_install_root(&mut paths, PathBuf::from(root));
-        }
-    }
-
-    for root in [r"C:\Program Files", r"C:\Program Files (x86)"] {
-        push_git_bash_install_root(&mut paths, PathBuf::from(root));
-    }
-
-    let path_bash = resolve_program_path_with_current_dir("bash", None);
-    if is_probable_git_bash_path(&path_bash) {
-        push_existing_unique_path(&mut paths, path_bash);
-    }
-
-    paths.into_iter().next()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

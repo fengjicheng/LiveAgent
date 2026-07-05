@@ -131,7 +131,7 @@ pub(crate) fn configure_zsh_colored_prompt(cmd: &mut CommandBuilder) {
 pub(crate) fn create_zsh_prompt_overlay(prompt: &str) -> Option<PathBuf> {
     let base = dirs::cache_dir()
         .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
+        .unwrap_or_else(std::env::temp_dir);
     let zdotdir = base.join("liveagent-zsh");
     if fs::create_dir_all(&zdotdir).is_err() {
         return None;

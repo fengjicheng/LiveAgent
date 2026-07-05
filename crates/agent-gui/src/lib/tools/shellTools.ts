@@ -766,7 +766,7 @@ export function createShellTools(params: {
         const command =
           typeof toolCall.arguments?.command === "string" ? toolCall.arguments.command.trim() : "";
         if (!command) throw new Error('ManagedProcess.command is required for action="start"');
-        if (scanShellSyntax(command).background) {
+        if (runtimePlatform !== "windows" && scanShellSyntax(command).background) {
           throw new Error(
             "ManagedProcess.command must be a foreground command. Remove `&`; ManagedProcess starts it in the background and captures logs automatically.",
           );

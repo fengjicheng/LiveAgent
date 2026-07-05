@@ -471,6 +471,55 @@ test("ManagedProcess rejects nested shell background operators", async () => {
   assert.deepEqual(calls, []);
 });
 
+test("ManagedProcess does not apply POSIX ampersand background validation on Windows", async () => {
+  const calls = [];
+  const loader = createTsModuleLoader({
+    mocks: {
+      "@tauri-apps/api/core": {
+        async invoke(command, args) {
+          calls.push({ command, args });
+          assert.equal(command, "managed_process_start");
+          return {
+            process: {
+              id: "proc-win",
+              label: null,
+              command: args.command,
+              cwd: "C:\\repo",
+              shell: "pwsh",
+              pid: 456,
+              log_path: "C:\\Users\\me\\.liveagent\\process-logs\\proc-win.log",
+              started_at: 10,
+              finished_at: null,
+              exit_code: null,
+              running: true,
+            },
+          };
+        },
+      },
+    },
+  });
+
+  const { createShellTools } = loader.loadModule("src/lib/tools/shellTools.ts");
+  const bundle = createShellTools({
+    workdir: "/repo",
+    providerId: "claude_code",
+    runtimePlatform: "windows",
+  });
+
+  const result = await bundle.executeToolCall({
+    type: "toolCall",
+    id: "managed-start-windows",
+    name: "ManagedProcess",
+    arguments: {
+      action: "start",
+      command: '& "C:/Program Files/App/app.exe"',
+    },
+  });
+
+  assert.equal(result.isError, false);
+  assert.equal(calls.length, 1);
+});
+
 test("Bash tool marks stdio-open shell responses as errors", async () => {
   const loader = createTsModuleLoader({
     mocks: {

@@ -1,5 +1,19 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "title": "",
+        "width": 1400,
+        "height": 800,
+        "minWidth": 1200,
+        "minHeight": 720,
+        "backgroundThrottling": "disabled",
+        "titleBarStyle": "Overlay",
+        "trafficLightPosition": { "x": 18, "y": 18 }
+      }
+    ]
+  },
   "bundle": {
     "targets": [
       "app",

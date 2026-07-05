@@ -233,8 +233,12 @@ fn file_identity(meta: &fs::Metadata, _canon: &Path) -> String {
 }
 
 #[cfg(windows)]
-fn file_identity(_meta: &fs::Metadata, canon: &Path) -> String {
-    format!("path:{}", display_path(canon).to_lowercase())
+fn file_identity(meta: &fs::Metadata, canon: &Path) -> String {
+    use std::os::windows::fs::MetadataExt;
+    match (meta.volume_serial_number(), meta.file_index()) {
+        (Some(volume), Some(index)) => format!("{volume}:{index}"),
+        _ => format!("path:{}", display_path(canon).to_lowercase()),
+    }
 }
 
 fn levenshtein_at_most(a: &str, b: &str, max: usize) -> bool {
@@ -893,7 +897,6 @@ fn infer_workspace_preview_mime(path: &Path, bytes: &[u8]) -> Option<&'static st
     }
 }
 
-#[cfg(target_os = "macos")]
 fn truncate_process_error(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes).trim().to_string();
     let mut chars = text.chars();
@@ -941,8 +944,165 @@ fn convert_document_to_html_preview(target: &Path) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn convert_document_to_html_preview(_target: &Path) -> Result<Vec<u8>, String> {
-    Err("Legacy Word/RTF preview conversion is only available on macOS via textutil".to_string())
+fn soffice_candidate_names() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["soffice.exe", "soffice.com"]
+    } else {
+        &["soffice", "libreoffice"]
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn find_soffice_binary() -> Option<PathBuf> {
+    if let Ok(raw) = std::env::var("LIVEAGENT_SOFFICE_PATH") {
+        let trimmed = raw.trim().trim_matches('"');
+        if !trimmed.is_empty() {
+            let path = expand_tilde_path(trimmed);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    for dir in std::env::split_paths(&path_var) {
+        for name in soffice_candidate_names() {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let roots = ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"]
+            .iter()
+            .filter_map(|var| std::env::var_os(var).map(PathBuf::from))
+            .chain([
+                PathBuf::from(r"C:\Program Files"),
+                PathBuf::from(r"C:\Program Files (x86)"),
+            ]);
+        for root in roots {
+            let candidate = root.join("LibreOffice").join("program").join("soffice.exe");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        for candidate in [
+            "/usr/bin/soffice",
+            "/usr/local/bin/soffice",
+            "/opt/libreoffice/program/soffice",
+        ] {
+            let candidate = Path::new(candidate);
+            if candidate.is_file() {
+                return Some(candidate.to_path_buf());
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn path_to_file_url(path: &Path) -> String {
+    let raw = path.to_string_lossy().replace('\\', "/");
+    let mut encoded = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        match ch {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '/' | ':' | '.' | '-' | '_' | '~' => {
+                encoded.push(ch);
+            }
+            _ => {
+                let mut buf = [0u8; 4];
+                for byte in ch.encode_utf8(&mut buf).as_bytes() {
+                    encoded.push_str(&format!("%{byte:02X}"));
+                }
+            }
+        }
+    }
+    if encoded.starts_with('/') {
+        format!("file://{encoded}")
+    } else {
+        format!("file:///{encoded}")
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_soffice_document_conversion(
+    soffice: &Path,
+    target: &Path,
+    out_dir: &Path,
+) -> Result<Vec<u8>, String> {
+    // A dedicated profile keeps headless conversion from clashing with a running LibreOffice.
+    let profile_url = path_to_file_url(&out_dir.join("profile"));
+    let mut command = Command::new(soffice);
+    #[cfg(windows)]
+    crate::runtime::process::configure_child_process_group(&mut command);
+    let output = command
+        .arg(format!("-env:UserInstallation={profile_url}"))
+        .arg("--headless")
+        .arg("--norestore")
+        .arg("--convert-to")
+        .arg("html")
+        .arg("--outdir")
+        .arg(out_dir)
+        .arg(target)
+        .output()
+        .map_err(|e| format!("Failed to start LibreOffice for document preview: {e}"))?;
+
+    if !output.status.success() {
+        let detail = truncate_process_error(&output.stderr);
+        return Err(if detail.is_empty() {
+            "Failed to convert document preview with LibreOffice".to_string()
+        } else {
+            format!("Failed to convert document preview with LibreOffice: {detail}")
+        });
+    }
+
+    let stem = target
+        .file_stem()
+        .ok_or_else(|| "Document preview target has no file name".to_string())?;
+    let html_path = out_dir.join(stem).with_extension("html");
+    let bytes = fs::read(&html_path)
+        .map_err(|e| format!("LibreOffice did not produce a document preview: {e}"))?;
+    if bytes.is_empty() {
+        return Err("Document preview conversion returned empty HTML".to_string());
+    }
+    if bytes.len() > READ_MAX_PREVIEW_BYTES {
+        return Err(FsError::Other(format!(
+            "Converted document preview is too large ({} bytes, max {READ_MAX_PREVIEW_BYTES} bytes)",
+            bytes.len()
+        ))
+        .to_string());
+    }
+    Ok(bytes)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn convert_document_to_html_preview(target: &Path) -> Result<Vec<u8>, String> {
+    let soffice = find_soffice_binary().ok_or_else(|| {
+        "Legacy Word/RTF preview conversion requires LibreOffice; install it or set LIVEAGENT_SOFFICE_PATH to the soffice binary".to_string()
+    })?;
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let out_dir = std::env::temp_dir()
+        .join("liveagent")
+        .join("workspace-preview-convert")
+        .join(format!("{}-{}", std::process::id(), nanos));
+    fs::create_dir_all(&out_dir)
+        .map_err(|e| format!("Failed to prepare document preview workspace: {e}"))?;
+
+    let result = run_soffice_document_conversion(&soffice, target, &out_dir);
+    let _ = fs::remove_dir_all(&out_dir);
+    result
 }
 
 fn document_preview_cache_dir() -> PathBuf {
