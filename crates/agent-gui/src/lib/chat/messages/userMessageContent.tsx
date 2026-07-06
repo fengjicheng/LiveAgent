@@ -667,7 +667,7 @@ function PastedTextChip({
 
   return (
     <span title={file.relativePath} className={mentionChipClassName("pastedText")}>
-      <Icon className="h-3 w-3 shrink-0" />
+      <Icon className="h-3 w-3 shrink-0 self-center" />
       {chipText}
     </span>
   );
@@ -680,7 +680,7 @@ function MentionChip({ reference }: { reference: FileMentionReference }) {
       title={fileMentionTitle(reference)}
       className={mentionChipClassName(reference.kind === "dir" ? "dir" : "file")}
     >
-      <Icon className="h-3 w-3 shrink-0" />
+      <Icon className="h-3 w-3 shrink-0 self-center" />
       {fileMentionDisplayName(reference)}
     </span>
   );
@@ -724,7 +724,7 @@ function GitFileMentionChip({ file }: { file: GitFileDisplayReference }) {
         openFile();
       }}
     >
-      <Icon className="h-3 w-3 shrink-0" />
+      <Icon className="h-3 w-3 shrink-0 self-center" />
       <span>{fileName}</span>
       <span className="max-w-[8rem] truncate text-[10px] opacity-70">@{refLabel}</span>
     </span>
@@ -842,7 +842,7 @@ function CommitMentionChip({
         onMouseEnter={handleMouseEnter}
         onMouseLeave={scheduleClose}
       >
-        <GitHubMarkIcon className="h-3 w-3 shrink-0" />
+        <GitHubMarkIcon className="h-3 w-3 shrink-0 self-center" />
         {label}
       </span>
       {tooltipRect ? (

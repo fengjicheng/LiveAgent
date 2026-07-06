@@ -6,7 +6,7 @@ type MentionChipClassOptions = {
 };
 
 const BASE_CHIP_CLASS =
-  "mention-chip mx-0.5 inline-flex items-center gap-1 rounded px-1.5 align-baseline whitespace-nowrap";
+  "mention-chip mx-0.5 inline-flex items-baseline gap-1 rounded px-1.5 align-baseline whitespace-nowrap";
 
 const VARIANT_CLASS: Record<MentionChipVariant, string> = {
   file: "bg-blue-500/15 text-blue-700 dark:text-blue-300",

@@ -714,9 +714,9 @@ function PastedTextChip({
   return (
     <span
       title={file.relativePath}
-      className="mention-chip mx-0.5 inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 text-emerald-700 align-baseline whitespace-nowrap dark:text-emerald-300"
+      className="mention-chip mx-0.5 inline-flex items-baseline gap-1 rounded bg-emerald-500/15 px-1.5 text-emerald-700 align-baseline whitespace-nowrap dark:text-emerald-300"
     >
-      <Icon className="h-3 w-3 shrink-0" />
+      <Icon className="h-3 w-3 shrink-0 self-center" />
       {chipText}
     </span>
   );
@@ -730,11 +730,11 @@ function MentionChip({ path, isDir }: { path: string; isDir: boolean }) {
       title={isDir ? `${path}/` : path}
       className={
         isDir
-          ? "mention-chip mx-0.5 inline-flex items-center gap-1 rounded bg-amber-400/25 px-1.5 align-baseline whitespace-nowrap"
-          : "mention-chip mx-0.5 inline-flex items-center gap-1 rounded bg-blue-500/20 px-1.5 align-baseline whitespace-nowrap"
+          ? "mention-chip mx-0.5 inline-flex items-baseline gap-1 rounded bg-amber-500/15 px-1.5 text-amber-700 align-baseline whitespace-nowrap dark:text-amber-300"
+          : "mention-chip mx-0.5 inline-flex items-baseline gap-1 rounded bg-blue-500/15 px-1.5 text-blue-700 align-baseline whitespace-nowrap dark:text-blue-300"
       }
     >
-      <Icon className="h-3 w-3 shrink-0" />
+      <Icon className="h-3 w-3 shrink-0 self-center" />
       {fileName}
     </span>
   );
@@ -757,7 +757,7 @@ function GitFileMentionChip({ file }: { file: GitFileDisplayReference }) {
       title={title}
       role={normalized.githubUrl ? "button" : undefined}
       tabIndex={normalized.githubUrl ? 0 : undefined}
-      className={`mention-chip mx-0.5 inline-flex items-center gap-1 rounded bg-sky-500/15 px-1.5 text-sky-800 align-baseline whitespace-nowrap dark:text-sky-200 ${
+      className={`mention-chip mx-0.5 inline-flex items-baseline gap-1 rounded bg-sky-500/15 px-1.5 text-sky-800 align-baseline whitespace-nowrap dark:text-sky-200 ${
         normalized.githubUrl ? "cursor-pointer hover:bg-sky-500/20" : "cursor-default"
       }`}
       onClick={openFile}
@@ -767,7 +767,7 @@ function GitFileMentionChip({ file }: { file: GitFileDisplayReference }) {
         openFile();
       }}
     >
-      <Icon className="h-3 w-3 shrink-0" />
+      <Icon className="h-3 w-3 shrink-0 self-center" />
       <span>{fileName}</span>
       <span className="max-w-[8rem] truncate text-[10px] opacity-70">@{refLabel}</span>
     </span>
@@ -778,7 +778,7 @@ function SkillMentionChip({ name }: { name: string }) {
   return (
     <span
       title={`Skill: ${name}`}
-      className="mention-chip mx-0.5 inline-flex items-center gap-1 rounded bg-violet-500/20 px-1.5 text-violet-700 align-baseline whitespace-nowrap dark:text-violet-300"
+      className="mention-chip mx-0.5 inline-flex items-baseline gap-1 rounded bg-violet-500/15 px-1.5 text-violet-700 align-baseline whitespace-nowrap dark:text-violet-300"
     >
       <span className="text-[10px] font-semibold opacity-70">$</span>
       {name}
@@ -875,7 +875,7 @@ function CommitMentionChip({
         aria-label={resolvedCommit.subject ? `${label}: ${resolvedCommit.subject}` : label}
         role={resolvedCommit.githubUrl ? "button" : undefined}
         tabIndex={resolvedCommit.githubUrl ? 0 : undefined}
-        className={`mention-chip mx-0.5 inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 text-cyan-800 align-baseline whitespace-nowrap dark:text-cyan-200 ${
+        className={`mention-chip mx-0.5 inline-flex items-baseline gap-1 rounded bg-cyan-500/15 px-1.5 text-cyan-800 align-baseline whitespace-nowrap dark:text-cyan-200 ${
           resolvedCommit.githubUrl ? "cursor-pointer hover:bg-cyan-500/20" : "cursor-default"
         }`}
         onClick={openCommit}
@@ -889,7 +889,7 @@ function CommitMentionChip({
         onMouseEnter={handleMouseEnter}
         onMouseLeave={scheduleClose}
       >
-        <GitHubMarkIcon className="h-3 w-3 shrink-0" />
+        <GitHubMarkIcon className="h-3 w-3 shrink-0 self-center" />
         {label}
       </span>
       {tooltipRect ? (

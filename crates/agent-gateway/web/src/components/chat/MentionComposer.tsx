@@ -365,6 +365,12 @@ function editorTextIsEmpty(editor: HTMLElement) {
   return raw.trim().length === 0;
 }
 
+/** Unlike editorTextIsEmpty, this doesn't trim — a leading/trailing space
+ *  still counts as content so the placeholder hides as soon as the user types. */
+function editorHasNoContent(editor: HTMLElement) {
+  return (editor.textContent || "").length === 0;
+}
+
 function normalizeMentionQuery(query: string) {
   return removeCaretAnchors(query).trim().replace(/\\/g, "/").toLowerCase();
 }
@@ -524,6 +530,7 @@ function createMentionIcon(svgMarkup: string) {
   icon.setAttribute("width", "12");
   icon.setAttribute("height", "12");
   icon.style.flexShrink = "0";
+  icon.style.alignSelf = "center";
   return icon;
 }
 
@@ -786,8 +793,8 @@ function createFileMentionChip(path: string, kind: FileMentionKind) {
   chip.contentEditable = "false";
   chip.className =
     reference.kind === "dir"
-      ? "mention-chip inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 mx-0.5 text-amber-700 dark:text-amber-300 align-baseline whitespace-nowrap select-none"
-      : "mention-chip inline-flex items-center gap-1 rounded bg-blue-500/15 px-1.5 mx-0.5 text-blue-700 dark:text-blue-300 align-baseline whitespace-nowrap select-none";
+      ? "mention-chip inline-flex items-baseline gap-1 rounded bg-amber-500/15 px-1.5 mx-0.5 text-amber-700 dark:text-amber-300 align-baseline whitespace-nowrap select-none"
+      : "mention-chip inline-flex items-baseline gap-1 rounded bg-blue-500/15 px-1.5 mx-0.5 text-blue-700 dark:text-blue-300 align-baseline whitespace-nowrap select-none";
   chip.title = fileMentionTitle(reference);
 
   chip.appendChild(createFileTypeMentionIcon(reference.path, reference.kind));
@@ -837,7 +844,7 @@ function createSkillMentionChip(skill: MentionComposerSkillMention) {
   chip.setAttribute(SKILL_MENTION_DESCRIPTION_ATTR, skill.description);
   chip.contentEditable = "false";
   chip.className =
-    "mention-chip inline-flex items-center gap-1 rounded bg-violet-500/15 px-1.5 mx-0.5 text-violet-700 dark:text-violet-300 align-baseline whitespace-nowrap select-none";
+    "mention-chip inline-flex items-baseline gap-1 rounded bg-violet-500/15 px-1.5 mx-0.5 text-violet-700 dark:text-violet-300 align-baseline whitespace-nowrap select-none";
   chip.title = skill.description ? `${skill.name}\n${skill.description}` : skill.name;
 
   const sigil = document.createElement("span");
@@ -880,7 +887,7 @@ function createCommitMentionChip(commitInput: MentionComposerCommitMention) {
     commit.subject ? `${commit.shortSha}: ${commit.subject}` : commit.shortSha,
   );
   chip.className =
-    "mention-chip inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 mx-0.5 text-cyan-800 dark:text-cyan-200 align-baseline whitespace-nowrap select-none";
+    "mention-chip inline-flex items-baseline gap-1 rounded bg-cyan-500/15 px-1.5 mx-0.5 text-cyan-800 dark:text-cyan-200 align-baseline whitespace-nowrap select-none";
 
   chip.appendChild(createGitHubMentionIcon());
   chip.appendChild(document.createTextNode(commit.shortSha));
@@ -909,7 +916,7 @@ function createGitFileMentionChip(fileInput: MentionComposerGitFileMention) {
     `${file.path} @ ${file.refName || file.shortSha || file.commitSha.slice(0, 7)}`,
   );
   chip.className =
-    "mention-chip inline-flex items-center gap-1 rounded bg-sky-500/15 px-1.5 mx-0.5 text-sky-800 dark:text-sky-200 align-baseline whitespace-nowrap select-none";
+    "mention-chip inline-flex items-baseline gap-1 rounded bg-sky-500/15 px-1.5 mx-0.5 text-sky-800 dark:text-sky-200 align-baseline whitespace-nowrap select-none";
   chip.title = `${file.path}\n${file.refName || file.shortSha} (${file.shortSha})`;
 
   chip.appendChild(createFileTypeMentionIcon(file.path, "file"));
@@ -928,7 +935,7 @@ function createLargePasteChip(paste: MentionComposerLargePaste) {
   chip.setAttribute(LARGE_PASTE_TAG_ATTR, paste.id);
   chip.contentEditable = "false";
   chip.className =
-    "mention-chip inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 mx-0.5 text-emerald-700 dark:text-emerald-300 align-baseline whitespace-nowrap select-none";
+    "mention-chip inline-flex items-baseline gap-1 rounded bg-emerald-500/15 px-1.5 mx-0.5 text-emerald-700 dark:text-emerald-300 align-baseline whitespace-nowrap select-none";
   chip.title = paste.preview
     ? `${paste.label}\n${paste.preview}`
     : `${paste.label} (${paste.charCount} chars)`;
@@ -1472,8 +1479,9 @@ export const MentionComposer = memo(
     const wrapperRef = useRef<HTMLDivElement>(null);
     const commitTooltipCloseTimerRef = useRef<number | null>(null);
     const commitTooltipChipRef = useRef<HTMLElement | null>(null);
-    const [isEmpty, setIsEmpty] = useState(true);
+    const [isDomEmpty, setIsDomEmpty] = useState(true);
     const lastIsEmptyRef = useRef(true);
+    const lastIsDomEmptyRef = useRef(true);
     const isComposingRef = useRef(false);
     const compositionEnterKeyRef = useRef(false);
     const lastCompositionEndAtRef = useRef(0);
@@ -1662,11 +1670,15 @@ export const MentionComposer = memo(
       (popupLoading || Boolean(popupError) || suggestions.length > 0 || showEmpty);
 
     const applyEmptyState = useCallback(
-      (nextEmpty: boolean) => {
-        if (lastIsEmptyRef.current === nextEmpty) return;
-        lastIsEmptyRef.current = nextEmpty;
-        setIsEmpty(nextEmpty);
-        onEmptyChange?.(nextEmpty);
+      (nextEmpty: boolean, nextDomEmpty: boolean) => {
+        if (lastIsEmptyRef.current !== nextEmpty) {
+          lastIsEmptyRef.current = nextEmpty;
+          onEmptyChange?.(nextEmpty);
+        }
+        if (lastIsDomEmptyRef.current !== nextDomEmpty) {
+          lastIsDomEmptyRef.current = nextDomEmpty;
+          setIsDomEmpty(nextDomEmpty);
+        }
       },
       [onEmptyChange],
     );
@@ -1674,7 +1686,7 @@ export const MentionComposer = memo(
     const refreshEmptyState = useCallback(() => {
       const el = editorRef.current;
       if (!el) return;
-      applyEmptyState(editorTextIsEmpty(el));
+      applyEmptyState(editorTextIsEmpty(el), editorHasNoContent(el));
     }, [applyEmptyState]);
 
     // ---- Typewriter (typeText) ----
@@ -2458,7 +2470,7 @@ export const MentionComposer = memo(
           className={cn(
             "mention-composer min-h-[70px] max-h-[160px] w-full min-w-0 max-w-full overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] outline-hidden",
             "text-sm",
-            isEmpty && "is-empty",
+            isDomEmpty && "is-empty",
             disabled && "cursor-not-allowed opacity-60",
             className,
           )}

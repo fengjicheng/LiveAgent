@@ -376,6 +376,12 @@ function editorTextIsEmpty(editor: HTMLElement) {
   return raw.trim().length === 0;
 }
 
+/** Unlike editorTextIsEmpty, this doesn't trim — a leading/trailing space
+ *  still counts as content so the placeholder hides as soon as the user types. */
+function editorHasNoContent(editor: HTMLElement) {
+  return (editor.textContent || "").length === 0;
+}
+
 function editorRangeIsInsideRoot(root: HTMLElement, range: Range) {
   const commonAncestor = range.commonAncestorContainer;
   return commonAncestor === root || root.contains(commonAncestor);
@@ -789,6 +795,7 @@ function createMentionIcon(svgMarkup: string) {
   icon.setAttribute("width", "12");
   icon.setAttribute("height", "12");
   icon.style.flexShrink = "0";
+  icon.style.alignSelf = "center";
   return icon;
 }
 
@@ -1735,8 +1742,9 @@ export const MentionComposer = memo(
     const composerContextMenuRangeRef = useRef<Range | null>(null);
     const commitTooltipCloseTimerRef = useRef<number | null>(null);
     const commitTooltipChipRef = useRef<HTMLElement | null>(null);
-    const [isEmpty, setIsEmpty] = useState(true);
+    const [isDomEmpty, setIsDomEmpty] = useState(true);
     const lastIsEmptyRef = useRef(true);
+    const lastIsDomEmptyRef = useRef(true);
     const isComposingRef = useRef(false);
     const compositionEnterKeyRef = useRef(false);
     const lastCompositionEndAtRef = useRef(0);
@@ -1973,11 +1981,15 @@ export const MentionComposer = memo(
       (popupLoading || Boolean(popupError) || suggestions.length > 0 || showEmpty);
 
     const applyEmptyState = useCallback(
-      (nextEmpty: boolean) => {
-        if (lastIsEmptyRef.current === nextEmpty) return;
-        lastIsEmptyRef.current = nextEmpty;
-        setIsEmpty(nextEmpty);
-        onEmptyChange?.(nextEmpty);
+      (nextEmpty: boolean, nextDomEmpty: boolean) => {
+        if (lastIsEmptyRef.current !== nextEmpty) {
+          lastIsEmptyRef.current = nextEmpty;
+          onEmptyChange?.(nextEmpty);
+        }
+        if (lastIsDomEmptyRef.current !== nextDomEmpty) {
+          lastIsDomEmptyRef.current = nextDomEmpty;
+          setIsDomEmpty(nextDomEmpty);
+        }
       },
       [onEmptyChange],
     );
@@ -1985,7 +1997,7 @@ export const MentionComposer = memo(
     const refreshEmptyState = useCallback(() => {
       const el = editorRef.current;
       if (!el) return;
-      applyEmptyState(editorTextIsEmpty(el));
+      applyEmptyState(editorTextIsEmpty(el), editorHasNoContent(el));
     }, [applyEmptyState]);
 
     // ---- Typewriter (typeText) ----
@@ -3015,7 +3027,7 @@ export const MentionComposer = memo(
           className={cn(
             "mention-composer min-h-[70px] max-h-[160px] w-full min-w-0 max-w-full overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] outline-hidden",
             "text-sm",
-            isEmpty && "is-empty",
+            isDomEmpty && "is-empty",
             disabled && "cursor-not-allowed opacity-60",
             className,
           )}
