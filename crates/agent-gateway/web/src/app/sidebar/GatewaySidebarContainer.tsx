@@ -32,16 +32,30 @@ function selectConversationIndex(snapshot: SidebarSnapshot) {
   return snapshot.byId;
 }
 
-// Transport-shaped list errors merely restate "the gateway socket is down";
-// the page-level banner owns that story, so the sidebar never repeats it —
-// including the stale copy that lingers until the reconnect refetch lands.
-// Mirrors isRecoverableGatewayTransportError in lib/gatewaySocket.ts.
+// Transport-shaped list errors merely restate "the read path is down or
+// congested right now"; the page-level banner and Online/Offline pill own
+// that story, so the sidebar never repeats it — including the stale copy
+// that lingers until the next reconcile tick or reconnect refetch lands.
+// Three sources produce this class of message:
+// - browser⇄gateway socket failures (mirrors isRecoverableGatewayTransportError
+//   in lib/gatewaySocket.ts) plus the client-side request timeout, which the
+//   status poll ignores under fresh inbound activity for the same reason;
+// - the Go hub rejecting a roundtrip while the desktop agent is briefly
+//   offline or re-registering ("agent offline", websocket_roundtrip.go) —
+//   the socket stays up in that window, so connectionLost never covers it;
+// - gateway-side context outcomes on the hub⇄agent roundtrip
+//   ("request timed out"/"request canceled", websocket_roundtrip.go).
+// Genuine desktop read failures arrive as other strings and still surface.
 function isGatewayTransportErrorDetail(detail: string | null | undefined) {
   const message = (detail ?? "").trim();
   return (
     message.startsWith("Gateway WebSocket disconnected") ||
     message === "Gateway WebSocket is not connected" ||
-    message.startsWith("Gateway transport stalled")
+    message.startsWith("Gateway transport stalled") ||
+    message.startsWith("Gateway WebSocket request timed out") ||
+    message === "agent offline" ||
+    message === "request timed out" ||
+    message === "request canceled"
   );
 }
 
