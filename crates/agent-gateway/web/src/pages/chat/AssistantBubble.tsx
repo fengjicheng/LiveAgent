@@ -2667,30 +2667,35 @@ function ToolCallItem({
         <ToolIcon className="h-3 w-3" style={{ color: `hsl(${meta.accent})` }} />
       </div>
 
+      {/* Tool name + inline summary on same line. Name and summary must stay in
+          one inline context (shared baseline): centering them as separate flex
+          boxes drifts up to ~1.5px per device with the resolved font metrics. */}
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
-        <span className="shrink-0 text-[12.5px] font-semibold tracking-[-0.01em] text-foreground/90">
-          {title.name}
-          {title.action ? (
-            <span className="font-mono font-semibold text-muted-foreground/70">
-              {" · "}
-              {title.action}
-            </span>
-          ) : null}
-        </span>
+        {/* Container carries the summary styling so the truncation ellipsis
+            (styled per the block container) matches the summary text */}
+        <div
+          className="min-w-0 truncate font-mono text-[11px] leading-5 text-muted-foreground/55"
+          title={!isBash && toolArgsSummary ? toolArgsSummary : undefined}
+        >
+          <span className="font-sans text-[12.5px] font-semibold tracking-[-0.01em] text-foreground/90">
+            {title.name}
+            {title.action ? (
+              <span className="font-mono font-semibold text-muted-foreground/70">
+                {" · "}
+                {title.action}
+              </span>
+            ) : null}
+          </span>
 
-        {isBash && firstLine ? (
-          <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground/55">
-            <span className="text-muted-foreground/30">$</span>{" "}
-            {firstLine.length > 48 ? `${firstLine.slice(0, 48)}…` : firstLine}
-          </span>
-        ) : toolArgsSummary ? (
-          <span
-            className="min-w-0 truncate font-mono text-[11px] text-muted-foreground/55"
-            title={toolArgsSummary}
-          >
-            {toolArgsSummary}
-          </span>
-        ) : null}
+          {isBash && firstLine ? (
+            <span className="ml-1.5">
+              <span className="text-muted-foreground/30">$</span>{" "}
+              {firstLine.length > 48 ? `${firstLine.slice(0, 48)}…` : firstLine}
+            </span>
+          ) : toolArgsSummary ? (
+            <span className="ml-1.5">{toolArgsSummary}</span>
+          ) : null}
+        </div>
 
         {fileChangeStats ? (
           <FileChangeBadge added={fileChangeStats.added} removed={fileChangeStats.removed} />
