@@ -1534,6 +1534,7 @@ function SkillsStoreView(props: {
   } = props;
   const { t } = useLocale();
   const searching = query.trim().length > 0;
+  const refreshing = loading && items.length > 0;
   const [previewSkill, setPreviewSkill] = useState<ClawHubSkillCard | null>(null);
   const [previewDetail, setPreviewDetail] = useState<ClawHubSkillDetail | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -1602,27 +1603,36 @@ function SkillsStoreView(props: {
             className="h-10 w-full rounded-xl border border-border/40 bg-background/60 pl-10 pr-3 text-[13px] outline-hidden backdrop-blur-xl transition-all placeholder:text-muted-foreground/60 focus:border-border/60 focus:bg-background/85 focus:ring-2 focus:ring-foreground/10"
           />
         </div>
-        <div className="flex max-w-full shrink-0 items-center gap-1 self-start overflow-x-auto rounded-xl border border-border/40 bg-background/60 p-1 backdrop-blur-xl shadow-[0_1px_0_rgba(255,255,255,0.5)_inset] dark:border-white/[0.06] dark:bg-white/[0.04] dark:shadow-[0_1px_0_rgba(255,255,255,0.04)_inset] [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:self-auto">
-          {STORE_SORT_OPTIONS.map((option) => {
-            const active = sort === option.value;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => onSortChange(option.value)}
-                disabled={searching}
-                className={cn(
-                  "h-8 shrink-0 whitespace-nowrap rounded-lg px-2.5 text-[11.5px] font-medium transition-all",
-                  "disabled:cursor-not-allowed disabled:opacity-45",
-                  active
-                    ? "bg-background/85 text-foreground shadow-[0_1px_0_rgba(255,255,255,0.55)_inset] ring-1 ring-border/45 dark:bg-white/[0.08] dark:ring-white/[0.09] dark:shadow-[0_1px_0_rgba(255,255,255,0.06)_inset]"
-                    : "text-muted-foreground hover:bg-background/80 hover:text-foreground",
-                )}
-              >
-                {t(option.labelKey)}
-              </button>
-            );
-          })}
+        <div className="flex shrink-0 items-center gap-1.5 self-start lg:self-auto">
+          <Loader2
+            aria-hidden={!refreshing}
+            className={cn(
+              "h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground transition-opacity duration-200 motion-reduce:transition-none",
+              refreshing ? "opacity-100" : "opacity-0",
+            )}
+          />
+          <div className="flex max-w-full shrink-0 items-center gap-1 overflow-x-auto rounded-xl border border-border/40 bg-background/60 p-1 backdrop-blur-xl shadow-[0_1px_0_rgba(255,255,255,0.5)_inset] dark:border-white/[0.06] dark:bg-white/[0.04] dark:shadow-[0_1px_0_rgba(255,255,255,0.04)_inset] [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {STORE_SORT_OPTIONS.map((option) => {
+              const active = sort === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => onSortChange(option.value)}
+                  disabled={searching}
+                  className={cn(
+                    "h-8 shrink-0 whitespace-nowrap rounded-lg px-2.5 text-[11.5px] font-medium transition-all",
+                    "disabled:cursor-not-allowed disabled:opacity-45",
+                    active
+                      ? "bg-background/85 text-foreground shadow-[0_1px_0_rgba(255,255,255,0.55)_inset] ring-1 ring-border/45 dark:bg-white/[0.08] dark:ring-white/[0.09] dark:shadow-[0_1px_0_rgba(255,255,255,0.06)_inset]"
+                      : "text-muted-foreground hover:bg-background/80 hover:text-foreground",
+                  )}
+                >
+                  {t(option.labelKey)}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -1692,7 +1702,12 @@ function SkillsStoreView(props: {
           ) : null}
 
           {items.length > 0 ? (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <div
+              className={cn(
+                "grid gap-3 transition-[opacity,filter] duration-300 ease-out motion-reduce:transition-none sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4",
+                refreshing && "pointer-events-none opacity-50 blur-[1px] saturate-50",
+              )}
+            >
               {items.map((skill) => {
                 const { done, installing, terminalJob, job, progress } = getInstallState(skill);
                 const link = buildClawHubSkillUrl(skill);
