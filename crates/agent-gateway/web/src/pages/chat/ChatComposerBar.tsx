@@ -1,10 +1,12 @@
 import {
   type MutableRefObject,
   memo,
+  type FocusEvent as ReactFocusEvent,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -59,6 +61,16 @@ const REASONING_I18N_KEYS: Record<ReasoningLevel, string> = {
   xhigh: "settings.reasoning.xhigh",
 };
 
+function isFocusVisibleTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  try {
+    return target.matches(":focus-visible");
+  } catch {
+    // Engines without :focus-visible keep the legacy show-on-any-focus behavior.
+    return true;
+  }
+}
+
 function RuntimeControlTooltip(props: { label: string; children: ReactNode }) {
   const triggerRef = useRef<HTMLSpanElement | null>(null);
   const tooltipRef = useRef<HTMLSpanElement | null>(null);
@@ -107,9 +119,29 @@ function RuntimeControlTooltip(props: { label: string; children: ReactNode }) {
     setIsVisible(false);
   }, [clearOpenTimer]);
 
+  const handlePointerEnter = useCallback(
+    (event: ReactPointerEvent<HTMLSpanElement>) => {
+      // Touch has no hover: a tap would open a tooltip nothing ever closes.
+      if (event.pointerType === "touch") return;
+      showTooltip();
+    },
+    [showTooltip],
+  );
+
+  const handleFocusCapture = useCallback(
+    (event: ReactFocusEvent<HTMLSpanElement>) => {
+      // Only keyboard focus opens the tooltip; click/window-refocus would
+      // otherwise pop it without hover (e.g. after the file picker closes).
+      if (!isFocusVisibleTarget(event.target)) return;
+      showTooltip();
+    },
+    [showTooltip],
+  );
+
   useEffect(() => clearOpenTimer, [clearOpenTimer]);
 
-  useEffect(() => {
+  // Layout effect so the measured-width reposition lands before paint.
+  useLayoutEffect(() => {
     if (!isVisible) return;
 
     updatePosition();
@@ -127,8 +159,9 @@ function RuntimeControlTooltip(props: { label: string; children: ReactNode }) {
       ref={triggerRef}
       className="inline-flex shrink-0"
       onBlurCapture={hideTooltip}
-      onFocusCapture={showTooltip}
-      onPointerEnter={showTooltip}
+      onFocusCapture={handleFocusCapture}
+      onPointerDownCapture={hideTooltip}
+      onPointerEnter={handlePointerEnter}
       onPointerLeave={hideTooltip}
     >
       {props.children}
@@ -262,7 +295,13 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
   const selectedReasoning = reasoningOptions.includes(chatRuntimeControls.reasoning)
     ? chatRuntimeControls.reasoning
     : DEFAULT_CHAT_RUNTIME_CONTROLS.reasoning;
-  const uploadTooltip = t("chat.upload.button");
+  const uploadTooltip = isUploadingFiles
+    ? t("chat.upload.uploading")
+    : !isAgentMode
+      ? t("chat.upload.onlyInTools")
+      : !workdir
+        ? t("chat.upload.requireWorkdir")
+        : t("chat.upload.button");
   const thinkingTooltip = !thinkingSupported
     ? t("chat.runtime.thinkingUnavailable")
     : t("chat.runtime.thinkingTooltip");
@@ -560,7 +599,6 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
                                 type="button"
                                 disabled={queueCollapsed}
                                 onClick={() => onEditQueuedTurn(item.id)}
-                                title={t("chat.queue.edit")}
                                 aria-label={t("chat.queue.edit")}
                                 className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground"
                               >
@@ -572,7 +610,6 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
                                 type="button"
                                 disabled={queueCollapsed}
                                 onClick={() => onRunQueuedTurnNow(item.id)}
-                                title={t("chat.queue.runNow")}
                                 aria-label={t("chat.queue.runNow")}
                                 className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground"
                               >
@@ -584,7 +621,6 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
                                 type="button"
                                 disabled={queueCollapsed}
                                 onClick={() => onRemoveQueuedTurn(item.id)}
-                                title={t("chat.queue.delete")}
                                 aria-label={t("chat.queue.delete")}
                                 className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
                               >
