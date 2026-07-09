@@ -4,6 +4,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { StatusDashboardPage } from "./pages/StatusDashboardPage";
 import "./index.css";
+import "katex/dist/katex.min.css";
 import "react-complex-tree/lib/style-modern.css";
 import "streamdown/styles.css";
 import "./styles.css";
