@@ -63,6 +63,9 @@ func (m *Manager) SetSession(s *AgentSession) {
 			go m.pushWorkspaceWatchSet()
 		}
 	}
+	if sessionChanged {
+		m.broadcastStatus()
+	}
 }
 
 func (m *Manager) ClearSession(session *AgentSession) {
@@ -164,6 +167,36 @@ func (m *Manager) ChatRuntimeReady() bool {
 	return runtimeReadyLocked(m.registry, time.Now())
 }
 
+func (m *Manager) ChatRuntimeProbeEpoch() (uint64, bool) {
+	m.registry.mu.RLock()
+	defer m.registry.mu.RUnlock()
+	if m.registry.session == nil {
+		return 0, false
+	}
+	return m.registry.sessionEpoch, true
+}
+
+func (m *Manager) RecordChatRuntimeProbe(sessionEpoch uint64) bool {
+	m.registry.mu.Lock()
+	defer m.registry.mu.Unlock()
+	if sessionEpoch == 0 || m.registry.session == nil || m.registry.sessionEpoch != sessionEpoch {
+		return false
+	}
+	m.registry.chatRuntimeProbeAt = time.Now()
+	return true
+}
+
+func (m *Manager) ChatRuntimeProbeFresh(maxAge time.Duration) bool {
+	if maxAge <= 0 {
+		return false
+	}
+	m.registry.mu.RLock()
+	defer m.registry.mu.RUnlock()
+	return m.registry.session != nil &&
+		!m.registry.chatRuntimeProbeAt.IsZero() &&
+		time.Since(m.registry.chatRuntimeProbeAt) <= maxAge
+}
+
 func (m *Manager) UpdateRuntimeStatus(
 	session *AgentSession,
 	event *gatewayv1.RuntimeStatusEvent,
@@ -176,15 +209,29 @@ func (m *Manager) UpdateRuntimeStatus(
 	now := time.Now()
 
 	m.registry.mu.Lock()
-	defer m.registry.mu.Unlock()
 	if m.registry.session == nil || (session != nil && m.registry.session != session) {
+		m.registry.mu.Unlock()
 		return
 	}
+	previousReady := runtimeReadyLocked(m.registry, now)
+	changed := m.registry.runtimeState != state ||
+		m.registry.runtimeWorkerID != workerID ||
+		m.registry.runtimeVisible != event.GetVisible() ||
+		m.registry.runtimeActiveRunCount != event.GetActiveRunCount()
 	m.registry.runtimeState = state
 	m.registry.runtimeWorkerID = workerID
 	m.registry.runtimeLastHeartbeat = now
 	m.registry.runtimeVisible = event.GetVisible()
 	m.registry.runtimeActiveRunCount = event.GetActiveRunCount()
+	changed = changed || previousReady != runtimeReadyLocked(m.registry, now)
+	m.registry.mu.Unlock()
+
+	// Runtime readiness is part of the public Status contract. Push semantic
+	// transitions, but do not fan out a status frame for every heartbeat tick;
+	// the low-frequency status poll reconciles timestamp-only changes.
+	if changed {
+		m.broadcastStatus()
+	}
 }
 
 // touchRuntimeActivity refreshes the chat-runtime heartbeat when live chat
@@ -215,6 +262,7 @@ func clearRuntimeStatusLocked(registry *sessionRegistry) {
 	registry.runtimeLastHeartbeat = time.Time{}
 	registry.runtimeVisible = false
 	registry.runtimeActiveRunCount = 0
+	registry.chatRuntimeProbeAt = time.Time{}
 }
 
 func runtimeReadyLocked(registry *sessionRegistry, now time.Time) bool {
@@ -294,6 +342,39 @@ func (m *Manager) RegisterStream(requestID string) (<-chan *gatewayv1.AgentEnvel
 
 	cleanup := func() {
 		session.unregisterStream(requestID, stream)
+	}
+
+	return stream.ch, stream.done, cleanup, nil
+}
+
+// RegisterStreamAndSendContext binds response correlation and request delivery
+// to the same AgentSession instance. Calling RegisterStream followed by
+// Manager.SendToAgentContext performs two independent current-session lookups;
+// a seamless session replacement between them can register the stream on the
+// old session while sending the request to the new one, making every response
+// unmatchable. Capturing the session once closes that TOCTOU window.
+func (m *Manager) RegisterStreamAndSendContext(
+	ctx context.Context,
+	requestID string,
+	env *gatewayv1.GatewayEnvelope,
+) (<-chan *gatewayv1.AgentEnvelope, <-chan struct{}, func(), error) {
+	m.registry.mu.RLock()
+	session := m.registry.session
+	m.registry.mu.RUnlock()
+	if session == nil {
+		return nil, nil, nil, ErrAgentOffline
+	}
+
+	stream, err := session.registerStream(requestID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	cleanup := func() {
+		session.unregisterStream(requestID, stream)
+	}
+	if err := session.SendToAgentContext(ctx, env); err != nil {
+		cleanup()
+		return nil, nil, nil, err
 	}
 
 	return stream.ch, stream.done, cleanup, nil

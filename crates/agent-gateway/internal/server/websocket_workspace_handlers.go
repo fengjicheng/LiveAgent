@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"strings"
 	"sync"
 
@@ -76,6 +77,9 @@ func (c *websocketConnection) forwardWorkspaceActivity(
 				return
 			}
 			if err := c.writeEvent("workspace.activity", websocketWorkspaceActivityPayload(event)); err != nil {
+				if errors.Is(err, errWriteQueueFull) {
+					continue
+				}
 				return
 			}
 		}

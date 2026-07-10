@@ -31,6 +31,11 @@ export type Turn = {
   // Folded turns render inside the virtualized region; the fold only flips
   // this flag — row keys and objects never change, so nothing remounts.
   folded: boolean;
+  // The run ended during a reset gap and the replay could not rebuild the
+  // content: the kept streamed entries may be incomplete, so a history twin
+  // carrying assistant content adopts wholesale (enrichTurnFromHistory)
+  // instead of the usual payload-only upgrade.
+  contentStale?: boolean;
 };
 
 export type TranscriptRowOrigin = "history" | "stream";

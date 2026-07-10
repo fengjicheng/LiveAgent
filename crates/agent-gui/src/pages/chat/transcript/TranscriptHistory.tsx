@@ -1,10 +1,21 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 
-import { Check, CheckCircle2, ChevronDown, Copy, Pencil } from "../../../components/icons";
+import {
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  Copy,
+  Pencil,
+  RefreshCw,
+} from "../../../components/icons";
 import { Markdown } from "../../../components/Markdown";
+import { ConfirmActionPopover } from "../../../components/ui/confirm-action-popover";
 import { useLocale } from "../../../i18n";
-import type { RenderSummaryCard } from "../../../lib/chat/conversation/conversationState";
+import type {
+  RenderSummaryCard,
+  RenderUserMessage,
+} from "../../../lib/chat/conversation/conversationState";
 import { getRoundText } from "../../../lib/chat/messages/uiMessages";
 import {
   buildGitHubCommitUrl,
@@ -279,6 +290,25 @@ export const TranscriptHistory = memo(function TranscriptHistory(props: Transcri
           );
         }
 
+        const replyText = item.rounds
+          .map((round) => getRoundText(round).trim())
+          .filter((text) => text.length > 0)
+          .join("\n\n");
+        // Retry re-sends the nearest preceding user prompt through the
+        // edit-resend truncation pipeline: this reply and everything after
+        // it are discarded, same as editing that prompt without changes.
+        let retryTarget: RenderUserMessage | null = null;
+        for (let index = virtualRow.index - 1; index >= 0; index -= 1) {
+          const candidate = historyItems[index];
+          if (candidate?.kind === "user") {
+            retryTarget = candidate;
+            break;
+          }
+        }
+        const retryMessageRef = retryTarget?.messageRef;
+        const retryDisabled = isSending || !retryMessageRef;
+        const retryTitle = retryMessageRef ? t("chat.retry") : "旧历史缺少稳定消息标识，无法重试";
+        const isReplyCopied = copiedMessageKey === item.key;
         return (
           <div
             key={virtualRow.key}
@@ -290,11 +320,60 @@ export const TranscriptHistory = memo(function TranscriptHistory(props: Transcri
             style={{ transform: `translateY(${virtualRow.start}px)` }}
           >
             {item.rounds.length > 0 ? (
-              <AssistantBubble
-                rounds={item.rounds}
-                showUsage={showUsage}
-                usageContextWindow={usageContextWindow}
-              />
+              <div className="group/assistant w-full max-w-full">
+                <AssistantBubble
+                  rounds={item.rounds}
+                  showUsage={showUsage}
+                  usageContextWindow={usageContextWindow}
+                />
+                <div className="mt-1 flex justify-start gap-0.5 pl-10 opacity-0 transition-opacity group-focus-within/assistant:opacity-100 group-hover/assistant:opacity-100">
+                  <button
+                    type="button"
+                    className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                    title={t("chat.copy")}
+                    disabled={!replyText}
+                    onClick={() => {
+                      navigator.clipboard.writeText(replyText);
+                      setCopiedMessageKey(item.key);
+                      if (copiedResetTimerRef.current !== null) {
+                        window.clearTimeout(copiedResetTimerRef.current);
+                      }
+                      copiedResetTimerRef.current = window.setTimeout(() => {
+                        copiedResetTimerRef.current = null;
+                        setCopiedMessageKey(null);
+                      }, 1500);
+                    }}
+                  >
+                    {isReplyCopied ? (
+                      <Check className="h-3.5 w-3.5" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                  <ConfirmActionPopover
+                    title={t("chat.retryConfirmTitle")}
+                    description={t("chat.retryConfirmDescription")}
+                    confirmLabel={t("chat.retry")}
+                    align="start"
+                    side="top"
+                    onConfirm={() => {
+                      if (!retryTarget || !retryMessageRef) return;
+                      onResendFromEdit(retryMessageRef, retryTarget.text, retryTarget.attachments);
+                    }}
+                  >
+                    {() => (
+                      <button
+                        type="button"
+                        className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                        title={retryTitle}
+                        disabled={retryDisabled}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </ConfirmActionPopover>
+                </div>
+              </div>
             ) : (
               <div className="flex w-full max-w-full items-start gap-3">
                 <AssistantAvatar />

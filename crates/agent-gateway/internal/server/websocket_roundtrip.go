@@ -43,19 +43,11 @@ func awaitAgentUnaryResponse(
 	requestID string,
 	envelope *gatewayv1.GatewayEnvelope,
 ) (*gatewayv1.AgentEnvelope, error) {
-	if !sm.IsOnline() {
-		return nil, session.ErrAgentOffline
-	}
-
-	ch, done, cleanup, err := sm.RegisterStream(requestID)
+	ch, done, cleanup, err := sm.RegisterStreamAndSendContext(ctx, requestID, envelope)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
-
-	if err := sm.SendToAgentContext(ctx, envelope); err != nil {
-		return nil, err
-	}
 
 	return waitForAgentEnvelope(ctx, ch, done)
 }

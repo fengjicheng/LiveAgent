@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"time"
 
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
@@ -102,6 +103,9 @@ func (c *websocketConnection) startTunnelStateForwarder() {
 					return
 				}
 				if err := c.writeEvent("tunnel.state", websocketTunnelStatePayload(snapshot)); err != nil {
+					if errors.Is(err, errWriteQueueFull) {
+						continue
+					}
 					return
 				}
 			}

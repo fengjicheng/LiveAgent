@@ -95,6 +95,10 @@ type PendingRequest = {
   timeoutId: number;
 };
 
+type GatewayRequestOptions = {
+  timeoutMs?: number;
+};
+
 type GatewayChatSystemSettings = {
   executionMode?: string;
   workdir?: string;
@@ -700,6 +704,18 @@ const RECONNECT_NOTICE_DELAY_MS = 15_000;
 const SOCKET_INBOUND_STALL_MS = 45_000;
 const FOREGROUND_SOCKET_RECYCLE_IDLE_MS = 20_000;
 const FOREGROUND_WAKEUP_RECENCY_MS = 15_000;
+const SOCKET_CONNECT_TIMEOUT_MS = 10_000;
+const SOCKET_AUTH_TIMEOUT_MS = 15_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const CHAT_PREPARE_REQUEST_TIMEOUT_MS = 2_500;
+const CHAT_COMMAND_ACK_TIMEOUT_MS = 4_000;
+// Fallback only: agent online/offline transitions arrive as pushed
+// status.event frames, so the poll exists to reconcile missed pushes and
+// TTL-derived fields (chat_runtime_ready), not to detect liveness. While the
+// pill shows offline the poll IS the recovery path against a gateway that
+// does not push (rollback), so it speeds up.
+const STATUS_POLL_INTERVAL_MS = 30_000;
+const STATUS_POLL_OFFLINE_INTERVAL_MS = 5_000;
 
 type RuntimeHost = {
   location?: {
@@ -739,6 +755,10 @@ function getRuntimeOrigin() {
     return new URL(href).origin;
   }
   return "";
+}
+
+function isDocumentHidden() {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
 
 function isForegroundWakeupEvent(event?: Event) {
@@ -1164,6 +1184,23 @@ function isRequestTimeoutError(error: unknown) {
   return asErrorMessage(error, "").startsWith("Gateway WebSocket request timed out");
 }
 
+function isConnectionSetupTimeoutError(error: unknown) {
+  const message = asErrorMessage(error, "");
+  return (
+    message === "Gateway WebSocket connection timed out" ||
+    message === "Gateway WebSocket auth timed out"
+  );
+}
+
+function isUnsupportedChatPrepareError(error: unknown) {
+  const message = asErrorMessage(error, "").toLowerCase();
+  return (
+    message.includes("unsupported request type") ||
+    message.includes("unsupported chat.prepare") ||
+    message.includes("unknown request type")
+  );
+}
+
 const RECOVERABLE_MEMORY_MANAGE_COMMANDS = new Set([
   "memory_list",
   "memory_read",
@@ -1216,10 +1253,11 @@ export class GatewayWebSocketClient {
   private processStateListeners = new Set<ManagedProcessStateListener>();
   private lastProcessState: ManagedProcessStatePayload | null = null;
   readonly conversationStreams = new ConversationStreamClient({
-    request: (type, payload) => this.request(type, payload),
+    request: (type, payload, options) => this.request(type, payload, options),
   });
   private terminalSessionSnapshot = new Map<string, TerminalSession>();
   private statusPollTimer: number | null = null;
+  private statusPollingActive = false;
   private statusRefreshInFlight = false;
   private lastStatus: AgentStatus | null = null;
   private lastStatusError: string | null = null;
@@ -1229,6 +1267,9 @@ export class GatewayWebSocketClient {
   private reconnectAttempt = 0;
   private reconnecting = false;
   private lastForegroundWakeupAt = 0;
+  // A hidden tab must not paint offline state the user cannot see from
+  // throttled timers; the verdict is deferred until a foreground recheck.
+  private offlineReassessmentPending = false;
   private prepareRuntimePromise: Promise<AgentStatus> | null = null;
   private readonly reconnectWakeup = (event?: Event) => {
     this.noteForegroundWakeup(event);
@@ -1245,13 +1286,32 @@ export class GatewayWebSocketClient {
     }
     const now = Date.now();
     this.lastForegroundWakeupAt = now;
+    const reassess = this.offlineReassessmentPending;
+    this.offlineReassessmentPending = false;
     if (
       this.socket?.readyState === WebSocket.OPEN &&
       this.authenticated &&
       this.shouldRecycleAuthenticatedSocket(now)
     ) {
       this.handleDisconnect(this.buildTransportStallError("after page restore"));
+      this.scheduleReconnectNotice();
       return;
+    }
+    if (this.socket?.readyState === WebSocket.OPEN && this.authenticated) {
+      // Healthy socket: reconcile the status truth immediately so a verdict
+      // deferred while hidden resolves to fresh state, not a stale banner.
+      if (this.statusListeners.size > 0) {
+        void this.refreshStatus();
+      }
+      return;
+    }
+    if (reassess || this.reconnectNoticeTimer !== null) {
+      // The existing notice delay doubles as the post-wake grace: nothing
+      // paints offline until a reconnect attempt has had its 15s to settle.
+      // A notice armed before (or while) hidden restarts from wake — it must
+      // not fire seconds after refocus with most of its window pre-spent.
+      this.clearReconnectNoticeTimer();
+      this.scheduleReconnectNotice();
     }
     this.scheduleReconnect(0);
   }
@@ -1263,14 +1323,31 @@ export class GatewayWebSocketClient {
     return status;
   }
 
-  async prepareChatRuntime(_reason?: string): Promise<AgentStatus> {
+  async prepareChatRuntime(reason?: string): Promise<AgentStatus> {
     if (this.prepareRuntimePromise) {
       return this.prepareRuntimePromise;
     }
     this.noteForegroundWakeup();
     this.prepareRuntimePromise = (async () => {
       await this.ensureConnected();
-      const status = await this.getStatus();
+      let status: AgentStatus;
+      try {
+        status = await this.request<AgentStatus>(
+          "chat.prepare",
+          {
+            reason: reason?.trim() || "",
+          },
+          { timeoutMs: CHAT_PREPARE_REQUEST_TIMEOUT_MS },
+        );
+      } catch (error) {
+        if (!isUnsupportedChatPrepareError(error)) {
+          throw error;
+        }
+        // Rolling-upgrade compatibility: old gateways do not expose the real
+        // prepare route. A status read preserves the old behavior until the
+        // server is upgraded, while new gateways actively wake the runtime.
+        status = await this.getStatus();
+      }
       this.emitStatus(status, null);
       return status;
     })().finally(() => {
@@ -1523,10 +1600,42 @@ export class GatewayWebSocketClient {
     if (this.token.trim() === "") {
       throw new Error("Gateway token is required");
     }
-    const response = await this.request<RawChatCommandResponse>(
-      "chat.command",
-      buildChatCommandPayload(input),
-    );
+    // Build exactly once: the gateway deduplicates by client_request_id, so a
+    // lost acknowledgement can be retried after reconnect without dispatching
+    // a second desktop run. Rebuilding here could generate a different id for
+    // callers that omitted one and would defeat that guarantee.
+    const payload = buildChatCommandPayload(input);
+    const request = () =>
+      this.request<RawChatCommandResponse>("chat.command", payload, {
+        timeoutMs: CHAT_COMMAND_ACK_TIMEOUT_MS,
+      });
+    let response: RawChatCommandResponse;
+    try {
+      response = await request();
+    } catch (error) {
+      if (
+        this.disposed ||
+        (!isRecoverableGatewayTransportError(error) &&
+          !isRequestTimeoutError(error) &&
+          !isConnectionSetupTimeoutError(error))
+      ) {
+        throw error;
+      }
+      if (this.socket || this.connectPromise) {
+        this.handleDisconnect(
+          this.buildTransportStallError("while recovering chat command acknowledgement"),
+        );
+      }
+      try {
+        await this.ensureConnected();
+      } catch {
+        // The forced disconnect may have rejected an in-flight connect
+        // attempt whose settled promise ensureConnected replays; one fresh
+        // attempt follows it so the retry actually reaches the wire.
+        await this.ensureConnected();
+      }
+      response = await request();
+    }
     const runId = String(response.run_id ?? "").trim();
     if (!runId) {
       throw new Error("Gateway chat command returned no run_id");
@@ -1549,16 +1658,12 @@ export class GatewayWebSocketClient {
   ): () => void {
     const cleanup = this.conversationStreams.subscribe(conversationId, handlers);
     // Establish the connection (and thereby the subscription) eagerly.
-    void this.ensureConnected()
-      .then(() => {
-        if (this.authenticated) {
-          this.setConnectionState(true);
-          this.conversationStreams.handleConnected();
-        }
-      })
-      .catch(() => {
-        this.scheduleReconnect();
-      });
+    // Authentication is the single connection notification point; subscribe()
+    // handles the already-connected case itself, so replaying handleConnected
+    // here would issue every chat.subscribe twice.
+    void this.ensureConnected().catch(() => {
+      this.scheduleReconnect();
+    });
     return cleanup;
   }
 
@@ -2275,19 +2380,33 @@ export class GatewayWebSocketClient {
 
   private startStatusPolling() {
     this.stopStatusPolling();
+    this.statusPollingActive = true;
     void this.refreshStatus();
-    const host = getRuntimeHost();
-    this.statusPollTimer = host.setInterval(() => {
-      void this.refreshStatus();
-    }, 5_000);
+    this.scheduleNextStatusPoll();
   }
 
   private stopStatusPolling() {
+    this.statusPollingActive = false;
     if (this.statusPollTimer !== null) {
       const host = getRuntimeHost();
-      host.clearInterval(this.statusPollTimer);
+      host.clearTimeout(this.statusPollTimer);
       this.statusPollTimer = null;
     }
+  }
+
+  private scheduleNextStatusPoll() {
+    if (this.disposed || !this.statusPollingActive || this.statusPollTimer !== null) {
+      return;
+    }
+    const host = getRuntimeHost();
+    const delay =
+      this.lastStatus !== null && this.lastStatus.online === false
+        ? STATUS_POLL_OFFLINE_INTERVAL_MS
+        : STATUS_POLL_INTERVAL_MS;
+    this.statusPollTimer = host.setTimeout(() => {
+      this.statusPollTimer = null;
+      void this.refreshStatus().finally(() => this.scheduleNextStatusPoll());
+    }, delay);
   }
 
   private installReconnectWakeups() {
@@ -2346,6 +2465,12 @@ export class GatewayWebSocketClient {
         this.statusListeners.size === 0 ||
         (this.socket?.readyState === WebSocket.OPEN && this.authenticated)
       ) {
+        return;
+      }
+      if (isDocumentHidden()) {
+        // Deferred: the wakeup handler re-arms this notice and only a failed
+        // post-wake reconnect gets to paint the offline banner.
+        this.offlineReassessmentPending = true;
         return;
       }
       this.emitStatus(
@@ -2468,6 +2593,12 @@ export class GatewayWebSocketClient {
         // Keep the last known status; the next poll retries.
         return;
       }
+      if (isDocumentHidden()) {
+        // Keep the last visible status; the foreground wakeup rechecks
+        // before any offline verdict is painted.
+        this.offlineReassessmentPending = true;
+        return;
+      }
       const message = asErrorMessage(error, "status request failed");
       const offlineStatus =
         this.lastStatus !== null
@@ -2485,10 +2616,20 @@ export class GatewayWebSocketClient {
   }
 
   private emitStatus(status: AgentStatus | null, error: string | null) {
+    // Whatever gets painted is the verdict; any deferred reassessment is moot.
+    this.offlineReassessmentPending = false;
     this.lastStatus = status;
     this.lastStatusError = error;
     if (status?.online === false) {
       this.terminalSessionSnapshot.clear();
+      // Switch a pending slow poll to the offline fast cadence right away
+      // rather than after its remaining (up to 30s) delay.
+      if (this.statusPollTimer !== null) {
+        const host = getRuntimeHost();
+        host.clearTimeout(this.statusPollTimer);
+        this.statusPollTimer = null;
+        this.scheduleNextStatusPoll();
+      }
     }
     for (const listener of this.statusListeners) {
       listener(status, error);
@@ -2547,19 +2688,27 @@ export class GatewayWebSocketClient {
     }
   }
 
-  private async requestWithRecovery<T>(type: string, payload: unknown): Promise<T> {
+  private async requestWithRecovery<T>(
+    type: string,
+    payload: unknown,
+    options?: GatewayRequestOptions,
+  ): Promise<T> {
     try {
-      return await this.request<T>(type, payload);
+      return await this.request<T>(type, payload, options);
     } catch (error) {
       if (!isRecoverableGatewayTransportError(error) || this.disposed) {
         throw error;
       }
       await this.recoverTransport();
-      return this.request<T>(type, payload);
+      return this.request<T>(type, payload, options);
     }
   }
 
-  private async request<T>(type: string, payload: unknown): Promise<T> {
+  private async request<T>(
+    type: string,
+    payload: unknown,
+    options?: GatewayRequestOptions,
+  ): Promise<T> {
     await this.ensureConnected();
     const requestId = this.nextRequestId(type);
     return new Promise<T>((resolve, reject) => {
@@ -2578,7 +2727,7 @@ export class GatewayWebSocketClient {
 
         this.pending.delete(requestId);
         reject(new Error(`Gateway WebSocket request timed out: ${type}`));
-      }, 30_000);
+      }, options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
 
       this.pending.set(requestId, {
         resolve,
@@ -2620,9 +2769,46 @@ export class GatewayWebSocketClient {
     }
 
     const socketUrl = buildWebSocketUrl();
+    let reconnectAfterTimeout = false;
     this.connectPromise = new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(socketUrl);
+      const host = getRuntimeHost();
       let settled = false;
+      let authTimeoutId: number | null = null;
+      const clearAttemptTimers = () => {
+        host.clearTimeout(connectionTimeoutId);
+        if (authTimeoutId !== null) {
+          host.clearTimeout(authTimeoutId);
+          authTimeoutId = null;
+        }
+      };
+      const rejectOnce = (error: Error) => {
+        clearAttemptTimers();
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(error);
+      };
+      const connectionTimeoutId = host.setTimeout(() => {
+        const error = new Error("Gateway WebSocket connection timed out");
+        reconnectAfterTimeout = true;
+        rejectOnce(error);
+        if (this.socket === socket) {
+          this.handleDisconnect(error);
+          return;
+        }
+        socket.onopen = null;
+        socket.onclose = null;
+        socket.onmessage = null;
+        socket.onerror = null;
+        try {
+          socket.close();
+        } catch {
+          // The browser may reject close() while the handshake is between
+          // internal states; the detached attempt is still abandoned.
+        }
+      }, SOCKET_CONNECT_TIMEOUT_MS);
 
       socket.onmessage = (event) => {
         this.handleMessage(event.data);
@@ -2631,36 +2817,48 @@ export class GatewayWebSocketClient {
         // onclose will drive the actual error propagation
       };
       socket.onclose = (event) => {
+        clearAttemptTimers();
         const reason = event.reason.trim() ? ` reason=${event.reason.trim()}` : "";
         const error = new Error(
           `Gateway WebSocket disconnected (code=${event.code} clean=${event.wasClean}${reason})`,
         );
-        this.handleDisconnect(error);
-        if (!settled) {
-          settled = true;
-          reject(error);
+        // A rejected attempt can close after its caller has already opened a
+        // replacement socket. Only the socket still owned by this client may
+        // tear down shared state; a detached attempt merely settles itself.
+        if (this.socket === socket) {
+          this.handleDisconnect(error);
         }
+        rejectOnce(error);
       };
       socket.onopen = () => {
+        if (settled) {
+          socket.close();
+          return;
+        }
+        // The transport phase is over: hand the deadline to the auth timer.
+        // Left running, the connect timer would always preempt the (longer)
+        // auth timeout and cap connect+auth at the connect budget.
+        host.clearTimeout(connectionTimeoutId);
         this.socket = socket;
         this.authenticated = false;
         this.lastInboundAt = 0;
         this.clearReconnectTimer();
 
         const authId = this.nextRequestId("auth");
-        const host = getRuntimeHost();
-        const timeoutId = host.setTimeout(() => {
+        authTimeoutId = host.setTimeout(() => {
           this.pending.delete(authId);
-          if (!settled) {
-            settled = true;
-            reject(new Error("Gateway WebSocket auth timed out"));
+          const error = new Error("Gateway WebSocket auth timed out");
+          rejectOnce(error);
+          if (this.socket === socket) {
+            this.handleDisconnect(error);
+          } else {
+            socket.close();
           }
-          socket.close();
-        }, 15_000);
+        }, SOCKET_AUTH_TIMEOUT_MS);
 
         this.pending.set(authId, {
           resolve: () => {
-            host.clearTimeout(timeoutId);
+            clearAttemptTimers();
             this.authenticated = true;
             this.clearReconnectNoticeTimer();
             this.reconnectAttempt = 0;
@@ -2673,14 +2871,16 @@ export class GatewayWebSocketClient {
             }
           },
           reject: (reason) => {
-            host.clearTimeout(timeoutId);
-            if (!settled) {
-              settled = true;
-              reject(reason);
+            const error = reason instanceof Error ? reason : new Error(String(reason));
+            rejectOnce(error);
+            if (this.socket === socket) {
+              this.handleDisconnect(error);
+            } else {
+              socket.onclose = null;
+              socket.close();
             }
-            socket.close();
           },
-          timeoutId,
+          timeoutId: authTimeoutId,
         });
 
         this.sendEnvelope({
@@ -2693,6 +2893,9 @@ export class GatewayWebSocketClient {
       };
     }).finally(() => {
       this.connectPromise = null;
+      if (reconnectAfterTimeout && !this.disposed) {
+        this.scheduleReconnect(0);
+      }
     });
 
     await this.connectPromise;
@@ -2781,6 +2984,18 @@ export class GatewayWebSocketClient {
           : null;
       if (payload) {
         this.emitTunnelState(normalizeTunnelStateSnapshot(payload));
+      }
+      return;
+    }
+
+    if (envelope.type === "status.event") {
+      const payload =
+        envelope.payload && typeof envelope.payload === "object"
+          ? (envelope.payload as AgentStatus)
+          : null;
+      if (payload && typeof payload.online === "boolean") {
+        this.clearReconnectNoticeTimer();
+        this.emitStatus(payload, null);
       }
       return;
     }
@@ -2885,6 +3100,8 @@ export class GatewayWebSocketClient {
     if (!this.disposed && this.statusListeners.size > 0) {
       if (isRecoverableGatewayTransportError(error) && this.shouldMaintainConnection()) {
         this.scheduleReconnectNotice();
+      } else if (isDocumentHidden()) {
+        this.offlineReassessmentPending = true;
       } else {
         this.emitStatus(
           this.lastStatus

@@ -73,6 +73,7 @@ import {
   getSshProjectHostIds,
   isAgentDevMode,
   isRightDockSingletonTabOpen,
+  isThinkingAlwaysOnForModel,
   normalizeChatRuntimeControlsForProvider,
   openRightDockSingletonTab,
   type RightDockFileTreeStatePatch,
@@ -175,6 +176,12 @@ import { useGatewaySettingsSync } from "./hooks/useGatewaySettingsSync";
 import { usePendingUploads } from "./hooks/usePendingUploads";
 import { useProjectToolsRuntime } from "./hooks/useProjectToolsRuntime";
 import { GatewaySidebarContainer } from "./sidebar/GatewaySidebarContainer";
+import {
+  type GatewaySidebarStatusFreshnessEvent,
+  INITIAL_GATEWAY_SIDEBAR_STATUS_FRESHNESS,
+  reduceGatewaySidebarStatusFreshness,
+  shouldDisableGatewaySidebarSections,
+} from "./sidebar/gatewaySidebarAvailability";
 import type { ModelProviderSource, OverlayState, SendChatFn, SendChatOptions } from "./types";
 import { UserMenu } from "./UserMenu";
 import { WorkspaceOverlayHost } from "./WorkspaceOverlayHost";
@@ -208,8 +215,11 @@ export default function GatewayApp() {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   // True only after an authenticated gateway connection has been established
-  // and then dropped; the initial connect (skeleton phase) never disables UI.
+  // and then dropped; the initial connect never shows lost-connection UI.
   const [gatewayConnectionLost, setGatewayConnectionLost] = useState(false);
+  // A cached Agent status is usable only after it has been observed on the
+  // currently authenticated browser-socket epoch.
+  const [sidebarAgentStatusFresh, setSidebarAgentStatusFresh] = useState(false);
   const [conversationId, setConversationId] = useState("");
   const [chatError, setChatError] = useState<string | null>(null);
   // Sidebar errors raised outside the sidebar store (project removal flow).
@@ -270,6 +280,7 @@ export default function GatewayApp() {
   const [sharedManagerErrors, setSharedManagerErrors] = useState<
     Record<string, string | undefined>
   >({});
+  const [sharedHistoryListError, setSharedHistoryListError] = useState<string | null>(null);
   const [sharedHistoryItems, setSharedHistoryItems] = useState<ChatHistorySummary[]>([]);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [activeView, setActiveView] = useState<"chat" | "skills-hub" | "mcp-hub">("chat");
@@ -296,7 +307,10 @@ export default function GatewayApp() {
   const queuedChatEditSessionRef = useRef<{ itemId: string; revision: number } | null>(null);
   const selectedHistoryRef = useRef(selectedHistory);
   const sharedHistoryItemsRef = useRef<ChatHistorySummary[]>([]);
-  const sharedHistoryListRequestRef = useRef<Promise<ChatHistorySummary[]> | null>(null);
+  const sharedHistoryListRequestRef = useRef<{
+    generation: string;
+    promise: Promise<ChatHistorySummary[]>;
+  } | null>(null);
   // Per-conversation runtime workdir (drafts have no persisted summary yet).
   const conversationWorkdirsRef = useRef<Map<string, string>>(new Map());
   const displayedConversationWorkdirRef = useRef("");
@@ -1143,26 +1157,24 @@ export default function GatewayApp() {
 
   useEffect(() => {
     if (!api) {
-      return;
-    }
-
-    const unsubscribe = api.subscribeStatus((nextStatus, error) => {
-      statusRef.current = nextStatus;
-      setStatus(nextStatus);
-      setStatusError(error);
-    });
-    return () => {
-      unsubscribe();
-    };
-  }, [api]);
-
-  useEffect(() => {
-    if (!api) {
       setGatewayConnectionLost(false);
+      setSidebarAgentStatusFresh(false);
       return;
     }
+
     let wasConnected = false;
-    const unsubscribe = api.subscribeConnection((connected) => {
+    let freshnessState = INITIAL_GATEWAY_SIDEBAR_STATUS_FRESHNESS;
+    const applyFreshnessEvent = (event: GatewaySidebarStatusFreshnessEvent) => {
+      freshnessState = reduceGatewaySidebarStatusFreshness(freshnessState, event);
+      setSidebarAgentStatusFresh(freshnessState.agentStatusFresh);
+    };
+
+    setGatewayConnectionLost(false);
+    setSidebarAgentStatusFresh(false);
+    // Subscribe to connection first so an immediately replayed cached status
+    // is interpreted against the socket state that owns the current epoch.
+    const unsubscribeConnection = api.subscribeConnection((connected) => {
+      applyFreshnessEvent({ type: "connection", connected });
       if (connected) {
         wasConnected = true;
         setGatewayConnectionLost(false);
@@ -1170,8 +1182,16 @@ export default function GatewayApp() {
         setGatewayConnectionLost(true);
       }
     });
+    const unsubscribeStatus = api.subscribeStatus((nextStatus, error) => {
+      applyFreshnessEvent({ type: "status" });
+      statusRef.current = nextStatus;
+      setStatus(nextStatus);
+      setStatusError(error);
+    });
+
     return () => {
-      unsubscribe();
+      unsubscribeConnection();
+      unsubscribeStatus();
     };
   }, [api]);
 
@@ -1456,7 +1476,7 @@ export default function GatewayApp() {
   // transitions busy → idle (run finished), run the quiet enrich refresh so
   // the settled tail's user bubbles gain their persisted messageRef (edit
   // affordance) without waiting for a history upsert to race the idle gate.
-  // The upsert-while-idle path below stays as the backstop for the
+  // The upsert-while-idle effect below stays as the backstop for the
   // persist-after-done ordering.
   const previousDisplayedBusyRef = useRef({ id: "", busy: false });
   useEffect(() => {
@@ -1479,6 +1499,32 @@ export default function GatewayApp() {
     displayedConversationId,
     refreshDisplayedConversationHistorySnapshot,
   ]);
+
+  // The upsert-while-idle backstop: the desktop reports run completion before
+  // its post-run history flush lands, so the busy→idle enrich above can fetch
+  // a window that misses the reply. Once the flush lands the desktop publishes
+  // a history upsert — re-run the quiet enrich for the displayed conversation
+  // so a turn holding stale or adopted-nothing content converges without a
+  // re-open. The refresh itself re-checks displayed + idle around the fetch.
+  useEffect(() => {
+    if (!api) {
+      return;
+    }
+    return api.subscribeHistory((event) => {
+      if (event.kind !== "upsert") {
+        return;
+      }
+      const conversationIdValue = event.conversation_id.trim();
+      if (
+        !conversationIdValue ||
+        resolveVisibleConversationId(selectedHistoryIdRef.current, conversationIdRef.current) !==
+          conversationIdValue
+      ) {
+        return;
+      }
+      void refreshDisplayedConversationHistorySnapshot(conversationIdValue, api);
+    });
+  }, [api, refreshDisplayedConversationHistorySnapshot]);
 
   // --- Two-phase conversation open (controller deps) ------------------------
   // Phase 1: paint the message tail fast. Sets the selection state
@@ -1755,16 +1801,12 @@ export default function GatewayApp() {
       });
     }
 
-    // Keep-warm preflight: the command request itself is the reliable wake-up
-    // signal for a suspended desktop WebView; the status refresh stays in the
-    // background so a stale heartbeat cannot block it.
-    void prepareChatRuntime("send", api, CHAT_RUNTIME_PREPARE_TIMEOUT_MS).catch(() => undefined);
-
     const runtimeControls = normalizeChatRuntimeControlsForProvider(
       options?.runtimeControls ?? settings.chatRuntimeControls,
       {
         providerId: currentChatProvider?.type,
         requestFormat: currentChatProvider?.requestFormat,
+        modelId: settings.selectedModel?.model,
       },
     );
     const commandInput: GatewayChatCommandInput = {
@@ -1786,8 +1828,17 @@ export default function GatewayApp() {
       message,
       attachments: uploadedFiles,
       isEditResend: Boolean(options?.editMessageRef),
+      baseMessageRef: options?.editMessageRef,
       optimistic: options?.optimisticEcho !== false,
-      submit: () => api.chatCommand(commandInput),
+      submit: async () => {
+        // Preserve the instant optimistic echo, then serialize the bounded
+        // runtime wake-up ahead of dispatch. A failed/old-gateway prepare is a
+        // soft degradation: chat.command remains the final wake signal.
+        await prepareChatRuntime("send", api, CHAT_RUNTIME_PREPARE_TIMEOUT_MS).catch(
+          () => undefined,
+        );
+        return api.chatCommand(commandInput);
+      },
     });
 
     if (outcome.kind === "accepted") {
@@ -1914,6 +1965,9 @@ export default function GatewayApp() {
         // straight into the GUI queue. The pipeline slot (pre-first-token
         // spinner + watchdog) belongs to the first command; the queue panel
         // updates via command_update/run_queued and chat_queue events.
+        await prepareChatRuntime("send", api, CHAT_RUNTIME_PREPARE_TIMEOUT_MS).catch(
+          () => undefined,
+        );
         await api.chatCommand({
           type: "chat.submit",
           message: materialized.text,
@@ -2667,13 +2721,15 @@ export default function GatewayApp() {
   }, []);
 
   const refreshSharedHistoryItems = useCallback(
-    async (currentApi = api) => {
+    async (currentApi = api, options?: { force?: boolean; generation?: string }) => {
       if (!currentApi) {
+        sharedHistoryListRequestRef.current = null;
         setSharedHistoryItemsState([]);
+        setSharedHistoryListError(null);
         return [];
       }
-      if (sharedHistoryListRequestRef.current) {
-        return sharedHistoryListRequestRef.current;
+      if (sharedHistoryListRequestRef.current && options?.force !== true) {
+        return sharedHistoryListRequestRef.current.promise;
       }
 
       const request = (async () => {
@@ -2694,19 +2750,30 @@ export default function GatewayApp() {
           }
         }
 
-        const nextItems = Array.from(byId.values());
-        setSharedHistoryItemsState(nextItems);
-        return sortSidebarConversations(nextItems);
+        return sortSidebarConversations(Array.from(byId.values()));
       })();
 
-      sharedHistoryListRequestRef.current = request;
+      const requestState = {
+        generation: options?.generation?.trim() || "manual",
+        promise: request,
+      };
+      sharedHistoryListRequestRef.current = requestState;
+      setSharedHistoryListError(null);
       try {
-        return await request;
+        const nextItems = await request;
+        if (sharedHistoryListRequestRef.current === requestState) {
+          setSharedHistoryItemsState(nextItems);
+          setSharedHistoryListError(null);
+          return nextItems;
+        }
+        return sharedHistoryItemsRef.current;
       } catch (error) {
-        setSidebarActionError(asErrorMessage(error, "读取已分享历史列表失败"));
+        if (sharedHistoryListRequestRef.current === requestState) {
+          setSharedHistoryListError(asErrorMessage(error, "读取已分享历史列表失败"));
+        }
         return sharedHistoryItemsRef.current;
       } finally {
-        if (sharedHistoryListRequestRef.current === request) {
+        if (sharedHistoryListRequestRef.current === requestState) {
           sharedHistoryListRequestRef.current = null;
         }
       }
@@ -2716,11 +2783,29 @@ export default function GatewayApp() {
 
   useEffect(() => {
     if (!api) {
+      sharedHistoryListRequestRef.current = null;
       setSharedHistoryItemsState([]);
+      setSharedHistoryListError(null);
       return;
     }
-    void refreshSharedHistoryItems(api);
-  }, [api, refreshSharedHistoryItems, setSharedHistoryItemsState]);
+    if (gatewayConnectionLost || status?.online !== true) {
+      return;
+    }
+    // Force a new generation when the browser socket recovers or the desktop
+    // AgentSession identity changes. A request tied to the old generation may
+    // finish with `agent offline`; it must not poison the freshly loaded list.
+    void refreshSharedHistoryItems(api, {
+      force: true,
+      generation: status.session_id?.trim() || "online",
+    });
+  }, [
+    api,
+    gatewayConnectionLost,
+    refreshSharedHistoryItems,
+    setSharedHistoryItemsState,
+    status?.online,
+    status?.session_id,
+  ]);
 
   function markSharedConversation(
     id: string,
@@ -2868,9 +2953,9 @@ export default function GatewayApp() {
       setPendingUploadsForConversation(activeConversationId, []);
 
       // Same pipeline path as a normal send, carrying the base message ref.
-      // The stream's seeded `rebased` event truncates the committed
-      // transcript at the edited message; the seeded `user_message` adopts
-      // the optimistic echo by client_request_id.
+      // The pipeline atomically truncates the visible suffix and inserts the
+      // optimistic replacement; the stream's seeded `rebased` event confirms
+      // it, and `user_message` adopts the bubble by client_request_id.
       try {
         await sendChatRef.current?.(normalized, {
           conversationId: activeConversationId,
@@ -2947,6 +3032,7 @@ export default function GatewayApp() {
     setConversationId("");
     setChatError(null);
     setSidebarActionError(null);
+    setSharedHistoryListError(null);
     setFullHistoryLoading(false);
     setSharedHistoryItems([]);
     queuedChatTurnsRef.current = [];
@@ -3023,16 +3109,31 @@ export default function GatewayApp() {
       getChatRuntimeReasoningLevelsForProvider({
         providerId: currentChatProvider?.type,
         requestFormat: currentChatProvider?.requestFormat,
+        modelId: settings.selectedModel?.model,
       }),
-    [currentChatProvider?.requestFormat, currentChatProvider?.type],
+    [currentChatProvider?.requestFormat, currentChatProvider?.type, settings.selectedModel?.model],
+  );
+  const chatRuntimeThinkingAlwaysOn = useMemo(
+    () =>
+      isThinkingAlwaysOnForModel(
+        currentChatProvider?.type ?? "claude_code",
+        settings.selectedModel?.model,
+      ),
+    [currentChatProvider?.type, settings.selectedModel?.model],
   );
   const chatRuntimeControlsForCurrentProvider = useMemo(
     () =>
       normalizeChatRuntimeControlsForProvider(settings.chatRuntimeControls, {
         providerId: currentChatProvider?.type,
         requestFormat: currentChatProvider?.requestFormat,
+        modelId: settings.selectedModel?.model,
       }),
-    [currentChatProvider?.requestFormat, currentChatProvider?.type, settings.chatRuntimeControls],
+    [
+      currentChatProvider?.requestFormat,
+      currentChatProvider?.type,
+      settings.chatRuntimeControls,
+      settings.selectedModel?.model,
+    ],
   );
   const handleChatRuntimeControlsChange = useCallback(
     (patch: Partial<ChatRuntimeControls>) => {
@@ -3041,10 +3142,16 @@ export default function GatewayApp() {
         chatRuntimeControls: updateChatRuntimeControlsForProvider(prev.chatRuntimeControls, patch, {
           providerId: currentChatProvider?.type,
           requestFormat: currentChatProvider?.requestFormat,
+          modelId: settings.selectedModel?.model,
         }),
       }));
     },
-    [currentChatProvider?.requestFormat, currentChatProvider?.type, setSettings],
+    [
+      currentChatProvider?.requestFormat,
+      currentChatProvider?.type,
+      setSettings,
+      settings.selectedModel?.model,
+    ],
   );
   const isAgentDevExecutionMode = isAgentDevMode(settings.system.executionMode);
 
@@ -3426,6 +3533,11 @@ export default function GatewayApp() {
   const composerIsSending = transcriptBusy;
   const transcriptError = displayedTranscriptRowCount === 0 ? null : chatError;
   const composerCompactionBlocked = transcriptToolStatusIsCompaction;
+  const sidebarSectionsDisabled = shouldDisableGatewaySidebarSections({
+    connectionLost: gatewayConnectionLost,
+    agentStatusFresh: sidebarAgentStatusFresh,
+    agentOnline: status?.online,
+  });
   const composerInputDisabled =
     !status?.online || historyDetailLoading || composerCompactionBlocked;
   const composerPlaceholder = composerCompactionBlocked
@@ -3606,6 +3718,7 @@ export default function GatewayApp() {
             sharedConversationCount={sharedHistoryItems.length}
             externalErrorMessage={sidebarActionError}
             connectionLost={gatewayConnectionLost}
+            sectionsDisabled={sidebarSectionsDisabled}
             isLocalDraftConversationId={isLocalDraftConversationId}
             onProjectsCollapsedChange={handleSidebarProjectsCollapsedChange}
             onRecentCollapsedChange={handleSidebarRecentCollapsedChange}
@@ -3650,6 +3763,7 @@ export default function GatewayApp() {
               loadingIds={sharedManagerLoadingIds}
               updatingIds={sharedManagerUpdatingIds}
               errors={sharedManagerErrors}
+              listError={sharedHistoryListError}
               shareOrigin={settings.remote.gatewayUrl}
               onRefresh={handleRefreshSharedHistoryStatuses}
               onLoadStatus={handleLoadSharedHistoryStatus}
@@ -3828,6 +3942,7 @@ export default function GatewayApp() {
                     isAgentMode={isAgentMode}
                     chatRuntimeControls={chatRuntimeControlsForCurrentProvider}
                     reasoningOptions={chatRuntimeReasoningOptions}
+                    thinkingAlwaysOn={chatRuntimeThinkingAlwaysOn}
                     gitClient={gitClient}
                     gitWriteEnabled={settings.remote.enableWebGit}
                     gitDisabledMessage={gitDisabledMessage}

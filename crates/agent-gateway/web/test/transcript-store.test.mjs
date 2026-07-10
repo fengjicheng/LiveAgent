@@ -917,6 +917,68 @@ test("reset with the run gone settles the turn and enrich adopts the persisted r
   );
 });
 
+test("reset with the run gone and no replay keeps the streamed reply until history catches up", () => {
+  const store = createTranscriptStore();
+  store.addOptimisticUserEntry({ clientRequestId: "client-1", text: "prompt" });
+  store.applyEvent(userMessage("run-1", 1, "prompt", { client_request_id: "client-1" }));
+  store.applyEvent(runStarted("run-1", 2));
+  store.applyEvent(token("run-1", 3, "full streamed reply"));
+  store.flush();
+
+  // The client saw the whole reply; only run_finished was lost. Gateway
+  // restarted → epoch reset with an empty replay: the streamed entries are
+  // the reply's only copy and must survive.
+  store.applySync({
+    conversationId: "conv-1",
+    streamEpoch: "epoch-2",
+    latestSeq: 0,
+    reset: true,
+    activity: null,
+    snapshot: null,
+    events: [],
+  });
+  store.flush();
+  let snapshot = store.getSnapshot();
+  assert.equal(snapshot.activeRun, null);
+  assert.equal(
+    allRows(snapshot).some((row) => rowText(row) === "full streamed reply"),
+    true,
+    "the reply's only copy survives the reset",
+  );
+
+  // An enrich racing the desktop's post-run flush (user-only twin) must not
+  // blank it either.
+  store.applyHistorySnapshot(
+    [{ id: "hu:m1", kind: "user", text: "prompt", attachments: [], messageRef: messageRef("m1") }],
+    { mode: "enrich" },
+  );
+  store.flush();
+  snapshot = store.getSnapshot();
+  assert.equal(
+    allRows(snapshot).some((row) => rowText(row) === "full streamed reply"),
+    true,
+    "a reply-less history window never blanks the kept content",
+  );
+
+  // Once the flush lands, the persisted reply is authoritative for the
+  // stale-marked turn (the kept content may have been incomplete).
+  store.applyHistorySnapshot(
+    [
+      { id: "hu:m1", kind: "user", text: "prompt", attachments: [], messageRef: messageRef("m1") },
+      { id: "ht:hu:m1>0", kind: "assistant", text: "full persisted reply", round: 1 },
+    ],
+    { mode: "enrich" },
+  );
+  store.flush();
+  snapshot = store.getSnapshot();
+  assert.deepEqual(
+    allRows(snapshot).map((row) => rowText(row)),
+    ["prompt", "full persisted reply"],
+    "the persisted reply replaces the stale copy exactly once",
+  );
+  assertUniqueKeys(snapshot);
+});
+
 test("rebased with duplicate prompt texts truncates at the edited message, not the first hash match", () => {
   const store = createTranscriptStore();
   store.applyHistorySnapshot(
@@ -1038,6 +1100,205 @@ test("replace keeps a settled exchange whose persistence lags the fetched window
   assertUniqueKeys(snapshot);
 });
 
+test("replace keeps the settled reply when only its user message reached the fetched window", () => {
+  // The desktop reports run_finished before its post-run history flush lands,
+  // so a re-open racing that flush fetches a window whose last turn is the
+  // persisted prompt WITHOUT its reply. The settled turn holds the only copy
+  // of the reply and must survive, with the echo trimmed and its ref adopted.
+  const store = createTranscriptStore();
+  store.applyHistorySnapshot(
+    [
+      { id: "hu:m1", kind: "user", text: "old", attachments: [], messageRef: messageRef("m1") },
+      { id: "ht:hu:m1>0", kind: "assistant", text: "old reply", round: 1 },
+    ],
+    { mode: "replace" },
+  );
+  store.applyEvent(userMessage("run-2", 1, "new prompt"));
+  store.applyEvent(runStarted("run-2", 2));
+  store.applyEvent(token("run-2", 3, "new reply"));
+  store.applyEvent(runFinished("run-2", 4));
+  // Switching away folds the settled turn; switching back replace-loads.
+  store.foldSettledTurns();
+  store.flush();
+
+  store.applyHistorySnapshot(
+    [
+      { id: "hu:m1", kind: "user", text: "old", attachments: [], messageRef: messageRef("m1") },
+      { id: "ht:hu:m1>0", kind: "assistant", text: "old reply", round: 1 },
+      {
+        id: "hu:m2",
+        kind: "user",
+        text: "new prompt",
+        attachments: [],
+        messageRef: messageRef("m2", 2),
+      },
+    ],
+    { mode: "replace" },
+  );
+  store.flush();
+  const snapshot = store.getSnapshot();
+  assert.deepEqual(
+    allRows(snapshot).map((row) => rowText(row)),
+    ["old", "old reply", "new prompt", "new reply"],
+    "the streamed reply survives the user-only echo",
+  );
+  const prompts = allRows(snapshot).filter(
+    (row) => row.kind === "user" && row.text === "new prompt",
+  );
+  assert.equal(prompts.length, 1, "prompt renders once");
+  assert.equal(prompts[0].messageRef?.messageId, "m2", "persisted ref adopted");
+  assertUniqueKeys(snapshot);
+});
+
+test("replace keeps a ref-matched settled reply whose window twin is still user-only", () => {
+  // Same race, but the idle enrich already attached the persisted ref to the
+  // settled turn before the reload (its twin was user-only then too) — the
+  // ref match must not count a reply-less twin as coverage.
+  const store = createTranscriptStore();
+  store.applyEvent(userMessage("run-1", 1, "prompt"));
+  store.applyEvent(runStarted("run-1", 2));
+  store.applyEvent(token("run-1", 3, "reply"));
+  store.applyEvent(runFinished("run-1", 4));
+  store.flush();
+  store.applyHistorySnapshot(
+    [
+      {
+        id: "hu:m1",
+        kind: "user",
+        text: "prompt",
+        attachments: [],
+        messageRef: messageRef("m1"),
+      },
+    ],
+    { mode: "enrich" },
+  );
+  store.flush();
+
+  store.applyHistorySnapshot(
+    [
+      {
+        id: "hu:m1",
+        kind: "user",
+        text: "prompt",
+        attachments: [],
+        messageRef: messageRef("m1"),
+      },
+    ],
+    { mode: "replace" },
+  );
+  store.flush();
+  const snapshot = store.getSnapshot();
+  assert.deepEqual(
+    allRows(snapshot).map((row) => rowText(row)),
+    ["prompt", "reply"],
+    "the streamed reply survives across enrich + replace",
+  );
+  const prompts = allRows(snapshot).filter((row) => row.kind === "user");
+  assert.equal(prompts.length, 1, "prompt renders once");
+  assertUniqueKeys(snapshot);
+});
+
+test("enrich repaint keeps a settled reply whose window twin is still user-only", () => {
+  // The guarded full repaint (history ahead of the store) must not drop a
+  // settled turn whose persisted twin carries no reply yet.
+  const store = createTranscriptStore();
+  store.applyHistorySnapshot(
+    [
+      { id: "hu:m1", kind: "user", text: "old", attachments: [], messageRef: messageRef("m1") },
+      { id: "ht:hu:m1>0", kind: "assistant", text: "old reply", round: 1 },
+    ],
+    { mode: "replace" },
+  );
+  store.applyEvent(userMessage("run-2", 1, "our prompt"));
+  store.applyEvent(runStarted("run-2", 2));
+  store.applyEvent(token("run-2", 3, "our reply"));
+  store.applyEvent(runFinished("run-2", 4));
+  store.flush();
+
+  // History knows a foreign exchange this client never streamed (forcing the
+  // repaint path) while our exchange's reply flush is still in flight.
+  store.applyHistorySnapshot(
+    [
+      { id: "hu:m1", kind: "user", text: "old", attachments: [], messageRef: messageRef("m1") },
+      { id: "ht:hu:m1>0", kind: "assistant", text: "old reply", round: 1 },
+      { id: "hu:m2", kind: "user", text: "foreign", attachments: [], messageRef: messageRef("m2", 2) },
+      { id: "ht:hu:m2>0", kind: "assistant", text: "foreign reply", round: 1 },
+      {
+        id: "hu:m3",
+        kind: "user",
+        text: "our prompt",
+        attachments: [],
+        messageRef: messageRef("m3", 4),
+      },
+    ],
+    { mode: "enrich" },
+  );
+  store.flush();
+  const snapshot = store.getSnapshot();
+  const texts = allRows(snapshot).map((row) => rowText(row));
+  assert.deepEqual(
+    texts,
+    ["old", "old reply", "foreign", "foreign reply", "our prompt", "our reply"],
+    "the streamed reply survives the repaint",
+  );
+  assert.equal(
+    allRows(snapshot).filter((row) => row.kind === "user" && row.text === "our prompt").length,
+    1,
+    "prompt renders once",
+  );
+  assertUniqueKeys(snapshot);
+});
+
+test("enrich repaint skips a queued prompt's echo when pairing the lagged reply", () => {
+  const store = createTranscriptStore();
+  // First exchange of a fresh conversation streams and settles.
+  store.applyEvent(userMessage("run-1", 1, "first prompt"));
+  store.applyEvent(runStarted("run-1", 2));
+  store.applyEvent(token("run-1", 3, "first reply"));
+  store.applyEvent(runFinished("run-1", 4));
+  store.flush();
+
+  // A queued next prompt's persist overtook the lagging reply flush (the
+  // first exchange's write waits on the title lookahead): the fetched window
+  // carries both prompts and no replies, forcing the guarded repaint. The
+  // queued echo must be skipped — not treated as a pairing stop — so the
+  // reply's turn right behind it stays protected.
+  store.applyHistorySnapshot(
+    [
+      {
+        id: "hu:m1",
+        kind: "user",
+        text: "first prompt",
+        attachments: [],
+        messageRef: messageRef("m1"),
+      },
+      {
+        id: "hu:m2",
+        kind: "user",
+        text: "queued prompt",
+        attachments: [],
+        messageRef: messageRef("m2", 1),
+      },
+    ],
+    { mode: "enrich" },
+  );
+  store.flush();
+  const snapshot = store.getSnapshot();
+  const texts = allRows(snapshot).map((row) => rowText(row));
+  assert.equal(texts.includes("first reply"), true, "the lagged reply survives");
+  assert.equal(
+    allRows(snapshot).filter((row) => row.kind === "user" && row.text === "first prompt").length,
+    1,
+    "the paired prompt renders once",
+  );
+  assert.equal(
+    allRows(snapshot).filter((row) => row.kind === "user" && row.text === "queued prompt").length,
+    1,
+    "the queued prompt's echo still renders from history",
+  );
+  assertUniqueKeys(snapshot);
+});
+
 test("a stray run_finished drops the stray turn, keeps activeRun, and fires onDivergence once", () => {
   let divergences = 0;
   const store = createTranscriptStore({
@@ -1118,4 +1379,86 @@ test("a matching run_finished settles the run without firing onDivergence", () =
     true,
   );
   assert.equal(divergences, 0);
+});
+
+function installHiddenTab() {
+  const rafCalls = { count: 0 };
+  globalThis.document = { visibilityState: "hidden" };
+  globalThis.requestAnimationFrame = () => {
+    rafCalls.count += 1;
+    return 1;
+  };
+  globalThis.cancelAnimationFrame = () => {};
+  const uninstall = () => {
+    delete globalThis.document;
+    delete globalThis.requestAnimationFrame;
+    delete globalThis.cancelAnimationFrame;
+  };
+  return { rafCalls, uninstall };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+test("hidden tab: streamed deltas coalesce into one timer-driven commit instead of rAF", async () => {
+  const { rafCalls, uninstall } = installHiddenTab();
+  try {
+    const store = createTranscriptStore();
+    store.applyEvent(userMessage("run-h", 1, "hello"));
+    store.applyEvent(runStarted("run-h", 2));
+
+    let emits = 0;
+    store.subscribe(() => {
+      emits += 1;
+    });
+    const revisionBefore = store.getSnapshot().revision;
+
+    for (let i = 0; i < 5; i++) {
+      store.applyEvent(token("run-h", 3 + i, `chunk-${i} `));
+    }
+    assert.equal(rafCalls.count, 0, "hidden tab must not schedule via rAF");
+    assert.equal(emits, 0, "deltas coalesce; nothing commits synchronously");
+    assert.equal(store.getSnapshot().revision, revisionBefore);
+
+    await sleep(400);
+    assert.equal(emits, 1, "one timer-driven commit for the whole burst");
+    const text = allRows(store.getSnapshot())
+      .map((row) => rowText(row))
+      .join("\n");
+    for (let i = 0; i < 5; i++) {
+      assert.ok(text.includes(`chunk-${i}`), `chunk-${i} committed`);
+    }
+  } finally {
+    uninstall();
+  }
+});
+
+test("hidden tab: flush() commits immediately and cancels the pending timer", async () => {
+  const { uninstall } = installHiddenTab();
+  try {
+    const store = createTranscriptStore();
+    store.applyEvent(userMessage("run-f", 1, "hello"));
+    store.applyEvent(runStarted("run-f", 2));
+
+    let emits = 0;
+    store.subscribe(() => {
+      emits += 1;
+    });
+
+    store.applyEvent(token("run-f", 3, "tail text"));
+    assert.equal(emits, 0);
+
+    store.flush();
+    assert.equal(emits, 1, "flush commits synchronously");
+    const text = allRows(store.getSnapshot())
+      .map((row) => rowText(row))
+      .join("\n");
+    assert.ok(text.includes("tail text"));
+
+    await sleep(400);
+    assert.equal(emits, 1, "the canceled hidden timer must not double-commit");
+  } finally {
+    uninstall();
+  }
 });

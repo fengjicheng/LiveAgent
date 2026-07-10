@@ -113,4 +113,25 @@ export const tauriGitClient: GitClient = {
   async push(workdir) {
     return normalizeGitOperationResponse(await invoke("git_push", { workdir }), workdir);
   },
+  async deleteBranch(workdir, branch, force) {
+    return normalizeGitOperationResponse(
+      await invoke("git_delete_branch", { workdir, branch, force }),
+      workdir,
+    );
+  },
+  async renameBranch(workdir, branch, newBranch) {
+    return normalizeGitOperationResponse(
+      await invoke("git_rename_branch", { workdir, branch, new_branch: newBranch }),
+      workdir,
+    );
+  },
+  async stashPush(workdir, message) {
+    return normalizeGitOperationResponse(
+      await invoke("git_stash_push", { workdir, message }),
+      workdir,
+    );
+  },
+  async stashPop(workdir) {
+    return normalizeGitOperationResponse(await invoke("git_stash_pop", { workdir }), workdir);
+  },
 };

@@ -118,5 +118,26 @@ export function createGatewayGitClient(api: GatewayWebSocketClientLike): GitClie
     async push(workdir) {
       return normalizeGitOperationResponse(await api.gitRequest("push", workdir), workdir);
     },
+    async deleteBranch(workdir, branch, force) {
+      return normalizeGitOperationResponse(
+        await api.gitRequest("delete_branch", workdir, { branch, force }),
+        workdir,
+      );
+    },
+    async renameBranch(workdir, branch, newBranch) {
+      return normalizeGitOperationResponse(
+        await api.gitRequest("rename_branch", workdir, { branch, newBranch }),
+        workdir,
+      );
+    },
+    async stashPush(workdir, message) {
+      return normalizeGitOperationResponse(
+        await api.gitRequest("stash_push", workdir, { message }),
+        workdir,
+      );
+    },
+    async stashPop(workdir) {
+      return normalizeGitOperationResponse(await api.gitRequest("stash_pop", workdir), workdir);
+    },
   };
 }

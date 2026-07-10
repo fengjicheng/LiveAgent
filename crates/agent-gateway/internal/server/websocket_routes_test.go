@@ -90,6 +90,10 @@ func TestWebsocketRequestHandlersCoverKnownProtocolTypes(t *testing.T) {
 		"git.pull",
 		"git.set_remote",
 		"git.push",
+		"git.delete_branch",
+		"git.rename_branch",
+		"git.stash_push",
+		"git.stash_pop",
 		"cron.manage",
 		"provider.models",
 		"chat.subscribe",
@@ -97,6 +101,7 @@ func TestWebsocketRequestHandlersCoverKnownProtocolTypes(t *testing.T) {
 		"workspace.subscribe",
 		"workspace.unsubscribe",
 		"chat.activities",
+		"chat.prepare",
 		"chat.command",
 		"chat.cancel",
 		"chat_queue.get",
@@ -131,6 +136,21 @@ func TestWebsocketRequestHandlersCoverKnownProtocolTypes(t *testing.T) {
 	} {
 		if websocketRequestHandlers[removedType] != nil {
 			t.Fatalf("websocketRequestHandlers[%q] should be removed; terminal bytes use /ws/terminal", removedType)
+		}
+	}
+}
+
+func TestGitActionIsWrite(t *testing.T) {
+	t.Parallel()
+
+	for _, action := range []string{"delete_branch", "rename_branch", "stash_push", "stash_pop"} {
+		if !gitActionIsWrite(action) {
+			t.Fatalf("gitActionIsWrite(%q) = false, want true", action)
+		}
+	}
+	for _, action := range []string{"status", "branches", "diff", "log"} {
+		if gitActionIsWrite(action) {
+			t.Fatalf("gitActionIsWrite(%q) = true, want false", action)
 		}
 	}
 }

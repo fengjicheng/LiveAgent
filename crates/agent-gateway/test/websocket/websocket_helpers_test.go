@@ -64,10 +64,11 @@ func receiveEnvelope(t *testing.T, conn *websocket.Conn) wsEnvelope {
 		if err := conn.ReadJSON(&env); err != nil {
 			t.Fatalf("receive websocket envelope: %v", err)
 		}
-		// tunnel.state and process.state are broadcast on auth and on
-		// unrelated state changes; tests assert on the envelopes they
-		// explicitly provoke.
-		if env.Type == "tunnel.state" || env.Type == "process.state" {
+		// tunnel.state, process.state and status.event are broadcast on auth
+		// and on unrelated state changes, and ping is periodic keep-alive;
+		// tests assert on the envelopes they explicitly provoke.
+		if env.Type == "tunnel.state" || env.Type == "process.state" ||
+			env.Type == "status.event" || env.Type == "ping" {
 			continue
 		}
 		return env
@@ -105,4 +106,25 @@ func readOutboundEnvelope(t *testing.T, agentSession *session.AgentSession) *gat
 		t.Fatalf("timed out waiting for gateway request to reach agent")
 		return nil
 	}
+}
+
+func answerChatRuntimeProbe(
+	t *testing.T,
+	sm *session.Manager,
+	agentSession *session.AgentSession,
+) string {
+	t.Helper()
+	envelope := readOutboundEnvelope(t, agentSession)
+	requestID := envelope.GetRequestId()
+	if !strings.HasPrefix(requestID, "chat-runtime-wake-") || envelope.GetPing() == nil {
+		t.Fatalf("chat runtime probe = %#v, want chat-runtime-wake-* Ping", envelope)
+	}
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: requestID,
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.AgentEnvelope_Pong{
+			Pong: &gatewayv1.PongResponse{Timestamp: envelope.GetPing().GetTimestamp()},
+		},
+	})
+	return requestID
 }

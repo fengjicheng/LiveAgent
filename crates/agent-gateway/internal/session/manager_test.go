@@ -1,10 +1,187 @@
 package session
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
 )
+
+func TestStatusBroadcastIdentifiesOnlineSessionReplacement(t *testing.T) {
+	manager := NewManager()
+	statuses, unsubscribe := manager.SubscribeStatus()
+	defer unsubscribe()
+
+	first := NewAgentSession(AuthSnapshot{SessionID: "session-1"})
+	manager.SetSession(first)
+	firstStatus := <-statuses
+	if !firstStatus.Online || firstStatus.SessionID != "session-1" {
+		t.Fatalf("first status = %#v, want online session-1", firstStatus)
+	}
+
+	second := NewAgentSession(AuthSnapshot{SessionID: "session-2"})
+	manager.SetSession(second)
+	t.Cleanup(func() { manager.ClearSession(second) })
+	secondStatus := <-statuses
+	if !secondStatus.Online || secondStatus.SessionID != "session-2" {
+		t.Fatalf("replacement status = %#v, want online session-2", secondStatus)
+	}
+}
+
+func TestRegisterStreamAndSendContextCorrelatesOnCapturedSession(t *testing.T) {
+	manager := NewManager()
+	sess := NewAgentSession(AuthSnapshot{SessionID: "session-1"})
+	manager.SetSession(sess)
+	t.Cleanup(func() { manager.ClearSession(sess) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	type registeredRequest struct {
+		responses <-chan *gatewayv1.AgentEnvelope
+		done      <-chan struct{}
+		cleanup   func()
+		err       error
+	}
+	registered := make(chan registeredRequest, 1)
+	go func() {
+		responses, done, cleanup, err := manager.RegisterStreamAndSendContext(
+			ctx,
+			"history-1",
+			&gatewayv1.GatewayEnvelope{
+				RequestId: "history-1",
+				Payload: &gatewayv1.GatewayEnvelope_HistoryList{
+					HistoryList: &gatewayv1.HistoryListRequest{Page: 1, PageSize: 80},
+				},
+			},
+		)
+		registered <- registeredRequest{responses: responses, done: done, cleanup: cleanup, err: err}
+	}()
+
+	var outbound *OutboundEnvelope
+	select {
+	case outbound = <-sess.Outbound():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for captured-session request")
+	}
+	if outbound.GetRequestId() != "history-1" || outbound.GetHistoryList() == nil {
+		t.Fatalf("outbound request = %#v", outbound.GatewayEnvelope)
+	}
+	outbound.Ack(nil)
+
+	result := <-registered
+	if result.err != nil {
+		t.Fatalf("RegisterStreamAndSendContext: %v", result.err)
+	}
+	defer result.cleanup()
+
+	manager.DispatchFromAgentForSession(sess, &gatewayv1.AgentEnvelope{
+		RequestId: "history-1",
+		Payload: &gatewayv1.AgentEnvelope_HistoryListResp{
+			HistoryListResp: &gatewayv1.HistoryListResponse{TotalCount: 1},
+		},
+	})
+	select {
+	case response := <-result.responses:
+		if response.GetHistoryListResp().GetTotalCount() != 1 {
+			t.Fatalf("history response = %#v", response.GetHistoryListResp())
+		}
+	case <-result.done:
+		t.Fatal("captured response stream closed before dispatch")
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for correlated response")
+	}
+}
+
+func TestRegisterStreamAndSendContextDoesNotCrossSessionReplacement(t *testing.T) {
+	manager := NewManager()
+	first := NewAgentSession(AuthSnapshot{SessionID: "session-1"})
+	manager.SetSession(first)
+
+	// Saturate the captured session's outbound lane so register-and-send pauses
+	// after correlation is installed but before delivery can complete.
+	for i := 0; i < cap(first.toAgent); i += 1 {
+		sent, err := first.TrySendToAgent(&gatewayv1.GatewayEnvelope{RequestId: "queued"})
+		if err != nil || !sent {
+			t.Fatalf("fill first session outbound at %d: sent=%v err=%v", i, sent, err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, _, _, err := manager.RegisterStreamAndSendContext(
+			ctx,
+			"history-replacement",
+			&gatewayv1.GatewayEnvelope{
+				RequestId: "history-replacement",
+				Payload: &gatewayv1.GatewayEnvelope_HistoryList{
+					HistoryList: &gatewayv1.HistoryListRequest{Page: 1, PageSize: 80},
+				},
+			},
+		)
+		result <- err
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		first.streamsMu.Lock()
+		_, registered := first.streams["history-replacement"]
+		first.streamsMu.Unlock()
+		if registered {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("request stream was not registered on the captured session")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	second := NewAgentSession(AuthSnapshot{SessionID: "session-2"})
+	manager.SetSession(second)
+	t.Cleanup(func() { manager.ClearSession(second) })
+	if err := <-result; !errors.Is(err, ErrAgentOffline) {
+		t.Fatalf("register-and-send across replacement = %v, want ErrAgentOffline", err)
+	}
+
+	select {
+	case outbound := <-second.Outbound():
+		t.Fatalf("request crossed into replacement session: %#v", outbound.GatewayEnvelope)
+	default:
+	}
+}
+
+func TestChatRuntimeProbeFreshnessIsBoundToSessionEpoch(t *testing.T) {
+	manager := NewManager()
+	first := NewAgentSession(AuthSnapshot{SessionID: "session-1"})
+	manager.SetSession(first)
+
+	firstEpoch, online := manager.ChatRuntimeProbeEpoch()
+	if !online || firstEpoch == 0 {
+		t.Fatalf("first probe epoch = %d online=%v", firstEpoch, online)
+	}
+	if !manager.RecordChatRuntimeProbe(firstEpoch) ||
+		!manager.ChatRuntimeProbeFresh(time.Second) {
+		t.Fatal("recorded probe should be fresh for the current session")
+	}
+
+	second := NewAgentSession(AuthSnapshot{SessionID: "session-2"})
+	manager.SetSession(second)
+	t.Cleanup(func() { manager.ClearSession(second) })
+	if manager.ChatRuntimeProbeFresh(time.Second) {
+		t.Fatal("replacing the agent session must invalidate probe freshness")
+	}
+	if manager.RecordChatRuntimeProbe(firstEpoch) {
+		t.Fatal("an old session epoch must not mark the replacement session fresh")
+	}
+
+	secondEpoch, online := manager.ChatRuntimeProbeEpoch()
+	if !online || secondEpoch == firstEpoch || !manager.RecordChatRuntimeProbe(secondEpoch) {
+		t.Fatalf("replacement probe epoch = %d online=%v", secondEpoch, online)
+	}
+}
 
 func TestApplySettingsJSONPreservingRemoteKeepsDesktopTerminalSetting(t *testing.T) {
 	manager := NewManager()

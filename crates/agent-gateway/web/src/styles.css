@@ -921,16 +921,84 @@ html[data-liveagent-webui="gateway"] [role="textbox"]:focus-visible {
   word-break: break-word;
 }
 
-.chat-user-bubble-actions {
+.chat-user-bubble-actions,
+.chat-assistant-actions {
   min-height: 24px;
 }
 
+/* Keep the hover-revealed action row visible while its inline confirm
+   popover is open (the pointer may sit outside the assistant row). */
+.chat-assistant-actions:has(.settings-confirm-popover) {
+  opacity: 1 !important;
+}
+
+/* Confirm-action popover enter/exit: grow out of the anchor toward the
+   placement side. The component keeps the node mounted for the exit
+   animation (data-closing) and unmounts after CONFIRM_POPOVER_CLOSE_MS,
+   which must stay >= the confirmPopoverOut duration here. */
+.settings-confirm-popover {
+  --confirm-popover-slide-y: -6px;
+  animation: confirmPopoverIn 0.16s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.settings-confirm-popover[data-place="up"] {
+  --confirm-popover-slide-y: 6px;
+}
+
+.settings-confirm-popover[data-place="down"][data-align="start"] {
+  transform-origin: top left;
+}
+.settings-confirm-popover[data-place="down"][data-align="end"] {
+  transform-origin: top right;
+}
+.settings-confirm-popover[data-place="up"][data-align="start"] {
+  transform-origin: bottom left;
+}
+.settings-confirm-popover[data-place="up"][data-align="end"] {
+  transform-origin: bottom right;
+}
+
+.settings-confirm-popover[data-closing] {
+  animation: confirmPopoverOut 0.12s cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@keyframes confirmPopoverIn {
+  from {
+    opacity: 0;
+    transform: translateY(var(--confirm-popover-slide-y, -6px)) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes confirmPopoverOut {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(calc(var(--confirm-popover-slide-y, -6px) / 2)) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-confirm-popover,
+  .settings-confirm-popover[data-closing] {
+    animation: none;
+  }
+}
+
 @media (hover: none), (pointer: coarse) {
-  .chat-user-bubble-actions {
+  .chat-user-bubble-actions,
+  .chat-assistant-actions {
     opacity: 1 !important;
   }
 
-  .chat-user-bubble-action {
+  .chat-user-bubble-action,
+  .chat-assistant-action {
     display: inline-flex;
     min-height: 28px;
     min-width: 28px;
@@ -3121,11 +3189,13 @@ html[data-liveagent-webui="gateway"]
     line-height: 1.62;
   }
 
-  .chat-user-bubble-actions {
+  .chat-user-bubble-actions,
+  .chat-assistant-actions {
     opacity: 1 !important;
   }
 
-  .chat-user-bubble-action {
+  .chat-user-bubble-action,
+  .chat-assistant-action {
     display: inline-flex;
     min-height: 28px;
     min-width: 28px;

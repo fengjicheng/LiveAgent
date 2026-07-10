@@ -13,7 +13,7 @@ func gitActionFromRequestType(requestType string) string {
 
 func gitActionIsWrite(action string) bool {
 	switch action {
-	case "init", "switch_branch", "create_branch", "stage", "stage_all", "unstage", "unstage_all", "discard", "discard_all", "add_to_gitignore", "commit", "fetch", "pull", "set_remote", "push":
+	case "init", "switch_branch", "create_branch", "stage", "stage_all", "unstage", "unstage_all", "discard", "discard_all", "add_to_gitignore", "commit", "fetch", "pull", "set_remote", "push", "delete_branch", "rename_branch", "stash_push", "stash_pop":
 		return true
 	default:
 		return false

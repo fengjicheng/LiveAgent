@@ -20,6 +20,18 @@ pub(crate) struct RemoteChatInboxRecord {
     pub(crate) updated_at: Instant,
 }
 
+// Last runtime status the webview reported, echoed to the gateway by a Rust
+// timer while the webview's own heartbeat interval is throttled (hidden or
+// occluded window).
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeStatusRepublishRecord {
+    pub(crate) worker_id: String,
+    pub(crate) state: String,
+    pub(crate) visible: bool,
+    pub(crate) active_run_count: u32,
+    pub(crate) updated_at: Instant,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct RemoteChatEnqueueOutcome {
     pub(crate) request_id: String,
@@ -650,6 +662,84 @@ impl GatewayController {
             _ => "ready",
         }
         .to_string();
+        self.record_runtime_status_for_republish(&worker_id, &state, visible, active_run_count)?;
+        self.send_chat_runtime_status_envelope(worker_id, state, visible, active_run_count)
+            .await
+    }
+
+    // The republish record's age is stamped only here — by the webview's own
+    // publishes — so the Rust echo stops for a webview that vanished without
+    // saying "suspended" instead of impersonating it forever.
+    fn record_runtime_status_for_republish(
+        &self,
+        worker_id: &str,
+        state: &str,
+        visible: bool,
+        active_run_count: u32,
+    ) -> Result<(), String> {
+        let mut slot = self
+            .runtime_status_republish
+            .lock()
+            .map_err(|_| "gateway runtime status republish lock poisoned".to_string())?;
+        *slot = Self::next_runtime_status_republish_record(
+            worker_id,
+            state,
+            visible,
+            active_run_count,
+            Instant::now(),
+        );
+        Ok(())
+    }
+
+    pub(crate) fn next_runtime_status_republish_record(
+        worker_id: &str,
+        state: &str,
+        visible: bool,
+        active_run_count: u32,
+        now: Instant,
+    ) -> Option<RuntimeStatusRepublishRecord> {
+        if state == "suspended" {
+            return None;
+        }
+        Some(RuntimeStatusRepublishRecord {
+            worker_id: worker_id.to_string(),
+            state: state.to_string(),
+            visible,
+            active_run_count,
+            updated_at: now,
+        })
+    }
+
+    pub(crate) fn runtime_status_republish_payload(
+        record: Option<&RuntimeStatusRepublishRecord>,
+        now: Instant,
+    ) -> Option<(String, String, bool, u32)> {
+        let record = record?;
+        if now.saturating_duration_since(record.updated_at)
+            > GATEWAY_RUNTIME_STATUS_REPUBLISH_MAX_AGE
+        {
+            return None;
+        }
+        Some((
+            record.worker_id.clone(),
+            record.state.clone(),
+            record.visible,
+            record.active_run_count,
+        ))
+    }
+
+    pub(crate) fn runtime_status_republish_snapshot(&self) -> Option<(String, String, bool, u32)> {
+        let slot = self.runtime_status_republish.lock().ok()?;
+        Self::runtime_status_republish_payload(slot.as_ref(), Instant::now())
+    }
+
+    pub(crate) async fn send_chat_runtime_status_envelope(
+        &self,
+        worker_id: String,
+        state: String,
+        visible: bool,
+        active_run_count: u32,
+    ) -> Result<(), String> {
         let (active_reports, finished_reports) = {
             let (now, _now_ms) = chat_run_ledger_now();
             let ledger = self
@@ -910,6 +1000,7 @@ impl GatewayController {
                     entry.run_id
                 );
             }
+            tokio::task::yield_now().await;
         }
         // Replay all recent terminals, sent or not: a gateway restart can lose
         // them, and the control events are idempotent server-side. Unsent
@@ -936,6 +1027,7 @@ impl GatewayController {
             } else {
                 self.ledger_mark_run_terminal_sent(&entry.run_id)?;
             }
+            tokio::task::yield_now().await;
         }
         Ok(())
     }

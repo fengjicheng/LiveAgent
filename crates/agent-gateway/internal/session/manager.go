@@ -35,6 +35,7 @@ type Manager struct {
 	cmdQueue         *commandQueue
 	workspaceHub     *workspaceActivityHub
 	managedProcesses *managedProcessHub
+	statusSubs       *statusSubscriberHub
 }
 
 type AgentSession struct {
@@ -85,6 +86,7 @@ func NewManager() *Manager {
 		cmdQueue:         newCommandQueue(defaultCommandQueueTimeout),
 		workspaceHub:     newWorkspaceActivityHub(),
 		managedProcesses: newManagedProcessHub(),
+		statusSubs:       newStatusSubscriberHub(),
 	}
 	m.convStreams = newConversationStreamStore(m.IsOnline)
 	go m.tunnelExpirySweepLoop()

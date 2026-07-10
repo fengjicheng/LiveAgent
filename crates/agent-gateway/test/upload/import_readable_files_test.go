@@ -66,6 +66,7 @@ func TestImportReadableFilesForwardsMultipartToAgent(t *testing.T) {
 	var outbound *gatewayv1.GatewayEnvelope
 	select {
 	case delivered := <-agentSession.Outbound():
+		delivered.Ack(nil)
 		outbound = delivered.GatewayEnvelope
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for upload request to reach agent")

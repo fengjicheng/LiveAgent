@@ -577,6 +577,8 @@ func (m *Manager) onAgentSessionCleared() {
 	m.broadcastTunnelState()
 	// Managed-process subscribers re-render with agent_online=false.
 	m.rebroadcastManagedProcessState()
+	// /ws clients learn the agent went offline by push, not by poll.
+	m.broadcastStatus()
 }
 
 func (m *Manager) tunnelExpirySweepLoop() {

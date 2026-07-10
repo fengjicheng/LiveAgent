@@ -40,14 +40,7 @@ import { useLocale } from "../i18n";
 import type { AppUpdateController } from "../lib/appUpdates";
 import { getAutomationState } from "../lib/automation";
 import { createHookRunScope } from "../lib/automation/hookRunner";
-import {
-  type CompactionStatus,
-  noteCompactionApplied,
-  pruneConversationState,
-  runMidTurnCompaction,
-  runPreCompactConversation,
-  shouldPreCompactConversation,
-} from "../lib/chat/compaction/contextCompaction";
+import type { CompactionStatus } from "../lib/chat/compaction/types";
 import { buildPersistableMessagesFromSnapshot } from "../lib/chat/conversation/chatAbort";
 import {
   appendMessagesToConversation,
@@ -63,6 +56,7 @@ import {
   createConversationHookLifecycle,
   createGatewayBridgeEventController,
 } from "../lib/chat/conversation/run";
+import { createTurnCancellation } from "../lib/chat/conversation/turnCancellation";
 import {
   type ChatHistoryShareStatus,
   type ChatHistorySummary,
@@ -103,7 +97,11 @@ import {
   preparePreferredMonacoNlsLocale,
   setPreferredMonacoNlsLocale,
 } from "../lib/monacoNls";
-import { createModelFromConfig, toModelValue } from "../lib/providers/llm";
+import {
+  createModelFromConfig,
+  isThinkingAlwaysOnForModel,
+  toModelValue,
+} from "../lib/providers/llm";
 import {
   type AppSettings,
   applyMcpOpsToAppSettings,
@@ -185,9 +183,7 @@ import {
 } from "../lib/workspaceProjects";
 import {
   type ActiveGatewayBridgeRequest,
-  buildCompactionContext,
   buildErrorAssistantMessage,
-  buildPreCompactionStatus,
   buildPreparedContext as buildPreparedConversationContext,
   buildResumeContext as buildResumeConversationContext,
   ChatComposerBar,
@@ -540,15 +536,16 @@ function buildProviderRuntimeConfig(
   model: string,
   controlsInput?: ChatRuntimeControls,
 ) {
-  const controls = normalizeChatRuntimeControlsForProvider(controlsInput, {
+  const modelConfig = findProviderModelConfig(provider, model);
+  const reasoningParams = {
     providerId: provider.type,
     requestFormat: provider.requestFormat,
-  });
-  const reasoningSupported =
-    getChatRuntimeReasoningLevelsForProvider({
-      providerId: provider.type,
-      requestFormat: provider.requestFormat,
-    }).length > 0;
+    modelId: model,
+    baseUrl: provider.baseUrl,
+    modelConfig,
+  };
+  const controls = normalizeChatRuntimeControlsForProvider(controlsInput, reasoningParams);
+  const reasoningSupported = getChatRuntimeReasoningLevelsForProvider(reasoningParams).length > 0;
   return {
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
@@ -560,7 +557,7 @@ function buildProviderRuntimeConfig(
       : undefined,
     promptCachingEnabled: true,
     nativeWebSearchEnabled: controls.nativeWebSearchEnabled,
-    modelConfig: findProviderModelConfig(provider, model),
+    modelConfig,
   };
 }
 
@@ -1318,7 +1315,7 @@ export function ChatPage(props: ChatPageProps) {
   const {
     liveTranscriptStore,
     getConversationLiveTranscriptStore,
-    getCompactionThrottleState,
+    getCompactionController,
     deleteConversationArtifacts,
     clearAbortSnapshot,
     captureAbortSnapshot,
@@ -2006,67 +2003,6 @@ export function ChatPage(props: ChatPageProps) {
       addNotify("error", `上下文压缩失败：${compactionStatus.message}`);
     }
   }, [compactionStatus, addNotify]);
-
-  function markCompactionRunning(
-    conversationId: string,
-    trigger: Extract<CompactionStatus, { phase: "running" }>["trigger"],
-    sourceSegmentIndex: number,
-  ) {
-    updateConversationRuntimeEntry(conversationId, (prev) => ({
-      ...prev,
-      compactionStatus: {
-        phase: "running",
-        trigger,
-        startedAt: Date.now(),
-        sourceSegmentIndex,
-      },
-    }));
-  }
-
-  function markCompactionCompleted(
-    conversationId: string,
-    trigger: Extract<CompactionStatus, { phase: "completed" }>["trigger"],
-    newSegmentIndex: number,
-  ) {
-    noteCompactionApplied(getCompactionThrottleState(conversationId));
-    updateConversationRuntimeEntry(conversationId, (prev) => ({
-      ...prev,
-      compactionStatus: {
-        phase: "completed",
-        trigger,
-        newSegmentIndex,
-        completedAt: Date.now(),
-      },
-    }));
-  }
-
-  function markCompactionFailed(
-    conversationId: string,
-    trigger: Extract<CompactionStatus, { phase: "failed" }>["trigger"],
-    message: string,
-  ) {
-    updateConversationRuntimeEntry(conversationId, (prev) => ({
-      ...prev,
-      compactionStatus: {
-        phase: "failed",
-        trigger,
-        failedAt: Date.now(),
-        message,
-      },
-    }));
-  }
-
-  function resetRunningCompaction(conversationId: string) {
-    updateConversationRuntimeEntry(conversationId, (prev) => {
-      if (prev.compactionStatus.phase !== "running") {
-        return prev;
-      }
-      return {
-        ...prev,
-        compactionStatus: { phase: "idle" },
-      };
-    });
-  }
 
   const markLocalHistorySnapshotSynced = useCallback(
     (conversationId: string, updatedAt: number) => {
@@ -3718,9 +3654,11 @@ export function ChatPage(props: ChatPageProps) {
       workdir: conversationCwd,
     }));
     const transcriptStore = getConversationLiveTranscriptStore(conversationId);
-    const conversationThrottleState = getCompactionThrottleState(conversationId);
+    const compaction = getCompactionController(conversationId);
     const isConversationVisible = () => currentConversationIdRef.current === conversationId;
-    let requestController = new AbortController();
+    // 轮次级取消：会话 abort controller 只注册 userStop 一次；每个 LLM 请求
+    // （主请求/压缩摘要/标题任务）各自派生子 scope，杜绝 abort 换代丢停止的窗口。
+    const cancellation = createTurnCancellation();
     const conversationDebugLogger = createStreamDebugLogger({
       enabled: effectiveIsAgentDevExecutionMode,
       conversationId,
@@ -3783,7 +3721,7 @@ export function ChatPage(props: ChatPageProps) {
           nativeWebSearchEnabled: titleProviderConfig.nativeWebSearchEnabled,
           modelConfig: titleProviderConfig.modelConfig,
         },
-        signal: requestController.signal,
+        signal: cancellation.deriveScope().controller.signal,
         conversationId,
         titleSourceText,
         content,
@@ -3842,7 +3780,7 @@ export function ChatPage(props: ChatPageProps) {
       conversationRunStarted = true;
       applyConversationState(nextConversationState);
       resetLiveTranscript(transcriptStore);
-      setConversationAbortController(conversationId, requestController);
+      setConversationAbortController(conversationId, cancellation.userStop);
       setConversationSendingState(conversationId, true);
       if (isConversationVisible()) {
         scrollFollowRef.current?.stickToBottom();
@@ -4006,12 +3944,6 @@ export function ChatPage(props: ChatPageProps) {
       baseMessageRef: overrides?.editResendBaseMessageRef,
     });
     acknowledgeGatewayRunStarted();
-    let activeCompactionRollback: {
-      state: ConversationViewState;
-      composerText?: string;
-      uploadedFiles?: PendingUploadedFile[];
-      persistOnRollback?: boolean;
-    } | null = null;
     let skillsPrompt = "";
     let memoryPrompt = "";
     let skillsRootDirForTools = skillsRootDir;
@@ -4059,69 +3991,74 @@ export function ChatPage(props: ChatPageProps) {
       });
     }
 
-    function armCompactionRollback(snapshot: {
-      state: ConversationViewState;
-      composerText?: string;
-      uploadedFiles?: PendingUploadedFile[];
-      persistOnRollback?: boolean;
-    }) {
-      activeCompactionRollback = snapshot;
-    }
-
-    function clearCompactionRollback() {
-      activeCompactionRollback = null;
-    }
-
-    async function persistCheckpointState(state: ConversationViewState) {
-      await persistConversation({
-        conversationId,
-        sessionId,
-        providerId,
-        model,
-        cwd: conversationCwd,
-        state,
-        fallbackTitle,
-        createdAt,
-        titlePromise,
-      });
-    }
-
-    async function rollbackCompactionIfNeeded() {
-      const snapshot = activeCompactionRollback;
-      if (!snapshot) {
-        return false;
-      }
-
-      clearCompactionRollback();
-      nextConversationState = snapshot.state;
-      resetLiveTranscript(transcriptStore);
-      updateGatewayBridgeToolStatus(null, false);
-      updateConversationRuntimeEntry(conversationId, (prev) => ({
-        ...prev,
-        state: snapshot.state,
-        compactionStatus: { phase: "idle" },
-      }));
-      if (isConversationVisible() && typeof snapshot.composerText === "string") {
-        composerRef.current?.setText(snapshot.composerText);
-        composerRef.current?.focus();
-      }
-      setPendingUploadsForConversation(conversationId, snapshot.uploadedFiles ?? []);
-      if (snapshot.persistOnRollback) {
-        abortedConversationCommitted = true;
-        await persistConversationWithHistorySync({
-          conversationId,
-          sessionId,
-          providerId,
-          model,
-          cwd: conversationCwd,
-          state: snapshot.state,
-          fallbackTitle,
-          createdAt,
-          titlePromise,
-        });
-      }
-      return true;
-    }
+    compaction.bindTurn({
+      providerId,
+      model,
+      runtime: {
+        baseUrl: providerConfig.baseUrl,
+        apiKey: providerConfig.apiKey,
+        requestFormat: providerConfig.requestFormat,
+        reasoning: providerConfig.reasoning,
+        promptCachingEnabled: providerConfig.promptCachingEnabled,
+        nativeWebSearchEnabled: providerConfig.nativeWebSearchEnabled,
+        modelConfig: providerConfig.modelConfig,
+      },
+      cancellation,
+      debugLogger: compactionDebugLogger,
+      buildPreparedContext,
+      buildResumeContext,
+      presend: {
+        baseState: baseConversationState,
+        pendingUserText: content,
+        composerText: content,
+        uploadedFiles,
+        composeAppliedState: (state) => appendMessagesToConversation(state, [pendingUserMessage]),
+      },
+      sinks: {
+        applyState: applyConversationState,
+        applyStateMidRun: rebaseConversationStateDuringRun,
+        publishStatus: (status) =>
+          updateConversationRuntimeEntry(conversationId, (prev) => ({
+            ...prev,
+            compactionStatus: status,
+          })),
+        setBridgeToolStatus: updateGatewayBridgeToolStatus,
+        queueCheckpoint: (state) => gatewayBridgeEvents.queueCheckpoint(state),
+        persist: (state) =>
+          persistConversation({
+            conversationId,
+            sessionId,
+            providerId,
+            model,
+            cwd: conversationCwd,
+            state,
+            fallbackTitle,
+            createdAt,
+            titlePromise,
+          }),
+        restoreComposer: (composerText, restoredUploads) => {
+          if (isConversationVisible() && typeof composerText === "string") {
+            composerRef.current?.setText(composerText);
+            composerRef.current?.focus();
+          }
+          setPendingUploadsForConversation(conversationId, restoredUploads);
+        },
+        persistRollback: async (state) => {
+          abortedConversationCommitted = true;
+          await persistConversationWithHistorySync({
+            conversationId,
+            sessionId,
+            providerId,
+            model,
+            cwd: conversationCwd,
+            state,
+            fallbackTitle,
+            createdAt,
+            titlePromise,
+          });
+        },
+      },
+    });
 
     // Optionally append skills metadata to system prompt (progressive disclosure).
     if (effectiveSkillsEnabled && selectedSkillNames.length > 0) {
@@ -4288,262 +4225,6 @@ export function ChatPage(props: ChatPageProps) {
       resetLiveTranscript(transcriptStore);
     }
 
-    function renewRequestController() {
-      requestController = new AbortController();
-      setConversationAbortController(conversationId, requestController);
-      return requestController;
-    }
-
-    async function compactDuringRun(params: {
-      trigger: "mid-stream" | "post-tool";
-      state: ConversationViewState;
-      requestContext: Context;
-      budgetContext: Context;
-      statusText: string;
-      tools?: Context["tools"];
-      includeAbortedMessages?: boolean;
-      includeUploadedFilesMetadata?: boolean;
-    }) {
-      let workingState = params.state;
-      let prePruned: ReturnType<typeof pruneConversationState> | null = null;
-      if (conversationThrottleState.recentCompactionCount >= 1) {
-        prePruned = pruneConversationState(workingState);
-        if (prePruned.applied) {
-          workingState = prePruned.state;
-        }
-      }
-      const workingRequestContext = prePruned?.applied
-        ? buildCompactionContext(prePruned.state, params.tools, {
-            includeAbortedMessages: params.includeAbortedMessages,
-            includeUploadedFilesMetadata: params.includeUploadedFilesMetadata,
-          })
-        : params.requestContext;
-      const workingBudgetContext = prePruned?.applied
-        ? buildPreparedContext(prePruned.state, params.tools, {
-            includeAbortedMessages: params.includeAbortedMessages,
-            includeUploadedFilesMetadata: params.includeUploadedFilesMetadata,
-          })
-        : params.budgetContext;
-
-      armCompactionRollback({
-        state: params.state,
-        persistOnRollback: true,
-      });
-      markCompactionRunning(conversationId, params.trigger, workingState.activeSegmentIndex);
-      updateGatewayBridgeToolStatus(params.statusText, true);
-
-      try {
-        const compacted = await runMidTurnCompaction({
-          state: workingState,
-          requestContext: workingRequestContext,
-          budgetContext: workingBudgetContext,
-          providerId,
-          model,
-          runtime: {
-            baseUrl: providerConfig.baseUrl,
-            apiKey: providerConfig.apiKey,
-            requestFormat: providerConfig.requestFormat,
-            reasoning: providerConfig.reasoning,
-            promptCachingEnabled: providerConfig.promptCachingEnabled,
-            nativeWebSearchEnabled: providerConfig.nativeWebSearchEnabled,
-            modelConfig: providerConfig.modelConfig,
-          },
-          signal: requestController.signal,
-          debugLogger: compactionDebugLogger,
-          throttleState: conversationThrottleState,
-        });
-
-        if (!compacted.applied) {
-          if (compacted.decision.reason === "hard-limit") {
-            markCompactionFailed(
-              conversationId,
-              params.trigger,
-              "当前会话已连续多次压缩，建议开启新会话继续。",
-            );
-          } else {
-            resetRunningCompaction(conversationId);
-          }
-          clearCompactionRollback();
-          if (prePruned?.applied) {
-            rebaseConversationStateDuringRun(prePruned.state);
-            return buildPreparedContext(prePruned.state, params.tools, {
-              includeAbortedMessages: params.includeAbortedMessages,
-              includeUploadedFilesMetadata: params.includeUploadedFilesMetadata,
-            });
-          }
-          return null;
-        }
-
-        await persistCheckpointState(compacted.state);
-        clearCompactionRollback();
-        rebaseConversationStateDuringRun(compacted.state);
-        markCompactionCompleted(conversationId, params.trigger, compacted.state.activeSegmentIndex);
-        gatewayBridgeEvents.queueCheckpoint(compacted.state);
-        return buildResumeContext(compacted.state, compacted.resumeMessage, params.tools, {
-          includeUploadedFilesMetadata: params.includeUploadedFilesMetadata,
-        });
-      } catch (error) {
-        if (requestController.signal.aborted || isAbortLikeError(error)) {
-          throw error;
-        }
-
-        clearCompactionRollback();
-        const pruned = pruneConversationState(workingState);
-        if (pruned.applied) {
-          rebaseConversationStateDuringRun(pruned.state);
-          markCompactionFailed(conversationId, params.trigger, "压缩失败，已回退到 prune 降级");
-          updateGatewayBridgeToolStatus(
-            `上下文压缩失败，已裁剪 ${pruned.prunedMessageCount} 个旧工具输出后继续...`,
-          );
-          return buildPreparedContext(pruned.state, params.tools, {
-            includeAbortedMessages: params.includeAbortedMessages,
-            includeUploadedFilesMetadata: params.includeUploadedFilesMetadata,
-          });
-        }
-
-        const message = error instanceof Error ? error.message : String(error);
-        markCompactionFailed(conversationId, params.trigger, message || "压缩失败");
-        return null;
-      } finally {
-        updateGatewayBridgeToolStatus(null);
-      }
-    }
-
-    async function maybeApplyPreCompaction(params: {
-      requestContext: Context;
-      budgetContext: Context;
-      tools?: Context["tools"];
-      includeUploadedFilesMetadata?: boolean;
-    }) {
-      let workingState = baseConversationState;
-      let prePruned: ReturnType<typeof pruneConversationState> | null = null;
-      if (conversationThrottleState.recentCompactionCount >= 1) {
-        prePruned = pruneConversationState(workingState);
-        if (prePruned.applied) {
-          workingState = prePruned.state;
-        }
-      }
-
-      const workingRequestContext = prePruned?.applied
-        ? buildCompactionContext(workingState, params.tools ?? params.requestContext.tools, {
-            includeUploadedFilesMetadata: params.includeUploadedFilesMetadata,
-          })
-        : params.requestContext;
-      const workingBudgetContext = prePruned?.applied
-        ? buildPreparedContext(workingState, params.tools ?? params.budgetContext.tools, {
-            includeUploadedFilesMetadata: params.includeUploadedFilesMetadata,
-          })
-        : params.budgetContext;
-      const decision = shouldPreCompactConversation({
-        providerId,
-        state: workingState,
-        requestContext: workingBudgetContext,
-        incomingUserText: content,
-        modelConfig: providerConfig.modelConfig,
-        throttleState: conversationThrottleState,
-        debugLogger: compactionDebugLogger,
-      });
-      if (!decision.shouldCompact) {
-        if (decision.reason === "hard-limit") {
-          markCompactionFailed(
-            conversationId,
-            "pre-send",
-            "当前会话已连续多次压缩，建议开启新会话继续。",
-          );
-        }
-        if (prePruned?.applied) {
-          applyConversationState(
-            appendMessagesToConversation(prePruned.state, [pendingUserMessage]),
-          );
-          return true;
-        }
-        return false;
-      }
-
-      armCompactionRollback({
-        state: baseConversationState,
-        composerText: content,
-        uploadedFiles,
-      });
-      markCompactionRunning(conversationId, "pre-send", workingState.activeSegmentIndex);
-      updateGatewayBridgeToolStatus(buildPreCompactionStatus(decision), true);
-
-      try {
-        const compacted = await runPreCompactConversation({
-          state: workingState,
-          requestContext: workingRequestContext,
-          budgetContext: workingBudgetContext,
-          incomingUserText: content,
-          providerId,
-          model,
-          runtime: {
-            baseUrl: providerConfig.baseUrl,
-            apiKey: providerConfig.apiKey,
-            requestFormat: providerConfig.requestFormat,
-            reasoning: providerConfig.reasoning,
-            promptCachingEnabled: providerConfig.promptCachingEnabled,
-            nativeWebSearchEnabled: providerConfig.nativeWebSearchEnabled,
-            modelConfig: providerConfig.modelConfig,
-          },
-          signal: requestController.signal,
-          debugLogger: compactionDebugLogger,
-          throttleState: conversationThrottleState,
-        });
-
-        if (!compacted.applied) {
-          if (compacted.decision.reason === "hard-limit") {
-            markCompactionFailed(
-              conversationId,
-              "pre-send",
-              "当前会话已连续多次压缩，建议开启新会话继续。",
-            );
-          } else {
-            resetRunningCompaction(conversationId);
-          }
-          clearCompactionRollback();
-          if (prePruned?.applied) {
-            applyConversationState(
-              appendMessagesToConversation(prePruned.state, [pendingUserMessage]),
-            );
-            return true;
-          }
-          return false;
-        }
-
-        await persistCheckpointState(compacted.state);
-        clearCompactionRollback();
-        applyConversationState(appendMessagesToConversation(compacted.state, [pendingUserMessage]));
-        markCompactionCompleted(conversationId, "pre-send", compacted.state.activeSegmentIndex);
-        gatewayBridgeEvents.queueCheckpoint(compacted.state);
-        return true;
-      } catch (error) {
-        if (requestController.signal.aborted || isAbortLikeError(error)) {
-          throw error;
-        }
-        clearCompactionRollback();
-        const pruned = prePruned?.applied
-          ? prePruned
-          : pruneConversationState(baseConversationState);
-        if (pruned.applied) {
-          applyConversationState(appendMessagesToConversation(pruned.state, [pendingUserMessage]));
-          markCompactionFailed(conversationId, "pre-send", "压缩失败，已回退到 prune 降级");
-          updateGatewayBridgeToolStatus(
-            `上下文压缩失败，已裁剪 ${pruned.prunedMessageCount} 个旧工具输出后继续...`,
-          );
-          return true;
-        }
-        console.warn("发送前上下文压缩失败，继续使用原始上下文", error);
-        markCompactionFailed(
-          conversationId,
-          "pre-send",
-          error instanceof Error ? error.message : String(error),
-        );
-        return false;
-      } finally {
-        updateGatewayBridgeToolStatus(null);
-      }
-    }
-
     let gatewayRuntimeFinalState: GatewayRuntimeSnapshotState = "completed";
     try {
       if (effectiveIsAgentMode) {
@@ -4605,23 +4286,17 @@ export function ChatPage(props: ChatPageProps) {
             transcriptStore,
             gatewayBridgeEvents,
             hookLifecycle,
-            conversationThrottleState,
             conversationDebugLogger,
-            compactionDebugLogger,
             subagentStore: subagentStoresRef.current.get(conversationId),
             getNextConversationState: () => nextConversationState,
             applyConversationState,
-            buildCompactionContext,
             buildPreparedContext,
-            maybeApplyPreCompaction,
-            compactDuringRun,
-            getRequestController: () => requestController,
-            renewRequestController,
+            compaction,
+            cancellation,
             resetLiveTranscript,
             updateLiveRounds,
             batchLiveRoundsUpdate,
             updateToolStatus,
-            updateGatewayBridgeToolStatus,
             commitVisibleAbortedConversation,
             updateConversationRuntimeEntry,
             persistConversationWithHistorySync,
@@ -4656,18 +4331,13 @@ export function ChatPage(props: ChatPageProps) {
             transcriptStore,
             gatewayBridgeEvents,
             hookLifecycle,
-            conversationThrottleState,
             conversationDebugLogger,
             recoveryDebugLogger,
-            compactionDebugLogger,
             getNextConversationState: () => nextConversationState,
             applyConversationState,
-            buildCompactionContext,
             buildPreparedContext,
-            maybeApplyPreCompaction,
-            compactDuringRun,
-            getRequestController: () => requestController,
-            renewRequestController,
+            compaction,
+            cancellation,
             resetLiveTranscript,
             appendDraftAssistantText,
             batchLiveRoundsUpdate,
@@ -4679,7 +4349,7 @@ export function ChatPage(props: ChatPageProps) {
         });
       }
     } catch (err) {
-      const aborted = requestController.signal.aborted || isAbortLikeError(err);
+      const aborted = cancellation.userStop.signal.aborted || isAbortLikeError(err);
       gatewayRuntimeFinalState = aborted ? "cancelled" : "failed";
       const remoteErrorMessage = aborted
         ? "Cancelled"
@@ -4688,13 +4358,11 @@ export function ChatPage(props: ChatPageProps) {
       gatewayBridgeEvents.close();
       if (aborted) {
         hookScope.cancel();
-        const rolledBack = await rollbackCompactionIfNeeded();
+        const rolledBack = await compaction.handleTurnAbort();
         if (!rolledBack) {
-          resetRunningCompaction(conversationId);
           commitVisibleAbortedConversation();
         }
       } else {
-        clearCompactionRollback();
         const msg = err instanceof Error ? err.message : String(err);
         commitErroredConversation(msg || "Request failed");
       }
@@ -4705,7 +4373,7 @@ export function ChatPage(props: ChatPageProps) {
         titleJobRef.current = null;
       }
     } finally {
-      clearCompactionRollback();
+      compaction.unbindTurn();
       hookLifecycle.endAgent();
       hookScope.close();
       clearAbortSnapshot(transcriptStore);
@@ -5148,33 +4816,71 @@ export function ChatPage(props: ChatPageProps) {
   const currentChatProvider = settings.selectedModel
     ? settings.customProviders.find((item) => item.id === settings.selectedModel?.customProviderId)
     : undefined;
-  const chatRuntimeReasoningOptions = useMemo(
+  const currentChatModelId = settings.selectedModel?.model;
+  const currentChatModelConfig = useMemo(
     () =>
-      getChatRuntimeReasoningLevelsForProvider({
-        providerId: currentChatProvider?.type,
-        requestFormat: currentChatProvider?.requestFormat,
-      }),
-    [currentChatProvider?.requestFormat, currentChatProvider?.type],
+      currentChatProvider && currentChatModelId
+        ? findProviderModelConfig(currentChatProvider, currentChatModelId)
+        : undefined,
+    [currentChatProvider, currentChatModelId],
+  );
+  const chatRuntimeReasoningParams = useMemo(
+    () => ({
+      providerId: currentChatProvider?.type,
+      requestFormat: currentChatProvider?.requestFormat,
+      modelId: currentChatModelId,
+      baseUrl: currentChatProvider?.baseUrl,
+      modelConfig: currentChatModelConfig,
+    }),
+    [
+      currentChatModelConfig,
+      currentChatModelId,
+      currentChatProvider?.baseUrl,
+      currentChatProvider?.requestFormat,
+      currentChatProvider?.type,
+    ],
+  );
+  const chatRuntimeReasoningOptions = useMemo(
+    () => getChatRuntimeReasoningLevelsForProvider(chatRuntimeReasoningParams),
+    [chatRuntimeReasoningParams],
+  );
+  const chatRuntimeThinkingAlwaysOn = useMemo(
+    () =>
+      isThinkingAlwaysOnForModel(
+        currentChatProvider?.type ?? "claude_code",
+        currentChatModelId ?? "",
+        currentChatProvider?.baseUrl ?? "",
+        currentChatProvider?.requestFormat,
+        currentChatModelConfig,
+      ),
+    [
+      currentChatModelConfig,
+      currentChatModelId,
+      currentChatProvider?.baseUrl,
+      currentChatProvider?.requestFormat,
+      currentChatProvider?.type,
+    ],
   );
   const chatRuntimeControlsForCurrentProvider = useMemo(
     () =>
-      normalizeChatRuntimeControlsForProvider(settings.chatRuntimeControls, {
-        providerId: currentChatProvider?.type,
-        requestFormat: currentChatProvider?.requestFormat,
-      }),
-    [currentChatProvider?.requestFormat, currentChatProvider?.type, settings.chatRuntimeControls],
+      normalizeChatRuntimeControlsForProvider(
+        settings.chatRuntimeControls,
+        chatRuntimeReasoningParams,
+      ),
+    [chatRuntimeReasoningParams, settings.chatRuntimeControls],
   );
   const handleChatRuntimeControlsChange = useCallback(
     (patch: Partial<ChatRuntimeControls>) => {
       setSettings((prev) => ({
         ...prev,
-        chatRuntimeControls: updateChatRuntimeControlsForProvider(prev.chatRuntimeControls, patch, {
-          providerId: currentChatProvider?.type,
-          requestFormat: currentChatProvider?.requestFormat,
-        }),
+        chatRuntimeControls: updateChatRuntimeControlsForProvider(
+          prev.chatRuntimeControls,
+          patch,
+          chatRuntimeReasoningParams,
+        ),
       }));
     },
-    [currentChatProvider?.requestFormat, currentChatProvider?.type, setSettings],
+    [chatRuntimeReasoningParams, setSettings],
   );
   const currentConversationWorkspaceRoot = (() => {
     const currentItem = historyItems.find((item) => item.id === currentConversationId);
@@ -5471,6 +5177,7 @@ export function ChatPage(props: ChatPageProps) {
                 isAgentMode={isAgentMode}
                 chatRuntimeControls={chatRuntimeControlsForCurrentProvider}
                 reasoningOptions={chatRuntimeReasoningOptions}
+                thinkingAlwaysOn={chatRuntimeThinkingAlwaysOn}
                 gitClient={tauriGitClient}
                 workspaceActivityClient={tauriWorkspaceActivityClient}
                 onSend={handleSend}

@@ -9,9 +9,22 @@ export function ConfirmActionPopover(props: {
   description: ReactNode;
   confirmLabel: string;
   onConfirm: () => void;
+  // Popover edge to align with the trigger; "end" suits right-aligned action
+  // rows (settings lists), "start" left-aligned ones (assistant reply row).
+  align?: "start" | "end";
+  // Preferred trigger side to open from; the positioner flips on collision.
+  side?: "top" | "bottom";
   children: (open: () => void) => ReactNode;
 }) {
-  const { title, description, confirmLabel, onConfirm, children } = props;
+  const {
+    title,
+    description,
+    confirmLabel,
+    onConfirm,
+    align = "end",
+    side = "bottom",
+    children,
+  } = props;
   const { t } = useLocale();
 
   return (
@@ -19,8 +32,8 @@ export function ConfirmActionPopover(props: {
       {/* Pass no-op — Popover.Trigger merges its own click handler via render prop */}
       <Popover.Trigger render={children(() => {}) as React.ReactElement} />
       <Popover.Portal>
-        <Popover.Positioner side="bottom" align="end" sideOffset={6} className="z-[9999]">
-          <Popover.Popup className="w-64 rounded-xl border border-border bg-popover shadow-lg outline-none data-[open]:animate-in data-[closed]:animate-out data-[closed]:fade-out-0 data-[open]:fade-in-0 data-[closed]:zoom-out-95 data-[open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-1 data-[side=top]:slide-in-from-bottom-1">
+        <Popover.Positioner side={side} align={align} sideOffset={6} className="z-[9999]">
+          <Popover.Popup className="confirm-action-popover-popup w-64 rounded-xl border border-border bg-popover shadow-lg outline-none">
             <div className="p-3">
               <div className="flex items-start gap-2.5">
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-destructive/10">

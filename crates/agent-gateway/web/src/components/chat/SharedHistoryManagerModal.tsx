@@ -4,6 +4,7 @@ import { useLocale } from "../../i18n";
 import type { ChatHistorySummary } from "../../lib/chat/chatHistory";
 import { cn } from "../../lib/shared/utils";
 import {
+  AlertCircle,
   Check,
   Copy,
   ExternalLink,
@@ -33,6 +34,7 @@ type SharedHistoryManagerModalProps = {
   loadingIds: ReadonlySet<string>;
   updatingIds: ReadonlySet<string>;
   errors: Readonly<Record<string, string | undefined>>;
+  listError?: string | null;
   shareOrigin?: string;
   shareOriginLoading?: boolean;
   onRefresh: () => void;
@@ -201,6 +203,7 @@ export function SharedHistoryManagerModal({
   loadingIds,
   updatingIds,
   errors,
+  listError,
   shareOrigin,
   shareOriginLoading = false,
   onRefresh,
@@ -325,6 +328,16 @@ export function SharedHistoryManagerModal({
           ) : shareOriginLoading && !publicOrigin ? (
             <div className="mt-3 rounded-2xl border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-xs leading-5 text-sky-700 dark:text-sky-300">
               {t("sharedHistory.originLoading")}
+            </div>
+          ) : null}
+
+          {listError ? (
+            <div
+              role="alert"
+              className="mt-3 flex items-start gap-2 rounded-2xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive"
+            >
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span className="min-w-0 break-words">{listError}</span>
             </div>
           ) : null}
 

@@ -15,7 +15,7 @@ import { Markdown } from "@/components/Markdown";
 import { useLocale } from "@/i18n/LocaleContext";
 import { normalizeLiveToolStatus, VIBING_STATUS } from "@/lib/chat/chatPageHelpers";
 import type { HistoryMessageRef } from "@/lib/chat/conversationState";
-import { getRoundToolTrace } from "@/lib/chat/uiMessages";
+import { getRoundText, getRoundToolTrace } from "@/lib/chat/uiMessages";
 import {
   formatUploadedFileSize,
   type PendingUploadedFile,
@@ -55,8 +55,10 @@ import {
   FileText,
   Loader2,
   Pencil,
+  RefreshCw,
   X,
 } from "./icons";
+import { ConfirmActionPopover } from "./ui/confirm-action-popover";
 
 type GatewayTranscriptProps = {
   conversationId?: string;
@@ -909,6 +911,108 @@ function GatewayUserMessageRowBody(props: {
   );
 }
 
+// Maps each assistant row to the nearest preceding user row — the prompt a
+// retry re-sends. `seed` carries the folded region's trailing user row into
+// the live region's map (a live assistant row's prompt can sit across the
+// fold boundary for foreign turns without a user slot).
+function buildRetryTargetMap(
+  rows: readonly TranscriptRow[],
+  seed?: Extract<TranscriptRow, { kind: "user" }>,
+) {
+  const map = new Map<string, Extract<TranscriptRow, { kind: "user" }>>();
+  let lastUser: Extract<TranscriptRow, { kind: "user" }> | null = seed ?? null;
+  for (const row of rows) {
+    if (row.kind === "user") {
+      lastUser = row;
+    } else if (row.kind === "assistant" && lastUser) {
+      map.set(row.key, lastUser);
+    }
+  }
+  return map;
+}
+
+// Shared assistant-row hover actions (copy / retry). Retry re-sends the
+// nearest preceding user prompt through the edit-resend pipeline: this reply
+// and everything after it are discarded, same as editing that prompt
+// unchanged. Both transcript regions render it below the bubble.
+function GatewayAssistantMessageActions(props: {
+  row: Extract<TranscriptRow, { kind: "assistant" }>;
+  retryTarget: Extract<TranscriptRow, { kind: "user" }> | null;
+  isStreaming: boolean;
+  copiedMessageId: string | null;
+  setCopiedMessageId: Dispatch<SetStateAction<string | null>>;
+  onResendFromEdit?: (
+    messageRef: HistoryMessageRef,
+    text: string,
+    uploadedFiles: PendingUploadedFile[],
+  ) => void;
+}) {
+  const { row, retryTarget, isStreaming, copiedMessageId, setCopiedMessageId, onResendFromEdit } =
+    props;
+  const { locale, t } = useLocale();
+  const isCopied = copiedMessageId === row.key;
+  const replyText = row.rounds
+    .map((round) => getRoundText(round).trim())
+    .filter((text) => text.length > 0)
+    .join("\n\n");
+  const retryMessageRef = retryTarget?.messageRef;
+  const retryDisabled = isStreaming || !onResendFromEdit || !retryMessageRef;
+  const retryTitle = retryMessageRef
+    ? t("chat.retry")
+    : locale === "en-US"
+      ? "This reply cannot be retried because its prompt has no stable message identifier."
+      : "旧历史缺少稳定消息标识，无法重试";
+
+  return (
+    <div className="assistant-bubble-shell flex w-full max-w-full items-start gap-3">
+      <div className="assistant-bubble-avatar w-7 shrink-0" aria-hidden="true" />
+      <div className="chat-assistant-actions flex min-w-0 flex-1 justify-start gap-0.5 opacity-0 transition-opacity group-focus-within/assistant:opacity-100 group-hover/assistant:opacity-100">
+        <button
+          type="button"
+          className="chat-assistant-action rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          title={t("chat.copy")}
+          aria-label={t("chat.copy")}
+          disabled={!replyText}
+          onClick={() => {
+            void navigator.clipboard.writeText(replyText).then(() => {
+              setCopiedMessageId(row.key);
+              window.setTimeout(() => {
+                setCopiedMessageId((current) => (current === row.key ? null : current));
+              }, 1500);
+            });
+          }}
+        >
+          {isCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        </button>
+        <ConfirmActionPopover
+          title={t("chat.retryConfirmTitle")}
+          description={t("chat.retryConfirmDescription")}
+          confirmLabel={t("chat.retry")}
+          align="start"
+          side="top"
+          onConfirm={() => {
+            if (!retryTarget || !retryMessageRef) return;
+            onResendFromEdit?.(retryMessageRef, retryTarget.text, retryTarget.attachments);
+          }}
+        >
+          {(open) => (
+            <button
+              type="button"
+              className="chat-assistant-action rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              title={retryTitle}
+              aria-label={retryTitle}
+              disabled={retryDisabled}
+              onClick={open}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </ConfirmActionPopover>
+      </div>
+    </div>
+  );
+}
+
 const GatewayTranscriptFoldedRegion = memo(function GatewayTranscriptFoldedRegion(props: {
   conversationId?: string;
   rows: readonly TranscriptRow[];
@@ -984,6 +1088,7 @@ const GatewayTranscriptFoldedRegion = memo(function GatewayTranscriptFoldedRegio
     }
     return next;
   }, [hasMoreHistory, rows, readOnly]);
+  const retryTargetByAssistantKey = useMemo(() => buildRetryTargetMap(rows), [rows]);
   const getTranscriptItemKey = useCallback(
     // The index branch is unreachable (count === virtualItems.length); it
     // only satisfies the type.
@@ -1070,7 +1175,7 @@ const GatewayTranscriptFoldedRegion = memo(function GatewayTranscriptFoldedRegio
               className="gateway-transcript-row absolute left-0 right-0 top-0"
               style={{ transform: `translateY(${virtualRow.start}px)` }}
             >
-              <div className="min-w-0 w-full max-w-full space-y-1">
+              <div className="group/assistant min-w-0 w-full max-w-full space-y-1">
                 <AssistantBubble
                   rounds={normalizeRoundsForRender(row.rounds, false)}
                   showUsage={showUsage}
@@ -1080,6 +1185,16 @@ const GatewayTranscriptFoldedRegion = memo(function GatewayTranscriptFoldedRegio
                   readOnly={readOnly}
                   redactToolContent={redactToolContent}
                 />
+                {!readOnly ? (
+                  <GatewayAssistantMessageActions
+                    row={row}
+                    retryTarget={retryTargetByAssistantKey.get(row.key) ?? null}
+                    isStreaming={isStreaming}
+                    copiedMessageId={copiedMessageId}
+                    setCopiedMessageId={setCopiedMessageId}
+                    onResendFromEdit={onResendFromEdit}
+                  />
+                ) : null}
               </div>
             </article>
           );
@@ -1124,6 +1239,9 @@ const GatewayTranscriptLiveRegion = memo(function GatewayTranscriptLiveRegion(pr
   // The flow rows past the fold boundary (settled + streaming turns).
   rows: readonly TranscriptRow[];
   lastFoldedRowKind?: TranscriptRow["kind"];
+  // Trailing user row of the folded region — retry-target seed for assistant
+  // rows whose prompt sits across the fold boundary.
+  lastFoldedUserRow?: Extract<TranscriptRow, { kind: "user" }>;
   activeTurnKey?: string | null;
   isStreaming: boolean;
   isAgentMode: boolean;
@@ -1143,6 +1261,7 @@ const GatewayTranscriptLiveRegion = memo(function GatewayTranscriptLiveRegion(pr
   const {
     rows,
     lastFoldedRowKind,
+    lastFoldedUserRow,
     activeTurnKey,
     isStreaming,
     isAgentMode,
@@ -1158,6 +1277,10 @@ const GatewayTranscriptLiveRegion = memo(function GatewayTranscriptLiveRegion(pr
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const loadCommitDetails = useGatewayCommitDetailsLoader(workspaceRoot, gitClient);
+  const retryTargetByAssistantKey = useMemo(
+    () => buildRetryTargetMap(rows, lastFoldedUserRow),
+    [rows, lastFoldedUserRow],
+  );
 
   useEffect(() => {
     if (!editingMessageId) {
@@ -1243,7 +1366,7 @@ const GatewayTranscriptLiveRegion = memo(function GatewayTranscriptLiveRegion(pr
           const liveStatusText = shouldShowLiveStatus ? (displayedToolStatus ?? "") : "";
           return (
             <article key={row.key} className="gateway-transcript-row">
-              <div className="min-w-0 w-full max-w-full space-y-1">
+              <div className="group/assistant min-w-0 w-full max-w-full space-y-1">
                 <AssistantBubble
                   rounds={normalizeRoundsForRender(row.rounds, isLatestLiveAssistant)}
                   showUsage={showUsage}
@@ -1253,6 +1376,16 @@ const GatewayTranscriptLiveRegion = memo(function GatewayTranscriptLiveRegion(pr
                   renderMode="streaming"
                 />
                 {shouldShowLiveStatus ? <LiveStatusFooter status={liveStatusText} /> : null}
+                {!isLatestLiveStreaming ? (
+                  <GatewayAssistantMessageActions
+                    row={row}
+                    retryTarget={retryTargetByAssistantKey.get(row.key) ?? null}
+                    isStreaming={isStreaming}
+                    copiedMessageId={copiedMessageId}
+                    setCopiedMessageId={setCopiedMessageId}
+                    onResendFromEdit={onResendFromEdit}
+                  />
+                ) : null}
               </div>
             </article>
           );
@@ -1352,6 +1485,17 @@ export function GatewayTranscript({
   );
   const rowCount = foldedRows.length + liveRows.length;
   const lastFoldedRowKind = foldedRows[foldedRows.length - 1]?.kind;
+  // foldedRows is identity-stable while a reply streams, so this memo (and
+  // the live region prop it feeds) only changes when turns fold.
+  const lastFoldedUserRow = useMemo(() => {
+    for (let index = foldedRows.length - 1; index >= 0; index -= 1) {
+      const row = foldedRows[index];
+      if (row?.kind === "user") {
+        return row;
+      }
+    }
+    return undefined;
+  }, [foldedRows]);
   const inlineErrorText = error?.trim() ?? "";
   const shouldShowInlineError = useMemo(() => {
     if (inlineErrorText.length === 0) {
@@ -1414,6 +1558,7 @@ export function GatewayTranscript({
           <GatewayTranscriptLiveRegion
             rows={liveRows}
             lastFoldedRowKind={lastFoldedRowKind}
+            lastFoldedUserRow={lastFoldedUserRow}
             activeTurnKey={activeTurnKey}
             isStreaming={isStreaming}
             isAgentMode={isAgentMode}

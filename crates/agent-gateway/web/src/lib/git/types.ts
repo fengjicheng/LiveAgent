@@ -25,6 +25,7 @@ export type GitRepositoryState = {
   remoteUrl: string;
   ahead: number;
   behind: number;
+  stashCount: number;
   dirtyCounts: GitDirtyCounts;
   entries: GitStatusEntry[];
   status: "ready" | "not_repo" | "error" | string;
@@ -153,6 +154,10 @@ export type GitClient = {
   pull(workdir: string): Promise<GitOperationResponse>;
   setRemote(workdir: string, remoteUrl: string): Promise<GitOperationResponse>;
   push(workdir: string): Promise<GitOperationResponse>;
+  deleteBranch(workdir: string, branch: string, force?: boolean): Promise<GitOperationResponse>;
+  renameBranch(workdir: string, branch: string, newBranch: string): Promise<GitOperationResponse>;
+  stashPush(workdir: string, message?: string): Promise<GitOperationResponse>;
+  stashPop(workdir: string): Promise<GitOperationResponse>;
 };
 
 const emptyCounts: GitDirtyCounts = {
@@ -199,6 +204,7 @@ export function normalizeGitRepositoryState(
     remoteUrl: asString(source.remoteUrl ?? source.remote_url),
     ahead: asNumber(source.ahead),
     behind: asNumber(source.behind),
+    stashCount: asNumber(source.stashCount ?? source.stash_count),
     dirtyCounts: {
       staged: asNumber(dirtyCounts.staged),
       unstaged: asNumber(dirtyCounts.unstaged),
@@ -359,6 +365,7 @@ export function emptyGitRepositoryState(workdir = ""): GitRepositoryState {
     remoteUrl: "",
     ahead: 0,
     behind: 0,
+    stashCount: 0,
     dirtyCounts: emptyCounts,
     entries: [],
     status: "not_repo",

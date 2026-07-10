@@ -737,6 +737,11 @@ test("GatewayTranscript renders folded and live regions as slices of one row lis
     createContext(defaultValue) {
       return { defaultValue };
     },
+    // Module-load shim: ui/button.tsx calls React.forwardRef at top level
+    // (pulled in via the retry ConfirmActionPopover import chain).
+    forwardRef(render) {
+      return render;
+    },
     memo(component) {
       return component;
     },

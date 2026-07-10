@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -29,6 +31,11 @@ type websocketEnvelope struct {
 	Type    string `json:"type"`
 	Payload any    `json:"payload,omitempty"`
 	Error   string `json:"error,omitempty"`
+
+	// priority is transport-local metadata and is never serialized. It lets
+	// latency-sensitive acknowledgements bypass a congested data queue without
+	// promoting every potentially large response.
+	priority bool
 }
 
 type websocketAuthPayload struct {
@@ -90,9 +97,11 @@ type websocketGitRequestPayload struct {
 }
 
 const (
-	websocketWriteQueueDefault = 512
-	websocketMaxWriteRetries   = 2
-	websocketRetryBackoff      = 100 * time.Millisecond
+	websocketWriteQueueDefault   = 512
+	websocketControlQueueSize    = 64
+	websocketMaxWriteRetries     = 2
+	websocketRetryBackoff        = 100 * time.Millisecond
+	websocketHeartbeatGraceFloor = 5 * time.Second
 )
 
 type websocketConnection struct {
@@ -104,6 +113,11 @@ type websocketConnection struct {
 	writeMu      sync.Mutex
 	writeTimeout time.Duration
 	outbox       chan websocketEnvelope
+	// ctrlOutbox carries keep-alive and recovery envelopes past a congested
+	// data queue so a slow reader can be shed per-stream instead of losing
+	// the whole connection.
+	ctrlOutbox    chan websocketEnvelope
+	droppedFrames atomic.Int64
 
 	closeOnce  sync.Once
 	done       chan struct{}
@@ -126,6 +140,8 @@ type websocketConnection struct {
 	chatActivityEventsCleanup func()
 	tunnelStateEvents         <-chan *gatewayv1.TunnelStateSnapshot
 	tunnelStateEventsCleanup  func()
+	statusEvents              <-chan session.Status
+	statusEventsCleanup       func()
 
 	managedProcessEvents        <-chan *gatewayv1.ManagedProcessSnapshot
 	managedProcessEventsCleanup func()
@@ -169,9 +185,18 @@ func NewWebSocketServer(cfg *config.Config, sm *session.Manager) http.Handler {
 			req:              r,
 			writeTimeout:     cfg.WebSocketWriteTimeout,
 			outbox:           make(chan websocketEnvelope, queueSize),
+			ctrlOutbox:       make(chan websocketEnvelope, websocketControlQueueSize),
 			done:             make(chan struct{}),
 			terminalInterest: newWebsocketTerminalInterestTracker(),
 		}
+		// Protocol-level pongs are produced by the browser's network stack
+		// even while the page's JS is throttled or frozen in a hidden tab, so
+		// they are the liveness signal that must count as inbound activity.
+		conn.SetPongHandler(func(string) error {
+			state.touchInboundActivity()
+			return nil
+		})
+		_ = conn.SetReadDeadline(time.Now().Add(state.idleTimeout()))
 		defer state.close()
 		state.serve()
 	})
@@ -203,12 +228,22 @@ func (c *websocketConnection) serve() {
 		if req.Type == "pong" {
 			continue
 		}
+		// Pre-auth, nothing drains the write queues (writeLoop starts in
+		// handleAuth), so error envelopes would only pile up while the
+		// malformed frames keep refreshing the read deadline. The only valid
+		// first request is auth; anything else ends the connection.
 		if req.ID == "" {
 			_ = c.writeError("", "request id is required")
+			if !c.authorized {
+				return
+			}
 			continue
 		}
 		if req.Type == "" {
 			_ = c.writeError(req.ID, "request type is required")
+			if !c.authorized {
+				return
+			}
 			continue
 		}
 
@@ -219,7 +254,7 @@ func (c *websocketConnection) serve() {
 
 		if !c.authorized {
 			_ = c.writeError(req.ID, "unauthorized")
-			continue
+			return
 		}
 
 		// Subscription lifecycle must keep the client's frame order: a
@@ -268,13 +303,19 @@ func (c *websocketConnection) close() {
 			c.tunnelStateEventsCleanup()
 			c.tunnelStateEventsCleanup = nil
 		}
+		if c.statusEventsCleanup != nil {
+			c.statusEventsCleanup()
+			c.statusEventsCleanup = nil
+		}
 		if c.managedProcessEventsCleanup != nil {
 			c.managedProcessEventsCleanup()
 			c.managedProcessEventsCleanup = nil
 		}
 		c.cleanupChatStreamSubscriptions()
 		c.cleanupWorkspaceSubscriptions()
-		_ = c.conn.Close()
+		if c.conn != nil {
+			_ = c.conn.Close()
+		}
 	})
 }
 
@@ -293,6 +334,9 @@ func (c *websocketConnection) handleAuth(req websocketRequest) {
 	}
 
 	c.authorized = true
+	// The pre-auth deadline was deliberately left un-refreshed; re-arm it now
+	// so a slow-to-auth client does not die moments after succeeding.
+	c.touchInboundActivity()
 	go c.writeLoop()
 	c.startHistorySyncForwarder()
 	c.startSettingsSyncForwarder()
@@ -302,6 +346,7 @@ func (c *websocketConnection) handleAuth(req websocketRequest) {
 	c.startChatActivityForwarder()
 	c.startTunnelStateForwarder()
 	c.startManagedProcessStateForwarder()
+	c.startStatusEventForwarder()
 	c.startWebSocketHeartbeat()
 	if err := c.writeResponse(req.ID, map[string]any{"ok": true}); err != nil {
 		c.close()
@@ -310,6 +355,7 @@ func (c *websocketConnection) handleAuth(req websocketRequest) {
 	c.replayTerminalSessionSnapshot()
 	c.replayTunnelStateSnapshot()
 	c.replayManagedProcessSnapshot()
+	c.replayStatusSnapshot()
 }
 
 func (c *websocketConnection) startHistorySyncForwarder() {
@@ -331,6 +377,9 @@ func (c *websocketConnection) startHistorySyncForwarder() {
 					return
 				}
 				if err := c.writeEvent("history.event", websocketHistorySyncPayload(event)); err != nil {
+					if errors.Is(err, errWriteQueueFull) {
+						continue
+					}
 					return
 				}
 			}
@@ -357,11 +406,52 @@ func (c *websocketConnection) startChatActivityForwarder() {
 					return
 				}
 				if err := c.writeEvent("chat.activity", websocketChatActivityPayload(event)); err != nil {
+					if errors.Is(err, errWriteQueueFull) {
+						continue
+					}
 					return
 				}
 			}
 		}
 	}()
+}
+
+// startStatusEventForwarder pushes agent online/offline transitions so the
+// client does not depend on a (background-throttled) status poll to notice
+// them. Frames are sheddable: the fallback poll reconciles missed ones.
+func (c *websocketConnection) startStatusEventForwarder() {
+	if c.statusEvents != nil || c.statusEventsCleanup != nil {
+		return
+	}
+
+	statusEvents, cleanup := c.sm.SubscribeStatus()
+	c.statusEvents = statusEvents
+	c.statusEventsCleanup = cleanup
+
+	go func() {
+		for {
+			select {
+			case <-c.done:
+				return
+			case status, ok := <-statusEvents:
+				if !ok {
+					return
+				}
+				if err := c.writeEvent("status.event", status); err != nil {
+					if errors.Is(err, errWriteQueueFull) {
+						continue
+					}
+					return
+				}
+			}
+		}
+	}()
+}
+
+// replayStatusSnapshot paints the freshly authenticated socket with the
+// current agent status so no poll round-trip is needed after (re)connect.
+func (c *websocketConnection) replayStatusSnapshot() {
+	_ = c.writeEvent("status.event", c.sm.Status())
 }
 
 func (c *websocketConnection) startSettingsSyncForwarder() {
@@ -387,6 +477,9 @@ func (c *websocketConnection) startSettingsSyncForwarder() {
 					return
 				}
 				if err := c.writeEvent("settings.event", payload); err != nil {
+					if errors.Is(err, errWriteQueueFull) {
+						continue
+					}
 					return
 				}
 			}
@@ -416,6 +509,9 @@ func (c *websocketConnection) startTerminalEventForwarder() {
 					continue
 				}
 				if err := c.writeEvent("terminal.event", websocketTerminalEventPayload(event)); err != nil {
+					if errors.Is(err, errWriteQueueFull) {
+						continue
+					}
 					return
 				}
 			}
@@ -445,6 +541,9 @@ func (c *websocketConnection) startSftpEventForwarder() {
 					continue
 				}
 				if err := c.writeEvent("sftp.event", websocketSftpEventPayload(event)); err != nil {
+					if errors.Is(err, errWriteQueueFull) {
+						continue
+					}
 					return
 				}
 			}
@@ -471,6 +570,9 @@ func (c *websocketConnection) startChatQueueEventForwarder() {
 					return
 				}
 				if err := c.writeEvent("chat_queue.event", websocketChatQueueEventPayload(event)); err != nil {
+					if errors.Is(err, errWriteQueueFull) {
+						continue
+					}
 					return
 				}
 			}
@@ -534,14 +636,22 @@ func (c *websocketConnection) startWebSocketHeartbeat() {
 						c.close()
 						return
 					}
-					if err := c.writeEnvelope(websocketEnvelope{
+					// Protocol ping first: browsers answer it from the network
+					// process with no JS involvement, so a throttled or frozen
+					// tab keeps proving liveness. WriteControl is documented
+					// safe concurrently with the write loop.
+					deadline := time.Now().Add(c.controlWriteTimeout())
+					_ = c.conn.WriteControl(websocket.PingMessage, nil, deadline)
+					// The JSON ping stays for the page's benefit: it is the
+					// only inbound activity the client's JS can observe, and
+					// its stall heuristics depend on it. Best-effort — the
+					// idle check above is the sole eviction authority.
+					_ = c.writeEnvelope(websocketEnvelope{
 						Type: "ping",
 						Payload: map[string]any{
 							"timestamp": time.Now().Unix(),
 						},
-					}); err != nil {
-						return
-					}
+					})
 				}
 			}
 		}()
@@ -549,11 +659,17 @@ func (c *websocketConnection) startWebSocketHeartbeat() {
 }
 
 // touchInboundActivity records liveness for every inbound frame and pushes the
-// read deadline forward accordingly.
+// read deadline forward accordingly. Pre-auth the initial deadline stands
+// un-refreshed: whatever a client sends, it gets one idleTimeout window to
+// authenticate. (authorized is only written on the read loop, and both this
+// function's callers — the read loop and gorilla's pong handler — run there.)
 func (c *websocketConnection) touchInboundActivity() {
 	c.lastInboundMu.Lock()
 	c.lastInboundAt = time.Now()
 	c.lastInboundMu.Unlock()
+	if !c.authorized {
+		return
+	}
 	_ = c.conn.SetReadDeadline(time.Now().Add(c.idleTimeout()))
 }
 
@@ -562,7 +678,18 @@ func (c *websocketConnection) idleTimeout() time.Duration {
 	if period <= 0 {
 		period = 15 * time.Second
 	}
-	return period*3 + 5*time.Second
+	grace := c.cfg.WebSocketHeartbeatGrace
+	if grace <= 0 {
+		grace = websocketHeartbeatGraceFloor
+	}
+	return period*3 + grace
+}
+
+func (c *websocketConnection) controlWriteTimeout() time.Duration {
+	if c.writeTimeout > 0 {
+		return c.writeTimeout
+	}
+	return 10 * time.Second
 }
 
 func (c *websocketConnection) dispatch(req websocketRequest) {
@@ -619,6 +746,15 @@ func (c *websocketConnection) writeResponse(requestID string, payload any) error
 	})
 }
 
+func (c *websocketConnection) writePriorityResponse(requestID string, payload any) error {
+	return c.writeEnvelope(websocketEnvelope{
+		ID:       requestID,
+		Type:     "response",
+		Payload:  payload,
+		priority: true,
+	})
+}
+
 func (c *websocketConnection) writeError(requestID string, message string) error {
 	return c.writeEnvelope(websocketEnvelope{
 		ID:    requestID,
@@ -636,17 +772,41 @@ func (c *websocketConnection) writeEvent(eventType string, payload any) error {
 
 var errWriteQueueFull = errors.New("write queue full")
 
+// isControlEnvelopeType reports envelopes that must reach the client even
+// when the data queue is congested: keep-alive pings and the signals a client
+// needs to recover a shed stream.
+func isControlEnvelopeType(envelopeType string) bool {
+	switch envelopeType {
+	case "ping", "error", "chat.subscription_reset", "chat.command_update":
+		return true
+	default:
+		return false
+	}
+}
+
+// writeEnvelope queues an envelope for delivery. Control envelopes ride a
+// small priority queue; shed-able event/stream data reports errWriteQueueFull
+// without dropping the whole link. Correlated unary responses are different:
+// silently losing one leaves the browser pending until its much later timeout,
+// so a persistently full data queue closes the socket and lets the client
+// reconnect/retry instead. Direct-write failures likewise terminate it.
 func (c *websocketConnection) writeEnvelope(envelope websocketEnvelope) error {
+	if envelope.priority || isControlEnvelopeType(envelope.Type) {
+		return c.enqueueControlEnvelope(envelope)
+	}
 	err := c.enqueueEnvelope(envelope)
 	if errors.Is(err, errWriteQueueFull) {
-		c.close()
+		c.noteDroppedEnvelope(envelope.Type)
+		if envelope.Type == "response" && envelope.ID != "" {
+			c.close()
+		}
 	}
 	return err
 }
 
 // enqueueEnvelope waits up to writeTimeout for a slot when the outbox is
 // momentarily full (token bursts to a slow reader); only a persistent backlog
-// is fatal. The fast path allocates nothing.
+// reports errWriteQueueFull. The fast path allocates nothing.
 func (c *websocketConnection) enqueueEnvelope(envelope websocketEnvelope) error {
 	select {
 	case <-c.done:
@@ -656,11 +816,7 @@ func (c *websocketConnection) enqueueEnvelope(envelope websocketEnvelope) error 
 	default:
 	}
 
-	timeout := c.writeTimeout
-	if timeout <= 0 {
-		timeout = 10 * time.Second
-	}
-	timer := time.NewTimer(timeout)
+	timer := time.NewTimer(c.controlWriteTimeout())
 	defer timer.Stop()
 	select {
 	case <-c.done:
@@ -672,35 +828,81 @@ func (c *websocketConnection) enqueueEnvelope(envelope websocketEnvelope) error 
 	}
 }
 
+func (c *websocketConnection) enqueueControlEnvelope(envelope websocketEnvelope) error {
+	select {
+	case <-c.done:
+		return errors.New("connection closed")
+	case c.ctrlOutbox <- envelope:
+		return nil
+	default:
+	}
+
+	if envelope.Type == "ping" {
+		// Keep-alive pings are periodic; when the control queue is full the
+		// next tick supersedes this one.
+		c.noteDroppedEnvelope(envelope.Type)
+		return nil
+	}
+
+	timer := time.NewTimer(c.controlWriteTimeout())
+	defer timer.Stop()
+	select {
+	case <-c.done:
+		return errors.New("connection closed")
+	case c.ctrlOutbox <- envelope:
+		return nil
+	case <-timer.C:
+		c.noteDroppedEnvelope(envelope.Type)
+		return errWriteQueueFull
+	}
+}
+
+func (c *websocketConnection) noteDroppedEnvelope(envelopeType string) {
+	dropped := c.droppedFrames.Add(1)
+	// Log the first drop and every 100th after it: enough to see shedding in
+	// production without a log line per frame during a burst.
+	if dropped == 1 || dropped%100 == 0 {
+		remote := ""
+		if c.req != nil {
+			remote = c.req.RemoteAddr
+		}
+		log.Printf(
+			"websocket: shed %q frame for slow client (dropped=%d remote=%s)",
+			envelopeType,
+			dropped,
+			remote,
+		)
+	}
+}
+
+// writeLoop drains the control queue ahead of the data queue (mirroring the
+// agent link's dedicated ping channel) so congestion cannot starve keep-alive
+// or stream-recovery envelopes.
 func (c *websocketConnection) writeLoop() {
 	for {
 		select {
 		case <-c.done:
 			return
+		case envelope := <-c.ctrlOutbox:
+			if !c.deliverEnvelope(envelope) {
+				return
+			}
 		case envelope := <-c.outbox:
-			if err := c.writeEnvelopeDirect(envelope); err != nil {
-				ok := false
-				for attempt := 0; attempt < websocketMaxWriteRetries; attempt++ {
-					select {
-					case <-c.done:
-						return
-					case <-time.After(websocketRetryBackoff):
-					}
-					if err := c.writeEnvelopeDirect(envelope); err == nil {
-						ok = true
-						break
-					}
-				}
-				if !ok {
-					c.close()
-					return
-				}
+			if !c.deliverEnvelope(envelope) {
+				return
 			}
 			for drained := 0; drained < 64; drained++ {
 				select {
+				case extra := <-c.ctrlOutbox:
+					if !c.deliverEnvelope(extra) {
+						return
+					}
+					continue
+				default:
+				}
+				select {
 				case extra := <-c.outbox:
-					if err := c.writeEnvelopeDirect(extra); err != nil {
-						c.close()
+					if !c.deliverEnvelope(extra) {
 						return
 					}
 				default:
@@ -710,6 +912,27 @@ func (c *websocketConnection) writeLoop() {
 		batchDone:
 		}
 	}
+}
+
+// deliverEnvelope writes one envelope with bounded retries; exhausting them
+// means the socket itself is unwritable (dead link), which is the only
+// congestion-adjacent condition allowed to close the connection.
+func (c *websocketConnection) deliverEnvelope(envelope websocketEnvelope) bool {
+	if err := c.writeEnvelopeDirect(envelope); err == nil {
+		return true
+	}
+	for attempt := 0; attempt < websocketMaxWriteRetries; attempt++ {
+		select {
+		case <-c.done:
+			return false
+		case <-time.After(websocketRetryBackoff):
+		}
+		if err := c.writeEnvelopeDirect(envelope); err == nil {
+			return true
+		}
+	}
+	c.close()
+	return false
 }
 
 func (c *websocketConnection) writeEnvelopeDirect(envelope websocketEnvelope) error {

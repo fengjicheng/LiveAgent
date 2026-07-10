@@ -1044,6 +1044,35 @@
     }
   }
 
+  /* Confirm-action popover (reply retry, settings deletes): grow out of the
+   * anchor. Base UI drives the popup lifecycle, so enter/exit key off
+   * data-starting-style / data-ending-style and the transition delays
+   * unmount. */
+  .confirm-action-popover-popup {
+    /* Slide from the anchor side; top placement overrides per data-side. */
+    --confirm-popover-slide-y: -6px;
+    transform-origin: var(--transform-origin);
+    transition:
+      opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+      transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .confirm-action-popover-popup[data-side="top"] {
+    --confirm-popover-slide-y: 6px;
+  }
+
+  .confirm-action-popover-popup[data-starting-style],
+  .confirm-action-popover-popup[data-ending-style] {
+    opacity: 0;
+    transform: translateY(var(--confirm-popover-slide-y)) scale(0.96);
+  }
+
+  .confirm-action-popover-popup[data-ending-style] {
+    transition-duration: 0.12s;
+    transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
+    transform: translateY(calc(var(--confirm-popover-slide-y) / 2)) scale(0.98);
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .settings-section-enter,
     .settings-section-title-enter,
@@ -1054,6 +1083,11 @@
 
     .sidebar-context-menu,
     .sidebar-context-menu [role="menuitem"] {
+      animation: none !important;
+      transition: none !important;
+    }
+
+    .confirm-action-popover-popup {
       animation: none !important;
       transition: none !important;
     }

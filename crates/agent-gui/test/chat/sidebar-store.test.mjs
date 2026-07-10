@@ -35,6 +35,7 @@ function createFakeBackend() {
     listeners: new Set(),
     connectionListeners: new Set(),
     protectedIds: [],
+    listImpl: null,
     renameImpl: null,
     deleteImpl: null,
   };
@@ -45,6 +46,9 @@ function createFakeBackend() {
   const backend = {
     listConversations: async (page, pageSize, scope) => {
       state.calls.list.push({ page, pageSize, scope });
+      if (state.listImpl) {
+        return state.listImpl(page, pageSize, scope);
+      }
       if (state.listError) {
         throw new Error(state.listError);
       }
@@ -401,6 +405,125 @@ test("loadMore appends the next page and updates hasMore", async () => {
   await store.loadMore();
   assert.equal(store.getSnapshot().conversations.length, 5);
   assert.equal(store.getSnapshot().hasMore, false);
+  store.stop();
+});
+
+test("reconnect success is not overwritten by a stale loadMore failure", async () => {
+  const fake = createFakeBackend();
+  fake.state.pages.set("cwd:/tmp/a", [
+    conversation("one", { cwd: "/tmp/a", updatedAt: 20 }),
+    conversation("two", { cwd: "/tmp/a", updatedAt: 10 }),
+  ]);
+  fake.state.totalCount = 2;
+  const store = createSidebarStore(fake.backend, { pageSize: 1 });
+  store.setScope(SCOPE_A);
+  store.start();
+  await tick();
+
+  let rejectStaleLoadMore;
+  let pageTwoCalls = 0;
+  fake.state.listImpl = (page, pageSize, scope) => {
+    if (page === 2) {
+      pageTwoCalls += 1;
+      if (pageTwoCalls === 1) {
+        return new Promise((_, reject) => {
+          rejectStaleLoadMore = reject;
+        });
+      }
+    }
+    const all = fake.state.pages.get(`cwd:${scope.cwd}`) ?? [];
+    const start = (page - 1) * pageSize;
+    return {
+      items: all.slice(start, start + pageSize),
+      totalCount: fake.state.totalCount,
+    };
+  };
+
+  const loadMorePromise = store.loadMore();
+  await tick();
+  assert.equal(store.getSnapshot().isLoadingMore, true);
+
+  // The reconnect's fresh first page succeeds while the pre-disconnect
+  // pagination request is still unresolved.
+  fake.setConnected(false);
+  fake.setConnected(true);
+  await tick();
+  assert.equal(store.getSnapshot().listError, null);
+  assert.equal(store.getSnapshot().isLoadingMore, false);
+  assert.deepEqual(
+    store.getSnapshot().conversations.map((item) => item.id),
+    ["one"],
+  );
+
+  // The obsolete request no longer owns the in-flight gate; page 2 can be
+  // loaded immediately from the recovered generation.
+  await store.loadMore();
+  assert.equal(pageTwoCalls, 2);
+  assert.deepEqual(
+    store.getSnapshot().conversations.map((item) => item.id),
+    ["one", "two"],
+  );
+
+  rejectStaleLoadMore(new Error("stale pagination transport failed"));
+  await loadMorePromise;
+
+  const snapshot = store.getSnapshot();
+  assert.equal(snapshot.listError, null);
+  assert.equal(snapshot.listErrorDetail, null);
+  assert.equal(snapshot.totalCount, 2);
+  assert.equal(snapshot.hasMore, false);
+  store.stop();
+});
+
+test("stale loadMore success cannot restore rows removed by reconnect", async () => {
+  const fake = createFakeBackend();
+  fake.state.pages.set("cwd:/tmp/a", [
+    conversation("keep", { cwd: "/tmp/a", updatedAt: 20 }),
+    conversation("ghost", { cwd: "/tmp/a", updatedAt: 10 }),
+  ]);
+  fake.state.totalCount = 2;
+  const store = createSidebarStore(fake.backend, { pageSize: 1 });
+  store.setScope(SCOPE_A);
+  store.start();
+  await tick();
+
+  let resolveStaleLoadMore;
+  fake.state.listImpl = (page) => {
+    if (page === 2) {
+      return new Promise((resolve) => {
+        resolveStaleLoadMore = resolve;
+      });
+    }
+    return {
+      items: [conversation("keep", { cwd: "/tmp/a", updatedAt: 20 })],
+      totalCount: 1,
+    };
+  };
+
+  const staleLoadMorePromise = store.loadMore();
+  await tick();
+
+  // The authoritative post-reconnect page no longer contains "ghost".
+  fake.state.pages.set("cwd:/tmp/a", [conversation("keep", { cwd: "/tmp/a", updatedAt: 20 })]);
+  fake.state.totalCount = 1;
+  fake.setConnected(false);
+  fake.setConnected(true);
+  await tick();
+
+  resolveStaleLoadMore({
+    items: [conversation("ghost", { cwd: "/tmp/a", updatedAt: 10 })],
+    totalCount: 2,
+  });
+  await staleLoadMorePromise;
+
+  const snapshot = store.getSnapshot();
+  assert.deepEqual(
+    snapshot.conversations.map((item) => item.id),
+    ["keep"],
+  );
+  assert.equal(snapshot.totalCount, 1);
+  assert.equal(snapshot.hasMore, false);
+  assert.equal(snapshot.listError, null);
   store.stop();
 });
 

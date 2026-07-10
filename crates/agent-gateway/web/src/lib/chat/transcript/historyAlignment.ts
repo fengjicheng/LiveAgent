@@ -83,9 +83,10 @@ function enrichUserSlot(user: UserChatEntry, historyUser: UserChatEntry): UserCh
 // path trims large arguments/results; history carries the full content).
 // Matching is by tool-call identity, falling back to same-kind ordinal —
 // never by content. Streamed assistant/thinking text is already complete and
-// is never replaced; but a turn that lost its content (rebuilt across a
-// reset whose replay could not cover the run) adopts the persisted entries
-// wholesale — that is the only content history is authoritative for.
+// is never replaced; but a turn that lost its content, or kept possibly
+// incomplete content across a reset whose replay could not cover the run
+// (contentStale), adopts the persisted entries wholesale — that is the only
+// content history is authoritative for.
 function enrichTurnFromHistory(turn: Turn, historyTurn: HistoryTurn): Turn {
   let next = turn;
 
@@ -96,8 +97,12 @@ function enrichTurnFromHistory(turn: Turn, historyTurn: HistoryTurn): Turn {
     }
   }
 
-  if (next.entries.length === 0 && historyTurn.entries.length > 0 && next.phase === "settled") {
-    return { ...next, entries: historyTurn.entries };
+  if (
+    (next.entries.length === 0 || next.contentStale === true) &&
+    historyTurn.entries.length > 0 &&
+    next.phase === "settled"
+  ) {
+    return { ...next, entries: historyTurn.entries, contentStale: false };
   }
 
   const historyToolCalls = historyTurn.entries.filter(
@@ -155,26 +160,125 @@ function enrichTurnFromHistory(turn: Turn, historyTurn: HistoryTurn): Turn {
   return next;
 }
 
+// Persistence-lag protection. The desktop reports run_finished before its
+// final history flush lands (the post-run persist is fire-and-forget), so a
+// window fetched in that gap carries the exchange's user message WITHOUT its
+// reply. Such a user-only twin must never count as covering a settled turn
+// that holds streamed assistant content: the turn keeps rendering (it holds
+// the only copy of the reply), its echo is trimmed from the window so the
+// prompt renders once, and the twin's messageRef is adopted so the next
+// full window ref-matches and takes over normally.
+//
+// Matching is ref-anchored where the turn carries a persisted ref; ref-less
+// turns pair end-anchored against trailing user-only window turns, guarded
+// by prompt-text equality so a foreign client's just-persisted prompt is
+// never mistaken for the settled turn's own echo.
+function protectLaggedSettledTurns(
+  historyTurns: HistoryTurn[],
+  turns: Turn[],
+): { historyTurns: HistoryTurn[]; protectedTurns: Map<Turn, Turn> } {
+  const protectedTurns = new Map<Turn, Turn>();
+  const settledWithContent = turns.filter(
+    (turn) =>
+      !isActiveTurn(turn) && !isLocalTurn(turn) && turn.user !== null && turn.entries.length > 0,
+  );
+  if (settledWithContent.length === 0) {
+    return { historyTurns, protectedTurns };
+  }
+
+  const adoptTwinUser = (turn: Turn, twin: HistoryTurn): Turn => {
+    if (!turn.user || !twin.user) {
+      return turn;
+    }
+    const user = enrichUserSlot(turn.user, twin.user);
+    return user === turn.user ? turn : { ...turn, user };
+  };
+
+  let remaining = historyTurns;
+
+  // Ref-anchored: the persisted user message is in the window but carries no
+  // assistant content yet.
+  for (const turn of settledWithContent) {
+    const ref = turn.user?.messageRef?.messageId;
+    if (!ref) continue;
+    const twinIndex = remaining.findIndex(
+      (candidate) => candidate.user?.messageRef?.messageId === ref,
+    );
+    if (twinIndex < 0) continue;
+    const twin = remaining[twinIndex];
+    if (!twin || historyTurnHasAssistantContent(twin)) continue;
+    protectedTurns.set(turn, adoptTwinUser(turn, twin));
+    remaining = [...remaining.slice(0, twinIndex), ...remaining.slice(twinIndex + 1)];
+  }
+
+  // Positional: trailing user-only window turns are the persist-lagged
+  // echoes of the freshest exchanges; pair them end-anchored with ref-less
+  // settled turns holding content, gated by identical prompt text. A
+  // trailing echo with no matching turn (e.g. a queued next prompt whose
+  // persist overtook the lagging reply flush) is skipped, not a pairing
+  // stop — the reply's turn may sit right behind it.
+  const reflessSettled = settledWithContent.filter(
+    (turn) => !turn.user?.messageRef && !protectedTurns.has(turn),
+  );
+  let trailingUserOnly = 0;
+  while (trailingUserOnly < remaining.length) {
+    const candidate = remaining[remaining.length - 1 - trailingUserOnly];
+    if (!candidate?.user || historyTurnHasAssistantContent(candidate)) {
+      break;
+    }
+    trailingUserOnly += 1;
+  }
+  const matchedTwinIndexes = new Set<number>();
+  let turnCursor = reflessSettled.length - 1;
+  for (let offset = 0; offset < trailingUserOnly && turnCursor >= 0; offset += 1) {
+    const twinIndex = remaining.length - 1 - offset;
+    const twin = remaining[twinIndex];
+    const turn = reflessSettled[turnCursor];
+    if (!twin?.user || !turn?.user) {
+      continue;
+    }
+    if (twin.user.text.trim() !== turn.user.text.trim()) {
+      continue;
+    }
+    protectedTurns.set(turn, adoptTwinUser(turn, twin));
+    matchedTwinIndexes.add(twinIndex);
+    turnCursor -= 1;
+  }
+  if (matchedTwinIndexes.size > 0) {
+    remaining = remaining.filter((_, index) => !matchedTwinIndexes.has(index));
+  }
+
+  return { historyTurns: remaining, protectedTurns };
+}
+
 // The guarded full-repaint fallback: history becomes authoritative for
 // everything it covers. Turns whose content history cannot know yet are
-// kept — a persisted-ref lookup misses (persistence lag) or a local error
-// pseudo-turn that was never on the server. Worst case is a repaint, never
-// a duplicate and never on-screen content loss.
+// kept — a persisted-ref lookup misses (persistence lag), a user-only twin
+// whose reply flush is still in flight (see protectLaggedSettledTurns), or a
+// local error pseudo-turn that was never on the server. Worst case is a
+// repaint, never a duplicate and never on-screen content loss.
 function replaceAll(entries: ChatEntry[], turns: Turn[], historyTurns: HistoryTurn[]): AlignResult {
+  const protection = protectLaggedSettledTurns(historyTurns, turns);
+  const remainingHistoryTurns = protection.historyTurns;
+  const protectedTurns = protection.protectedTurns;
   const knownRefs = new Set(
-    historyTurns.flatMap((turn) =>
+    remainingHistoryTurns.flatMap((turn) =>
       turn.user?.messageRef?.messageId ? [turn.user.messageRef.messageId] : [],
     ),
   );
-  const kept = turns.filter((turn) => {
+  const kept = turns.flatMap((turn) => {
+    const protectedTurn = protectedTurns.get(turn);
+    if (protectedTurn) {
+      return [protectedTurn];
+    }
     if (isLocalTurn(turn) || isActiveTurn(turn)) {
-      return true;
+      return [turn];
     }
     const ref = turn.user?.messageRef?.messageId;
-    return ref !== undefined && !knownRefs.has(ref);
+    return ref !== undefined && !knownRefs.has(ref) ? [turn] : [];
   });
   return {
-    historyEntries: entries,
+    historyEntries: protectedTurns.size > 0 ? flattenHistoryTurns(remainingHistoryTurns) : entries,
     turns: kept,
     changed: true,
   };
@@ -186,6 +290,9 @@ function replaceAll(entries: ChatEntry[], turns: Turn[], historyTurns: HistoryTu
 // previously-loaded region id-stable), turns history cannot know yet
 // survive, and pending/streaming turns — the active exchange — always
 // survive with their persisted echoes trimmed so the prompt renders once.
+// "Covered" requires the reply, not just the prompt: a settled turn whose
+// window twin is still user-only (the desktop's post-run flush races the
+// fetch) keeps rendering its streamed content (protectLaggedSettledTurns).
 function alignReplace(params: { turns: Turn[]; entries: ChatEntry[] }): AlignResult {
   let historyTurns = groupHistoryEntriesIntoTurns(params.entries);
 
@@ -231,6 +338,12 @@ function alignReplace(params: { turns: Turn[]; entries: ChatEntry[] }): AlignRes
   }
   historyTurns = historyTurns.slice(0, historyTurns.length - trimCount);
 
+  // Settled turns whose persisted echo reached the window without its reply
+  // (post-run flush still in flight) survive with their echo trimmed.
+  const protection = protectLaggedSettledTurns(historyTurns, params.turns);
+  historyTurns = protection.historyTurns;
+  const protectedTurns = protection.protectedTurns;
+
   // Decide which settled turns the fetched window covers. Ref-anchored turns
   // are covered exactly when their persisted message is in the window. The
   // window is always a suffix of the conversation, so for ref-less settled
@@ -243,7 +356,9 @@ function alignReplace(params: { turns: Turn[]; entries: ChatEntry[] }): AlignRes
       turn.user?.messageRef?.messageId ? [turn.user.messageRef.messageId] : [],
     ),
   );
-  const settledTurns = params.turns.filter((turn) => !isActiveTurn(turn) && !isLocalTurn(turn));
+  const settledTurns = params.turns.filter(
+    (turn) => !isActiveTurn(turn) && !isLocalTurn(turn) && !protectedTurns.has(turn),
+  );
   const refMatchedCount = settledTurns.filter((turn) => {
     const ref = turn.user?.messageRef?.messageId;
     return ref !== undefined && knownRefs.has(ref);
@@ -257,6 +372,10 @@ function alignReplace(params: { turns: Turn[]; entries: ChatEntry[] }): AlignRes
   const keptRefless = new Set(reflessSettled.slice(coveredRefless));
 
   const turns = params.turns.flatMap((turn) => {
+    const protectedTurn = protectedTurns.get(turn);
+    if (protectedTurn) {
+      return [protectedTurn];
+    }
     if (isActiveTurn(turn)) {
       return [enrichedActive.get(turn) ?? turn];
     }

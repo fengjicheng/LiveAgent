@@ -137,6 +137,26 @@ export function useConversationChat(params: {
     return cleanup;
   }, [api, conversationId, store, isLocalDraft]);
 
+  // Streamed deltas commit on a coarse timer while the tab is hidden (rAF is
+  // frozen there); flushing on refocus paints the accumulated tail in the
+  // same frame the tab becomes visible instead of a beat later.
+  useEffect(() => {
+    if (!store || typeof document === "undefined" || typeof window === "undefined") {
+      return;
+    }
+    const flushIfVisible = () => {
+      if (document.visibilityState !== "hidden") {
+        store.flush();
+      }
+    };
+    document.addEventListener("visibilitychange", flushIfVisible);
+    window.addEventListener("pageshow", flushIfVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", flushIfVisible);
+      window.removeEventListener("pageshow", flushIfVisible);
+    };
+  }, [store]);
+
   const subscribeTranscript = useCallback(
     (listener: () => void) => (store ? store.subscribe(listener) : () => {}),
     [store],

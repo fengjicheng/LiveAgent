@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -108,6 +109,9 @@ func (c *websocketConnection) startManagedProcessStateForwarder() {
 				}
 				payload := websocketManagedProcessPayload(snapshot, c.sm.IsOnline())
 				if err := c.writeEvent("process.state", payload); err != nil {
+					if errors.Is(err, errWriteQueueFull) {
+						continue
+					}
 					return
 				}
 			}

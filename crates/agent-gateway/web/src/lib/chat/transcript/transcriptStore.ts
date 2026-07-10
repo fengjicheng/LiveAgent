@@ -1,3 +1,4 @@
+import type { HistoryMessageRef } from "@/lib/chat/conversationState";
 import type {
   ConversationStreamEvent,
   ConversationSubscribeResult,
@@ -54,8 +55,17 @@ export type TranscriptStore = {
     clientRequestId: string;
     text: string;
     attachments?: UserChatEntry["attachments"];
+    // For edit-resend, truncate the visible transcript before inserting the
+    // optimistic bubble so it appears at the edited turn immediately. The
+    // later stream `rebased` event is an idempotent confirmation.
+    baseMessageRef?: HistoryMessageRef;
   }): void;
   removeOptimisticUserEntry(clientRequestId: string): void;
+  // edit_resend failure/parked compensation: restore the pre-truncation
+  // transcript stashed by addOptimisticUserEntry. Returns false once
+  // authoritative data (event/sync/snapshot) invalidated the stash. Optional
+  // so lightweight test doubles need not implement it.
+  restoreEditResendTranscript?(clientRequestId: string): boolean;
   // Failure surfaced outside the stream (command never bound).
   appendLocalError(message: string): void;
   // History application: "replace" for full (re)loads, "enrich" for the
@@ -79,9 +89,35 @@ const EMPTY_SNAPSHOT: TranscriptSnapshot = {
   revision: 0,
 };
 
+// Streaming-delta commit cadence while the tab is hidden and rAF is frozen.
+const HIDDEN_COMMIT_DELAY_MS = 250;
+
+function isDocumentHidden() {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
 function readEventClientRequestId(event: ConversationStreamEvent): string {
   const value = (event as { client_request_id?: unknown }).client_request_id;
   return typeof value === "string" ? value.trim() : "";
+}
+
+// Assistant-side content carriers (everything applyDelta folds into a turn's
+// entries, except the slot-guarded user_message). Lifecycle events —
+// run_started/run_finished/run_queued/rebased/snapshot/tool_status — are not
+// content and must always apply.
+function isContentDeltaEventType(type: string): boolean {
+  switch (type) {
+    case "token":
+    case "thinking":
+    case "tool_call":
+    case "tool_call_delta":
+    case "tool_result":
+    case "hosted_search":
+    case "error":
+      return true;
+    default:
+      return false;
+  }
 }
 
 export function createTranscriptStore(options?: {
@@ -93,6 +129,16 @@ export function createTranscriptStore(options?: {
 }): TranscriptStore {
   let historyEntries: ChatEntry[] = [];
   let turns: Turn[] = [];
+  // edit_resend optimistic-truncation stash: the pre-truncation transcript
+  // captured at submit time so a failed/parked command can restore it locally
+  // — the offline case where the compensating history refresh cannot run.
+  // Any authoritative apply (stream event, sync, history snapshot) clears it:
+  // restoring stale arrays over newer data would corrupt the transcript.
+  let editResendStash: {
+    clientRequestId: string;
+    historyEntries: ChatEntry[];
+    turns: Turn[];
+  } | null = null;
   let activeRun: StreamRunActivity | null = null;
   let toolStatus: string | null = null;
   let toolStatusIsCompaction = false;
@@ -109,6 +155,7 @@ export function createTranscriptStore(options?: {
   let snapshot = EMPTY_SNAPSHOT;
   let dirty = false;
   let rafId: number | null = null;
+  let hiddenCommitTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<() => void>();
 
   // Row caches: history rows rebuild only when the history region changes;
@@ -260,6 +307,10 @@ export function createTranscriptStore(options?: {
   };
   const commit = () => {
     rafId = null;
+    if (hiddenCommitTimer !== null) {
+      clearTimeout(hiddenCommitTimer);
+      hiddenCommitTimer = null;
+    }
     if (!dirty) {
       return;
     }
@@ -282,6 +333,21 @@ export function createTranscriptStore(options?: {
         rafId = null;
       }
       commit();
+      return;
+    }
+    if (isDocumentHidden()) {
+      // rAF never fires in a hidden tab, so streamed deltas would pile up
+      // unrendered until refocus. A single coarse timer keeps commits
+      // flowing (browser throttling may stretch it — that only delays a
+      // snapshot nobody is looking at); the flush-on-visible listener
+      // paints the final state the instant the tab comes back.
+      if (rafId !== null && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      if (hiddenCommitTimer === null) {
+        hiddenCommitTimer = setTimeout(commit, HIDDEN_COMMIT_DELAY_MS);
+      }
       return;
     }
     if (rafId === null && typeof requestAnimationFrame === "function") {
@@ -483,19 +549,20 @@ export function createTranscriptStore(options?: {
     schedule(true);
   };
 
-  // edit_resend: truncate the transcript at the edited user message. The new
-  // user_message (binding the optimistic turn) follows in the stream.
-  const applyRebased = (event: ConversationStreamEvent) => {
-    const ref = (event as { base_message_ref?: unknown }).base_message_ref;
+  // edit_resend: truncate the transcript at the edited user message. This is
+  // shared by the synchronous optimistic path and the authoritative stream
+  // event so the latter remains idempotent when it arrives.
+  const rebaseFromMessageRef = (ref: unknown): boolean => {
     if (!ref || typeof ref !== "object") {
-      return;
+      return false;
     }
     const refValue = ref as Record<string, unknown>;
-    const messageId = typeof refValue.message_id === "string" ? refValue.message_id.trim() : "";
-    const contentHash =
-      typeof refValue.content_hash === "string" ? refValue.content_hash.trim() : "";
+    const rawMessageId = refValue.message_id ?? refValue.messageId;
+    const messageId = typeof rawMessageId === "string" ? rawMessageId.trim() : "";
+    const rawContentHash = refValue.content_hash ?? refValue.contentHash;
+    const contentHash = typeof rawContentHash === "string" ? rawContentHash.trim() : "";
     if (!messageId && !contentHash) {
-      return;
+      return false;
     }
     // Prefer the exact message id; the content hash is only a fallback for
     // refs without one — matching on it eagerly would truncate at the FIRST
@@ -516,22 +583,29 @@ export function createTranscriptStore(options?: {
         ...turns.slice(0, turnIndex),
         ...turns.slice(turnIndex).filter((turn) => turn.phase === "pending"),
       ];
-      schedule(true);
-      return;
+      return true;
     }
 
     const entryIndex = historyEntries.findIndex(
       (entry) => entry.kind === "user" && matchesRef(entry),
     );
     if (entryIndex < 0) {
-      return;
+      return false;
     }
     historyEntries = historyEntries.slice(0, entryIndex);
     turns = turns.filter((turn) => turn.phase === "pending");
-    schedule(true);
+    return true;
+  };
+
+  const applyRebased = (event: ConversationStreamEvent) => {
+    const ref = (event as { base_message_ref?: unknown }).base_message_ref;
+    if (rebaseFromMessageRef(ref)) {
+      schedule(true);
+    }
   };
 
   function applyOne(event: ConversationStreamEvent) {
+    editResendStash = null;
     const seq = readEventSeq(event);
     if (seq > 0) {
       if (seq <= lastSeq) {
@@ -640,6 +714,10 @@ export function createTranscriptStore(options?: {
     // A completed (re)subscribe is the convergence point: re-arm the
     // divergence signal so a later stray burst can trigger another resync.
     divergenceSignaled = false;
+    // Runs whose settled turn kept its streamed entries across a reset (the
+    // replay cannot rebuild them from the start): their replayed content
+    // deltas must not re-apply on top of the kept entries.
+    const suppressedReplayDeltaRuns = new Set<string>();
     if (result.reset) {
       // Seq continuity broke (gateway restart / buffer gap). Folded and
       // settled turns hold finished content with stable ids — fold, never
@@ -657,18 +735,45 @@ export function createTranscriptStore(options?: {
         }
         if (turn.phase === "streaming") {
           changed = true;
+          const replayRebuildsRun =
+            turn.runId !== "" &&
+            result.events.some(
+              (event) => event.type === "run_started" && readEventRunId(event) === turn.runId,
+            );
           if (result.activity && result.activity.runId === turn.runId) {
             // Still running server-side: the snapshot/replay rebuilds the
             // content into this same turn object. When the incoming snapshot
             // targets this run, keep the delta-built entries so the rebuild
             // can compare per-tool-call progress instead of starting blind.
-            return result.snapshot?.runId === turn.runId ? turn : { ...turn, entries: [] };
+            // Without a snapshot or a from-the-start replay the rebuild is
+            // partial: mark it stale so the post-run enrich adopts the
+            // persisted reply wholesale.
+            if (result.snapshot?.runId === turn.runId) {
+              return turn;
+            }
+            return { ...turn, entries: [], contentStale: !replayRebuildsRun };
           }
-          // The run ended while this client was away and the replay may
-          // not cover it any more: settle the turn (never strand it as a
-          // pending zombie) so the idle enrich can adopt its persisted
-          // reply from history.
-          return { ...turn, entries: [], phase: "settled" as const };
+          // The run ended while this client was away: settle the turn (never
+          // strand it as a pending zombie).
+          if (result.activity) {
+            // Superseded by the now-active run: rebuild this turn's content
+            // from history via the idle enrich after the active run settles
+            // (that busy window outlasts the desktop's post-run flush).
+            return { ...turn, entries: [], phase: "settled" as const };
+          }
+          // Nothing is running server-side, so the enrich fires immediately
+          // and can race the desktop's post-run flush. Clear the content only
+          // when the replay rebuilds it from the run's start — otherwise the
+          // kept streamed entries are the reply's only copy. They may still
+          // be incomplete, so they are marked stale: the enrich adopts the
+          // persisted reply wholesale once the flush lands.
+          if (replayRebuildsRun || turn.entries.length === 0) {
+            return { ...turn, entries: [], phase: "settled" as const };
+          }
+          if (turn.runId !== "") {
+            suppressedReplayDeltaRuns.add(turn.runId);
+          }
+          return { ...turn, phase: "settled" as const, contentStale: true };
         }
         return turn;
       });
@@ -704,6 +809,19 @@ export function createTranscriptStore(options?: {
       setToolStatus(null, false);
     }
     for (const event of result.events) {
+      if (
+        suppressedReplayDeltaRuns.size > 0 &&
+        isContentDeltaEventType(event.type) &&
+        suppressedReplayDeltaRuns.has(readEventRunId(event))
+      ) {
+        // The turn kept its streamed entries; re-applying a partial replay
+        // tail would double-append. Only advance the idempotency cursor.
+        const seq = readEventSeq(event);
+        if (seq > lastSeq) {
+          lastSeq = seq;
+        }
+        continue;
+      }
       applyOne(event);
     }
     lastSeq = Math.max(lastSeq, result.latestSeq);
@@ -722,6 +840,7 @@ export function createTranscriptStore(options?: {
     // intermediate render at the snapshot's older state is exactly the
     // backwards flicker the progress guards exist to prevent.
     applySync: (result) => {
+      editResendStash = null;
       batchDepth += 1;
       try {
         applySyncLocked(result);
@@ -735,8 +854,23 @@ export function createTranscriptStore(options?: {
       applyOne(event);
     },
 
-    addOptimisticUserEntry: ({ clientRequestId, text, attachments }) => {
+    addOptimisticUserEntry: ({ clientRequestId, text, attachments, baseMessageRef }) => {
+      const preRebaseHistoryEntries = historyEntries;
+      const preRebaseTurns = turns;
+      const rebased = baseMessageRef ? rebaseFromMessageRef(baseMessageRef) : false;
+      if (rebased) {
+        // Both arrays are replaced (never mutated) by the truncation, so the
+        // captured references are the intact pre-truncation transcript.
+        editResendStash = {
+          clientRequestId,
+          historyEntries: preRebaseHistoryEntries,
+          turns: preRebaseTurns,
+        };
+      }
       if (findTurnByCri(clientRequestId)) {
+        if (rebased) {
+          schedule(true);
+        }
         return;
       }
       turns = [
@@ -752,6 +886,20 @@ export function createTranscriptStore(options?: {
         },
       ];
       schedule(true);
+    },
+
+    // edit_resend compensation: put back the transcript captured at submit
+    // time. Returns false when authoritative data has superseded the stash —
+    // the caller then relies on the network history refresh instead.
+    restoreEditResendTranscript: (clientRequestId) => {
+      if (!editResendStash || editResendStash.clientRequestId !== clientRequestId) {
+        return false;
+      }
+      historyEntries = editResendStash.historyEntries;
+      turns = editResendStash.turns;
+      editResendStash = null;
+      schedule(true);
+      return true;
     },
 
     removeOptimisticUserEntry: (clientRequestId) => {
@@ -799,6 +947,7 @@ export function createTranscriptStore(options?: {
     },
 
     applyHistorySnapshot: (entries, options) => {
+      editResendStash = null;
       const result = alignHistory({
         historyEntries,
         turns,

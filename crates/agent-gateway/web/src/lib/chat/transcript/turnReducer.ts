@@ -682,5 +682,7 @@ export function rebuildTurnFromSnapshot(turn: Turn, parsed: ChatEntry[]): Turn {
   if (user === turn.user && entries.length === 0 && turn.entries.length === 0) {
     return turn;
   }
-  return { ...turn, user, entries };
+  // The snapshot is complete through its as_of_seq: a rebuild from it clears
+  // any staleness a snapshot-less reset marked on this turn.
+  return { ...turn, user, entries, contentStale: false };
 }

@@ -55,6 +55,8 @@ pub struct GitRepositoryState {
     pub remote_url: String,
     pub ahead: i32,
     pub behind: i32,
+    #[serde(default)]
+    pub stash_count: i32,
     pub dirty_counts: GitDirtyCounts,
     pub entries: Vec<GitStatusEntry>,
     pub status: String,
@@ -183,6 +185,8 @@ struct GitGatewayArgs {
     skip: Option<usize>,
     user_name: Option<String>,
     user_email: Option<String>,
+    force: Option<bool>,
+    new_branch: Option<String>,
 }
 
 struct GitOutput {
@@ -224,6 +228,9 @@ fn git_output(workdir: &str, args: &[&str]) -> Result<Output, String> {
         .current_dir(workdir)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
+        // Pin the message locale: callers (transient-lock retry, the
+        // not-fully-merged delete escalation in the UI) match English text.
+        .env("LC_ALL", "C")
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_target))
         .stderr(Stdio::from(stderr_target))
@@ -315,6 +322,7 @@ fn not_repo_state(workdir: &str) -> GitRepositoryState {
         remote_url: String::new(),
         ahead: 0,
         behind: 0,
+        stash_count: 0,
         dirty_counts: GitDirtyCounts::default(),
         entries: Vec::new(),
         status: "not_repo".to_string(),
@@ -357,11 +365,12 @@ fn status_entry(
     }
 }
 
-fn parse_status_porcelain_v2(raw: &[u8]) -> (String, String, i32, i32, Vec<GitStatusEntry>) {
+fn parse_status_porcelain_v2(raw: &[u8]) -> (String, String, i32, i32, i32, Vec<GitStatusEntry>) {
     let mut head = String::new();
     let mut upstream = String::new();
     let mut ahead = 0;
     let mut behind = 0;
+    let mut stash_count = 0;
     let mut entries = Vec::new();
     let records: Vec<String> = raw
         .split(|byte| *byte == 0)
@@ -377,6 +386,8 @@ fn parse_status_porcelain_v2(raw: &[u8]) -> (String, String, i32, i32, Vec<GitSt
             upstream = value.trim().to_string();
         } else if let Some(value) = record.strip_prefix("# branch.ab ") {
             (ahead, behind) = parse_branch_ab(value);
+        } else if let Some(value) = record.strip_prefix("# stash ") {
+            stash_count = value.trim().parse::<i32>().unwrap_or(0);
         } else if let Some(rest) = record.strip_prefix("1 ") {
             let fields: Vec<&str> = rest.splitn(8, ' ').collect();
             if fields.len() >= 8 {
@@ -431,7 +442,7 @@ fn parse_status_porcelain_v2(raw: &[u8]) -> (String, String, i32, i32, Vec<GitSt
         }
         index += 1;
     }
-    (head, upstream, ahead, behind, entries)
+    (head, upstream, ahead, behind, stash_count, entries)
 }
 
 fn dirty_counts(entries: &[GitStatusEntry]) -> GitDirtyCounts {
@@ -472,13 +483,15 @@ pub(crate) fn git_status_sync(workdir: String) -> Result<GitRepositoryState, Str
             remote_url: String::new(),
             ahead: 0,
             behind: 0,
+            stash_count: 0,
             dirty_counts: GitDirtyCounts::default(),
             entries: Vec::new(),
             status: "error".to_string(),
             error: Some(trim_output(&output.stderr)),
         });
     }
-    let (head, upstream, ahead, behind, entries) = parse_status_porcelain_v2(&output.stdout);
+    let (head, upstream, ahead, behind, stash_count, entries) =
+        parse_status_porcelain_v2(&output.stdout);
     let (remote_name, remote_url) = resolve_state_remote(&repo_root, &upstream);
     Ok(GitRepositoryState {
         repo_root,
@@ -489,6 +502,7 @@ pub(crate) fn git_status_sync(workdir: String) -> Result<GitRepositoryState, Str
         remote_url,
         ahead,
         behind,
+        stash_count,
         dirty_counts: dirty_counts(&entries),
         entries,
         status: "ready".to_string(),
@@ -990,7 +1004,7 @@ pub(crate) fn git_create_branch_sync(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|value| validate_commit_sha(&state.repo_root, value))
+        .map(|value| validate_start_point(&state.repo_root, value))
         .transpose()?;
     let mut args = vec!["switch", "-c", branch.as_str()];
     if let Some(start_point) = validated_start_point.as_deref() {
@@ -1553,6 +1567,29 @@ fn validate_commit_sha(repo_root: &str, value: &str) -> Result<String, String> {
         .unwrap_or(sha)
         .trim()
         .to_string())
+}
+
+fn validate_start_point(repo_root: &str, value: &str) -> Result<String, String> {
+    let start_point = value.trim();
+    if start_point.is_empty() {
+        return Err("分支起点不能为空。".to_string());
+    }
+    if start_point.len() >= 7
+        && start_point.len() <= 64
+        && start_point.chars().all(|ch| ch.is_ascii_hexdigit())
+    {
+        return validate_commit_sha(repo_root, start_point);
+    }
+    if start_point.starts_with('-') || start_point.chars().any(char::is_whitespace) {
+        return Err("分支起点不能以 - 开头或包含空白字符。".to_string());
+    }
+    let rev = format!("{start_point}^{{commit}}");
+    git_success(
+        repo_root,
+        &["rev-parse", "--verify", "--end-of-options", &rev],
+    )?;
+    // 返回原始 ref（而非解析后的 SHA），保留 switch -c 对远程 ref 的自动 tracking。
+    Ok(start_point.to_string())
 }
 
 pub(crate) fn git_log_sync(
@@ -2217,6 +2254,69 @@ pub(crate) fn git_push_sync(workdir: String) -> Result<GitOperationResponse, Str
     operation_response(&workdir, result, "Push 完成。")
 }
 
+pub(crate) fn git_delete_branch_sync(
+    workdir: String,
+    branch: String,
+    force: Option<bool>,
+) -> Result<GitOperationResponse, String> {
+    let state = ensure_ready_state(&workdir)?;
+    let branch = validate_branch_name(&state.repo_root, &branch)?;
+    if branch == state.head {
+        return Err("不能删除当前检出的分支。".to_string());
+    }
+    let delete_flag = if force == Some(true) { "-D" } else { "-d" };
+    operation_response(
+        &workdir,
+        git_success(&state.repo_root, &["branch", delete_flag, branch.as_str()]),
+        "分支已删除。",
+    )
+}
+
+pub(crate) fn git_rename_branch_sync(
+    workdir: String,
+    branch: String,
+    new_branch: String,
+) -> Result<GitOperationResponse, String> {
+    let state = ensure_ready_state(&workdir)?;
+    let branch = validate_branch_name(&state.repo_root, &branch)?;
+    let new_branch = validate_branch_name(&state.repo_root, &new_branch)?;
+    operation_response(
+        &workdir,
+        git_success(
+            &state.repo_root,
+            &["branch", "-m", branch.as_str(), new_branch.as_str()],
+        ),
+        "分支已重命名。",
+    )
+}
+
+pub(crate) fn git_stash_push_sync(
+    workdir: String,
+    message: Option<String>,
+) -> Result<GitOperationResponse, String> {
+    let state = ensure_ready_state(&workdir)?;
+    let message = validate_git_config_value("Stash message", message)?;
+    let mut args = vec!["stash", "push", "--include-untracked"];
+    if let Some(message) = message.as_deref() {
+        args.push("-m");
+        args.push(message);
+    }
+    operation_response(
+        &workdir,
+        git_success(&state.repo_root, &args),
+        "改动已暂存到 stash。",
+    )
+}
+
+pub(crate) fn git_stash_pop_sync(workdir: String) -> Result<GitOperationResponse, String> {
+    let state = ensure_ready_state(&workdir)?;
+    operation_response(
+        &workdir,
+        git_success(&state.repo_root, &["stash", "pop"]),
+        "已恢复最近的 stash。",
+    )
+}
+
 fn parse_gateway_args(args_json: String) -> Result<GitGatewayArgs, String> {
     if args_json.trim().is_empty() {
         return Ok(GitGatewayArgs::default());
@@ -2295,6 +2395,18 @@ pub(crate) fn git_gateway_action_sync(
             args.remote_url.unwrap_or_default(),
         )?),
         "push" => serde_json::to_value(git_push_sync(workdir)?),
+        "delete_branch" => serde_json::to_value(git_delete_branch_sync(
+            workdir,
+            args.branch.unwrap_or_default(),
+            args.force,
+        )?),
+        "rename_branch" => serde_json::to_value(git_rename_branch_sync(
+            workdir,
+            args.branch.unwrap_or_default(),
+            args.new_branch.unwrap_or_default(),
+        )?),
+        "stash_push" => serde_json::to_value(git_stash_push_sync(workdir, args.message)?),
+        "stash_pop" => serde_json::to_value(git_stash_pop_sync(workdir)?),
         "" => return Err("Git action 不能为空。".to_string()),
         other => return Err(format!("不支持的 Git action：{other}")),
     }
@@ -2518,6 +2630,47 @@ pub async fn git_push(workdir: String) -> Result<GitOperationResponse, String> {
         .map_err(|error| format!("git_push join 失败：{error}"))?
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub async fn git_delete_branch(
+    workdir: String,
+    branch: String,
+    force: Option<bool>,
+) -> Result<GitOperationResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || git_delete_branch_sync(workdir, branch, force))
+        .await
+        .map_err(|error| format!("git_delete_branch join 失败：{error}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn git_rename_branch(
+    workdir: String,
+    branch: String,
+    new_branch: String,
+) -> Result<GitOperationResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_rename_branch_sync(workdir, branch, new_branch)
+    })
+    .await
+    .map_err(|error| format!("git_rename_branch join 失败：{error}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn git_stash_push(
+    workdir: String,
+    message: Option<String>,
+) -> Result<GitOperationResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || git_stash_push_sync(workdir, message))
+        .await
+        .map_err(|error| format!("git_stash_push join 失败：{error}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn git_stash_pop(workdir: String) -> Result<GitOperationResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || git_stash_pop_sync(workdir))
+        .await
+        .map_err(|error| format!("git_stash_pop join 失败：{error}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2529,12 +2682,13 @@ mod tests {
     #[test]
     fn parses_porcelain_v2_branch_and_counts() {
         let raw = b"# branch.head feature\0# branch.upstream origin/feature\0# branch.ab +2 -1\0\
-1 .M N... 100644 100644 100644 a b src/main.rs\0? new.txt\0";
-        let (head, upstream, ahead, behind, entries) = parse_status_porcelain_v2(raw);
+# stash 3\01 .M N... 100644 100644 100644 a b src/main.rs\0? new.txt\0";
+        let (head, upstream, ahead, behind, stash_count, entries) = parse_status_porcelain_v2(raw);
         assert_eq!(head, "feature");
         assert_eq!(upstream, "origin/feature");
         assert_eq!(ahead, 2);
         assert_eq!(behind, 1);
+        assert_eq!(stash_count, 3);
         assert_eq!(entries.len(), 2);
         let counts = dirty_counts(&entries);
         assert_eq!(counts.unstaged, 1);
@@ -2577,6 +2731,7 @@ mod tests {
             remote_url: String::new(),
             ahead: 0,
             behind: 0,
+            stash_count: 0,
             dirty_counts: GitDirtyCounts::default(),
             entries: Vec::new(),
             status: "ready".to_string(),
@@ -3669,5 +3824,273 @@ mod tests {
         assert!(saved.ok, "set remote failed: {}", saved.message);
         let pulled = git_pull_sync(workdir).expect("pull with configured origin");
         assert!(pulled.ok, "pull failed: {}", pulled.message);
+    }
+
+    #[test]
+    fn git_delete_branch_handles_merged_current_and_unmerged_branches() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let workdir = repo.path().to_string_lossy().to_string();
+        let initial = git_status_sync(workdir.clone()).expect("initial status");
+
+        run_temp_git(repo.path(), &["branch", "merged-branch"]);
+        let deleted = git_delete_branch_sync(workdir.clone(), "merged-branch".to_string(), None)
+            .expect("delete merged branch");
+        assert!(deleted.ok, "delete merged failed: {}", deleted.message);
+        let branches = git_branches_sync(workdir.clone()).expect("branch list");
+        assert!(
+            branches
+                .branches
+                .iter()
+                .all(|branch| branch.name != "merged-branch"),
+            "merged-branch should be gone: {:?}",
+            branches
+                .branches
+                .iter()
+                .map(|branch| branch.name.as_str())
+                .collect::<Vec<_>>()
+        );
+
+        let refused = git_delete_branch_sync(workdir.clone(), initial.head.clone(), None)
+            .expect_err("deleting current branch should fail");
+        assert!(refused.contains("不能删除当前检出的分支"), "{refused}");
+
+        run_temp_git(repo.path(), &["checkout", "-b", "unmerged-branch"]);
+        fs::write(repo.path().join("unmerged.txt"), "unmerged\n").expect("write unmerged file");
+        run_temp_git(repo.path(), &["add", "unmerged.txt"]);
+        run_temp_git(repo.path(), &["commit", "-m", "unmerged commit"]);
+        run_temp_git(repo.path(), &["checkout", initial.head.as_str()]);
+
+        let soft_deleted =
+            git_delete_branch_sync(workdir.clone(), "unmerged-branch".to_string(), Some(false))
+                .expect("soft delete unmerged branch");
+        assert!(!soft_deleted.ok, "-d should refuse unmerged branch");
+        assert!(
+            soft_deleted.message.contains("not fully merged"),
+            "unexpected delete message: {}",
+            soft_deleted.message
+        );
+        let force_deleted =
+            git_delete_branch_sync(workdir, "unmerged-branch".to_string(), Some(true))
+                .expect("force delete unmerged branch");
+        assert!(
+            force_deleted.ok,
+            "force delete failed: {}",
+            force_deleted.message
+        );
+    }
+
+    #[test]
+    fn git_rename_branch_renames_local_and_current_branch() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let workdir = repo.path().to_string_lossy().to_string();
+        let initial = git_status_sync(workdir.clone()).expect("initial status");
+
+        run_temp_git(repo.path(), &["branch", "rename-source"]);
+        let renamed = git_rename_branch_sync(
+            workdir.clone(),
+            "rename-source".to_string(),
+            "rename-target".to_string(),
+        )
+        .expect("rename local branch");
+        assert!(renamed.ok, "rename failed: {}", renamed.message);
+        let branches = git_branches_sync(workdir.clone()).expect("branch list");
+        let names = branches
+            .branches
+            .iter()
+            .map(|branch| branch.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"rename-target"), "branches: {names:?}");
+        assert!(!names.contains(&"rename-source"), "branches: {names:?}");
+
+        let renamed_current = git_rename_branch_sync(
+            workdir,
+            initial.head.clone(),
+            "renamed-current".to_string(),
+        )
+        .expect("rename current branch");
+        assert!(
+            renamed_current.ok,
+            "rename current failed: {}",
+            renamed_current.message
+        );
+        assert_eq!(renamed_current.state.head, "renamed-current");
+    }
+
+    #[test]
+    fn git_stash_push_and_pop_roundtrip() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let workdir = repo.path().to_string_lossy().to_string();
+        fs::write(repo.path().join("README.md"), "stash change\n").expect("modify readme");
+        fs::write(repo.path().join("stash-untracked.txt"), "untracked\n")
+            .expect("write untracked file");
+
+        let pushed = git_stash_push_sync(workdir.clone(), None).expect("stash push");
+        assert!(pushed.ok, "stash push failed: {}", pushed.message);
+        assert!(
+            pushed.state.entries.is_empty(),
+            "worktree should be clean after stash push: {:?}",
+            pushed.state.entries
+        );
+        let status = git_status_sync(workdir.clone()).expect("status after stash push");
+        assert!(status.entries.is_empty());
+        assert_eq!(status.stash_count, 1);
+
+        let popped = git_stash_pop_sync(workdir.clone()).expect("stash pop");
+        assert!(popped.ok, "stash pop failed: {}", popped.message);
+        assert_eq!(popped.state.stash_count, 0);
+        assert_eq!(
+            fs::read_to_string(repo.path().join("README.md")).expect("read readme"),
+            "stash change\n"
+        );
+        assert!(repo.path().join("stash-untracked.txt").exists());
+
+        let empty_pop = git_stash_pop_sync(workdir).expect("pop empty stash");
+        assert!(!empty_pop.ok, "popping empty stash should report failure");
+    }
+
+    #[test]
+    fn git_create_branch_accepts_ref_start_points() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let workdir = repo.path().to_string_lossy().to_string();
+        let initial = git_status_sync(workdir.clone()).expect("initial status");
+        let initial_sha = git_success(&workdir, &["rev-parse", "HEAD"])
+            .expect("read initial head")
+            .stdout;
+
+        fs::write(repo.path().join("later.txt"), "later\n").expect("write later file");
+        run_temp_git(repo.path(), &["add", "later.txt"]);
+        run_temp_git(repo.path(), &["commit", "-m", "later"]);
+        let later_sha = git_success(&workdir, &["rev-parse", "HEAD"])
+            .expect("read later head")
+            .stdout;
+
+        let from_branch = git_create_branch_sync(
+            workdir.clone(),
+            "from-branch-name".to_string(),
+            Some(initial.head.clone()),
+        )
+        .expect("create branch from branch name");
+        assert!(
+            from_branch.ok,
+            "create from branch name failed: {}",
+            from_branch.message
+        );
+        assert_eq!(from_branch.state.head, "from-branch-name");
+        let branch_head = git_success(&workdir, &["rev-parse", "HEAD"])
+            .expect("read branch head")
+            .stdout;
+        assert_eq!(branch_head, later_sha);
+
+        run_temp_git(
+            repo.path(),
+            &["update-ref", "refs/remotes/origin/base", initial_sha.as_str()],
+        );
+        let from_remote = git_create_branch_sync(
+            workdir.clone(),
+            "from-remote-ref".to_string(),
+            Some("origin/base".to_string()),
+        )
+        .expect("create branch from remote ref");
+        assert!(
+            from_remote.ok,
+            "create from remote ref failed: {}",
+            from_remote.message
+        );
+        assert_eq!(from_remote.state.head, "from-remote-ref");
+        let remote_head = git_success(&workdir, &["rev-parse", "HEAD"])
+            .expect("read remote-ref head")
+            .stdout;
+        assert_eq!(remote_head, initial_sha);
+
+        let bogus = git_create_branch_sync(
+            workdir.clone(),
+            "from-bogus".to_string(),
+            Some("no-such-ref".to_string()),
+        );
+        assert!(bogus.is_err(), "bogus start point should error");
+        let dashed = git_create_branch_sync(
+            workdir,
+            "from-dashed".to_string(),
+            Some("-d".to_string()),
+        );
+        assert!(dashed.is_err(), "dashed start point should error");
+    }
+
+    #[test]
+    fn git_gateway_action_dispatches_branch_and_stash_actions() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let workdir = repo.path().to_string_lossy().to_string();
+        let initial = git_status_sync(workdir.clone()).expect("initial status");
+
+        run_temp_git(repo.path(), &["branch", "gateway-branch"]);
+        let renamed = git_gateway_action_sync(
+            "rename_branch".to_string(),
+            workdir.clone(),
+            json!({"branch":"gateway-branch","newBranch":"gateway-renamed"}).to_string(),
+        )
+        .expect("rename via gateway");
+        assert_eq!(renamed["ok"], json!(true), "rename response: {renamed}");
+
+        run_temp_git(repo.path(), &["checkout", "gateway-renamed"]);
+        fs::write(repo.path().join("gateway.txt"), "gateway\n").expect("write gateway file");
+        run_temp_git(repo.path(), &["add", "gateway.txt"]);
+        run_temp_git(repo.path(), &["commit", "-m", "gateway commit"]);
+        run_temp_git(repo.path(), &["checkout", initial.head.as_str()]);
+
+        let soft_deleted = git_gateway_action_sync(
+            "delete_branch".to_string(),
+            workdir.clone(),
+            json!({"branch":"gateway-renamed"}).to_string(),
+        )
+        .expect("soft delete via gateway");
+        assert_eq!(
+            soft_deleted["ok"],
+            json!(false),
+            "soft delete response: {soft_deleted}"
+        );
+        let force_deleted = git_gateway_action_sync(
+            "delete_branch".to_string(),
+            workdir.clone(),
+            json!({"branch":"gateway-renamed","force":true}).to_string(),
+        )
+        .expect("force delete via gateway");
+        assert_eq!(
+            force_deleted["ok"],
+            json!(true),
+            "force delete response: {force_deleted}"
+        );
+
+        fs::write(repo.path().join("README.md"), "gateway stash\n").expect("modify readme");
+        let stashed = git_gateway_action_sync(
+            "stash_push".to_string(),
+            workdir.clone(),
+            json!({"message":"gateway stash"}).to_string(),
+        )
+        .expect("stash push via gateway");
+        assert_eq!(stashed["ok"], json!(true), "stash response: {stashed}");
+        assert_eq!(
+            stashed["state"]["stashCount"],
+            json!(1),
+            "stash response: {stashed}"
+        );
+
+        let popped = git_gateway_action_sync("stash_pop".to_string(), workdir, String::new())
+            .expect("stash pop via gateway");
+        assert_eq!(popped["ok"], json!(true), "pop response: {popped}");
+        assert_eq!(
+            popped["state"]["stashCount"],
+            json!(0),
+            "pop response: {popped}"
+        );
     }
 }

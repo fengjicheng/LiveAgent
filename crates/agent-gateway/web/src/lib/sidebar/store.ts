@@ -146,10 +146,16 @@ export function createSidebarStore(
 
   let startCount = 0;
   let requestSeq = 0;
+  // A first-page refresh supersedes every older pagination request for the
+  // same scope. This is separate from requestSeq (scope/lifecycle invalidation):
+  // reconnect refreshes do not change scope, but they must still prevent a
+  // pre-disconnect loadMore failure from landing after the fresh page succeeds
+  // and resurrecting a stale listError.
+  let listGeneration = 0;
   let loadedPageCount = 0;
   let listRequestInFlight = false;
   let queuedListRequest: { authoritative: boolean } | null = null;
-  let loadMoreInFlight = false;
+  let loadMoreRequestToken: symbol | null = null;
   let workdirsInFlight = false;
   let workdirsQueued = false;
   let wasDisconnected = false;
@@ -371,6 +377,11 @@ export function createSidebarStore(
 
   const runFirstPageRequest = async (authoritative: boolean) => {
     const seq = requestSeq;
+    const generation = ++listGeneration;
+    // Release the current-generation pagination gate immediately. Its
+    // transport promise may still settle later, but the generation checks
+    // make that result inert and a fresh page-2 request need not wait for it.
+    loadMoreRequestToken = null;
     const requestScope = scope;
     if (requestScope.kind === "none") {
       byId = new Map(byId);
@@ -380,6 +391,7 @@ export function createSidebarStore(
         totalCount: 0,
         hasMore: false,
         listStatus: "ready",
+        isLoadingMore: false,
         listError: null,
         listErrorDetail: null,
       });
@@ -387,10 +399,16 @@ export function createSidebarStore(
       return;
     }
     const hasRows = snapshot.conversations.length > 0;
-    commit({ listStatus: hasRows ? "syncing" : "loading" });
+    commit({
+      listStatus: hasRows ? "syncing" : "loading",
+      // The new first page owns pagination truth now. An older loadMore may
+      // still settle at the transport layer, but its generation is stale and
+      // its UI/result commits are ignored below.
+      isLoadingMore: false,
+    });
     try {
       const page = await backend.listConversations(1, pageSize, requestScope);
-      if (seq !== requestSeq || startCount === 0) {
+      if (seq !== requestSeq || generation !== listGeneration || startCount === 0) {
         return;
       }
       const authoritativeItems = filterConversationsForScope(page.items, requestScope);
@@ -425,7 +443,7 @@ export function createSidebarStore(
         listErrorDetail: null,
       });
     } catch (error) {
-      if (seq !== requestSeq || startCount === 0) {
+      if (seq !== requestSeq || generation !== listGeneration || startCount === 0) {
         return;
       }
       commit({
@@ -559,21 +577,23 @@ export function createSidebarStore(
   const loadMore = async () => {
     if (
       startCount === 0 ||
-      loadMoreInFlight ||
+      loadMoreRequestToken !== null ||
       listRequestInFlight ||
       !snapshot.hasMore ||
       scope.kind === "none"
     ) {
       return;
     }
-    loadMoreInFlight = true;
+    const requestToken = Symbol("sidebar-load-more");
+    loadMoreRequestToken = requestToken;
     const seq = requestSeq;
+    const generation = listGeneration;
     const requestScope = scope;
     const pageNumber = loadedPageCount + 1;
     commit({ isLoadingMore: true });
     try {
       const page = await backend.listConversations(pageNumber, pageSize, requestScope);
-      if (seq !== requestSeq || startCount === 0) {
+      if (seq !== requestSeq || generation !== listGeneration || startCount === 0) {
         return;
       }
       let next = snapshot.conversations;
@@ -598,7 +618,7 @@ export function createSidebarStore(
         listErrorDetail: null,
       });
     } catch (error) {
-      if (seq !== requestSeq || startCount === 0) {
+      if (seq !== requestSeq || generation !== listGeneration || startCount === 0) {
         return;
       }
       commit({
@@ -607,7 +627,9 @@ export function createSidebarStore(
         listErrorDetail: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      loadMoreInFlight = false;
+      if (loadMoreRequestToken === requestToken) {
+        loadMoreRequestToken = null;
+      }
     }
   };
 
@@ -669,6 +691,7 @@ export function createSidebarStore(
         return;
       }
       requestSeq += 1;
+      listGeneration += 1;
       unsubscribeEvents?.();
       unsubscribeEvents = null;
       unsubscribeConnection?.();
@@ -686,6 +709,7 @@ export function createSidebarStore(
         workdirsDebounceTimer = null;
       }
       queuedListRequest = null;
+      loadMoreRequestToken = null;
       workdirsQueued = false;
       wasDisconnected = false;
     },
@@ -698,6 +722,8 @@ export function createSidebarStore(
       }
       scope = nextScope;
       requestSeq += 1;
+      listGeneration += 1;
+      loadMoreRequestToken = null;
       loadedPageCount = 0;
       const cached = scopedFromCache();
       commit({
