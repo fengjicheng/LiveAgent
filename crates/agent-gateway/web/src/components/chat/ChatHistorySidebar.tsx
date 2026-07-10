@@ -62,9 +62,14 @@ type ChatHistorySidebarProps = {
   totalItems: number;
   hasMore: boolean;
   isLoadingMore: boolean;
+  // Only the current recent-conversation list read state drives the count Tag.
   errorMessage: string | null;
-  // Disables the workspace + recent-conversation sections as one block (used
-  // while the gateway connection is lost); the header actions stay usable.
+  // Mutation/project-operation failures have a separate surface so they are
+  // never mislabeled as "failed to read history" by the count Tag.
+  actionErrorMessage?: string | null;
+  // Disables the workspace + recent-conversation sections as one block while
+  // either the browser transport or desktop Agent is unavailable; the top
+  // sidebar actions stay usable.
   sectionsDisabled?: boolean;
   renamingId: string | null;
   renameDraft: string;
@@ -174,6 +179,7 @@ type HistoryRowProps = {
   canShareConversation: boolean;
   isRenaming: boolean;
   isPendingDelete: boolean;
+  isInteractionDisabled: boolean;
   isMobileMenuLayout: boolean;
   renameDraft: string;
   onSelectConversation: (id: string) => void;
@@ -210,6 +216,7 @@ function areHistoryRowPropsEqual(previous: HistoryRowProps, next: HistoryRowProp
     previous.canShareConversation === next.canShareConversation &&
     previous.isRenaming === next.isRenaming &&
     previous.isPendingDelete === next.isPendingDelete &&
+    previous.isInteractionDisabled === next.isInteractionDisabled &&
     previous.isMobileMenuLayout === next.isMobileMenuLayout &&
     previous.renameDraft === next.renameDraft &&
     previous.menuOpen === next.menuOpen &&
@@ -237,6 +244,7 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
     canShareConversation,
     isRenaming,
     isPendingDelete,
+    isInteractionDisabled,
     isMobileMenuLayout,
     renameDraft,
     onSelectConversation,
@@ -265,29 +273,47 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
   const [isLongPressActive, setIsLongPressActive] = useState(false);
 
   const handleSelect = useCallback(() => {
+    if (isInteractionDisabled) {
+      return;
+    }
     onSelectConversation(item.id);
-  }, [item.id, onSelectConversation]);
+  }, [isInteractionDisabled, item.id, onSelectConversation]);
 
   const handleStartRenaming = useCallback(() => {
+    if (isInteractionDisabled) {
+      return;
+    }
     onStartRenaming(item);
-  }, [item, onStartRenaming]);
+  }, [isInteractionDisabled, item, onStartRenaming]);
 
   const handleRequestDelete = useCallback(() => {
+    if (isInteractionDisabled) {
+      return;
+    }
     onSetPendingDelete(item.id);
-  }, [item.id, onSetPendingDelete]);
+  }, [isInteractionDisabled, item.id, onSetPendingDelete]);
 
   const handleTogglePinned = useCallback(() => {
+    if (isInteractionDisabled) {
+      return;
+    }
     onSetPinned(item.id, item.isPinned !== true);
-  }, [item.id, item.isPinned, onSetPinned]);
+  }, [isInteractionDisabled, item.id, item.isPinned, onSetPinned]);
 
   const handleShare = useCallback(() => {
+    if (isInteractionDisabled) {
+      return;
+    }
     onShareConversation(item);
-  }, [item, onShareConversation]);
+  }, [isInteractionDisabled, item, onShareConversation]);
 
   const handleConfirmDelete = useCallback(() => {
     onSetPendingDelete(null);
+    if (isInteractionDisabled) {
+      return;
+    }
     onDeleteConversation(item.id);
-  }, [item.id, onDeleteConversation, onSetPendingDelete]);
+  }, [isInteractionDisabled, item.id, onDeleteConversation, onSetPendingDelete]);
 
   const handleCancelDelete = useCallback(() => {
     onSetPendingDelete(null);
@@ -295,9 +321,12 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
 
   const handleMenuOpenChange = useCallback(
     (open: boolean) => {
+      if (open && isInteractionDisabled) {
+        return;
+      }
       onMenuOpenChange(item.id, open);
     },
-    [item.id, onMenuOpenChange],
+    [isInteractionDisabled, item.id, onMenuOpenChange],
   );
 
   const clearLongPressTimer = useCallback(() => {
@@ -325,7 +354,7 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
   const openMobileMenuFromLongPress = useCallback(() => {
     clearLongPressTimer();
 
-    if (!isMobileMenuLayout || isBusy) {
+    if (isInteractionDisabled || !isMobileMenuLayout || isBusy) {
       setIsLongPressActive(false);
       longPressCancelledRef.current = true;
       return;
@@ -334,11 +363,18 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
     longPressTriggeredRef.current = true;
     setIsLongPressActive(false);
     onMenuOpenChange(item.id, true);
-  }, [clearLongPressTimer, isBusy, isMobileMenuLayout, item.id, onMenuOpenChange]);
+  }, [
+    clearLongPressTimer,
+    isBusy,
+    isInteractionDisabled,
+    isMobileMenuLayout,
+    item.id,
+    onMenuOpenChange,
+  ]);
 
   const handleTitlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
-      if (!isMobileMenuLayout || isBusy) {
+      if (isInteractionDisabled || !isMobileMenuLayout || isBusy) {
         return;
       }
       if (event.pointerType === "mouse" && event.button !== 0) {
@@ -355,7 +391,13 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
         MOBILE_MENU_LONG_PRESS_MS,
       );
     },
-    [clearLongPressTimer, isBusy, isMobileMenuLayout, openMobileMenuFromLongPress],
+    [
+      clearLongPressTimer,
+      isBusy,
+      isInteractionDisabled,
+      isMobileMenuLayout,
+      openMobileMenuFromLongPress,
+    ],
   );
 
   const handleTitlePointerMove = useCallback(
@@ -374,7 +416,8 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
   );
 
   const handleTitlePointerUp = useCallback(() => {
-    if (!isMobileMenuLayout) {
+    if (!isMobileMenuLayout || isInteractionDisabled) {
+      resetLongPressState();
       return;
     }
 
@@ -384,7 +427,7 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
     if (shouldSelect && !isBusy) {
       handleSelect();
     }
-  }, [handleSelect, isBusy, isMobileMenuLayout, resetLongPressState]);
+  }, [handleSelect, isBusy, isInteractionDisabled, isMobileMenuLayout, resetLongPressState]);
 
   const handleTitlePointerCancel = useCallback(() => {
     if (!isMobileMenuLayout) {
@@ -441,6 +484,14 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
     inputRef.current?.select();
   }, [isRenaming]);
 
+  useEffect(() => {
+    if (!isInteractionDisabled) {
+      return;
+    }
+    resetLongPressState();
+    onMenuOpenChange(item.id, false);
+  }, [isInteractionDisabled, item.id, onMenuOpenChange, resetLongPressState]);
+
   useEffect(() => () => clearLongPressTimer(), [clearLongPressTimer]);
 
   if (isPendingDelete) {
@@ -458,6 +509,7 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
             variant="outline"
             size="sm"
             onClick={handleCancelDelete}
+            disabled={isInteractionDisabled}
             className="h-7 rounded-xl border-border/60 text-xs font-normal text-muted-foreground hover:text-foreground"
           >
             {t("chat.cancel")}
@@ -466,7 +518,7 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
             type="button"
             size="sm"
             onClick={handleConfirmDelete}
-            disabled={isBusy || isDeleteDisabled}
+            disabled={isInteractionDisabled || isBusy || isDeleteDisabled}
             className="h-7 rounded-xl bg-destructive text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
           >
             {t("chat.delete")}
@@ -515,11 +567,15 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
             }}
             onClick={(e) => e.stopPropagation()}
             className="h-9 rounded-xl border-border/70 bg-background text-sm shadow-none"
-            disabled={isBusy}
+            disabled={isInteractionDisabled || isBusy}
           />
         </div>
       ) : (
-        <DropdownMenu open={menuOpen} onOpenChange={handleMenuOpenChange} modal={false}>
+        <DropdownMenu
+          open={!isInteractionDisabled && menuOpen}
+          onOpenChange={handleMenuOpenChange}
+          modal={false}
+        >
           <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1">
             <div className="relative min-w-0">
               {isMobileMenuLayout ? (
@@ -543,6 +599,7 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
                 onPointerUp={handleTitlePointerUp}
                 onPointerCancel={handleTitlePointerCancel}
                 onPointerLeave={handleTitlePointerCancel}
+                disabled={isInteractionDisabled}
                 className={cn(
                   "chat-history-row-title-button w-full min-w-0 rounded-[1rem] px-1 py-1 text-left outline-hidden transition-colors",
                   "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
@@ -595,7 +652,7 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
                     type="button"
                     variant="ghost"
                     size="icon"
-                    disabled={isBusy}
+                    disabled={isInteractionDisabled || isBusy}
                     title={t("chat.conversationMore")}
                     aria-label={t("chat.conversationMore")}
                     onPointerDown={(e) => e.stopPropagation()}
@@ -623,7 +680,11 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
               className="sidebar-context-menu min-w-[10rem] rounded-xl border-border/60 bg-background/95 backdrop-blur-xl"
             >
               {!item.isPending ? (
-                <DropdownMenuItem onSelect={handleTogglePinned} className="gap-2">
+                <DropdownMenuItem
+                  disabled={isInteractionDisabled}
+                  onSelect={handleTogglePinned}
+                  className="gap-2"
+                >
                   {item.isPinned ? (
                     <PinOff className="h-3.5 w-3.5" />
                   ) : (
@@ -632,18 +693,26 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
                   {item.isPinned ? t("chat.conversationUnpin") : t("chat.conversationPin")}
                 </DropdownMenuItem>
               ) : null}
-              <DropdownMenuItem onSelect={handleStartRenaming} className="gap-2">
+              <DropdownMenuItem
+                disabled={isInteractionDisabled}
+                onSelect={handleStartRenaming}
+                className="gap-2"
+              >
                 <Edit3 className="h-3.5 w-3.5" />
                 {t("chat.conversationRename")}
               </DropdownMenuItem>
               {canShareConversation && !item.isPending ? (
-                <DropdownMenuItem onSelect={handleShare} className="gap-2">
+                <DropdownMenuItem
+                  disabled={isInteractionDisabled}
+                  onSelect={handleShare}
+                  className="gap-2"
+                >
                   <Share2 className="h-3.5 w-3.5" />
                   {t("chat.conversationShare")}
                 </DropdownMenuItem>
               ) : null}
               <DropdownMenuItem
-                disabled={isDeleteDisabled}
+                disabled={isInteractionDisabled || isDeleteDisabled}
                 onSelect={handleRequestDelete}
                 className="gap-2 text-destructive focus:bg-destructive/10 focus:text-destructive"
               >
@@ -665,6 +734,7 @@ const ProjectRow = memo(function ProjectRow(props: {
   isRunning: boolean;
   isRenaming: boolean;
   isPendingRemove: boolean;
+  isInteractionDisabled: boolean;
   renameDraft: string;
   onSelectProject: (project: WorkspaceProject) => void;
   onNewConversationForProject: (project: WorkspaceProject) => void;
@@ -676,6 +746,8 @@ const ProjectRow = memo(function ProjectRow(props: {
   onSetProjectPinned: (project: WorkspaceProject, isPinned: boolean) => void;
   onRemoveProject: (project: WorkspaceProject) => void;
   onSetPendingRemove: (projectId: string | null) => void;
+  menuOpen: boolean;
+  onMenuOpenChange: (projectId: string, open: boolean) => void;
 }) {
   const {
     project,
@@ -684,6 +756,7 @@ const ProjectRow = memo(function ProjectRow(props: {
     isRunning,
     isRenaming,
     isPendingRemove,
+    isInteractionDisabled,
     renameDraft,
     onSelectProject,
     onNewConversationForProject,
@@ -695,6 +768,8 @@ const ProjectRow = memo(function ProjectRow(props: {
     onSetProjectPinned,
     onRemoveProject,
     onSetPendingRemove,
+    menuOpen,
+    onMenuOpenChange,
   } = props;
   const { t } = useLocale();
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -710,25 +785,47 @@ const ProjectRow = memo(function ProjectRow(props: {
   }, [isRenaming]);
 
   const handleRequestRemove = useCallback(() => {
+    if (isInteractionDisabled) {
+      return;
+    }
     onSetPendingRemove(project.id);
-  }, [onSetPendingRemove, project.id]);
+  }, [isInteractionDisabled, onSetPendingRemove, project.id]);
 
   const handleConfirmRemove = useCallback(() => {
     onSetPendingRemove(null);
+    if (isInteractionDisabled) {
+      return;
+    }
     onRemoveProject(project);
-  }, [onRemoveProject, onSetPendingRemove, project]);
+  }, [isInteractionDisabled, onRemoveProject, onSetPendingRemove, project]);
 
   const handleCancelRemove = useCallback(() => {
     onSetPendingRemove(null);
   }, [onSetPendingRemove]);
 
   const handleTogglePinned = useCallback(() => {
+    if (isInteractionDisabled) {
+      return;
+    }
     onSetProjectPinned(project, !isPinned);
-  }, [isPinned, onSetProjectPinned, project]);
+  }, [isInteractionDisabled, isPinned, onSetProjectPinned, project]);
 
   const handleBrowseInFileTree = useCallback(() => {
+    if (isInteractionDisabled) {
+      return;
+    }
     onBrowseProjectInFileTree?.(project);
-  }, [onBrowseProjectInFileTree, project]);
+  }, [isInteractionDisabled, onBrowseProjectInFileTree, project]);
+
+  const handleMenuOpenChange = useCallback(
+    (open: boolean) => {
+      if (open && isInteractionDisabled) {
+        return;
+      }
+      onMenuOpenChange(project.id, open);
+    },
+    [isInteractionDisabled, onMenuOpenChange, project.id],
+  );
 
   if (isPendingRemove) {
     return (
@@ -745,6 +842,7 @@ const ProjectRow = memo(function ProjectRow(props: {
             variant="outline"
             size="sm"
             onClick={handleCancelRemove}
+            disabled={isInteractionDisabled}
             className="h-7 rounded-xl border-border/60 bg-background text-xs font-normal text-muted-foreground hover:text-foreground"
           >
             {t("chat.cancel")}
@@ -753,7 +851,7 @@ const ProjectRow = memo(function ProjectRow(props: {
             type="button"
             size="sm"
             onClick={handleConfirmRemove}
-            disabled={isRunning}
+            disabled={isInteractionDisabled || isRunning}
             className="h-7 rounded-xl bg-destructive text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
           >
             {t("chat.remove")}
@@ -808,6 +906,7 @@ const ProjectRow = memo(function ProjectRow(props: {
               }}
               onClick={(e) => e.stopPropagation()}
               className="h-9 rounded-xl border-border/70 bg-background text-sm shadow-none"
+              disabled={isInteractionDisabled}
             />
             <span
               className={cn(
@@ -835,6 +934,7 @@ const ProjectRow = memo(function ProjectRow(props: {
           )}
           title={project.path}
           onClick={() => onSelectProject(project)}
+          disabled={isInteractionDisabled}
         >
           <Folder
             className={cn(
@@ -911,6 +1011,7 @@ const ProjectRow = memo(function ProjectRow(props: {
                 title={t("chat.workspaceRemove")}
                 aria-label={t("chat.workspaceRemove")}
                 onClick={handleRequestRemove}
+                disabled={isInteractionDisabled}
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
@@ -925,10 +1026,15 @@ const ProjectRow = memo(function ProjectRow(props: {
                 title={t("chat.workspaceNewConversation")}
                 aria-label={t("chat.workspaceNewConversation")}
                 onClick={() => onNewConversationForProject(project)}
+                disabled={isInteractionDisabled}
               >
                 <SquarePen className="h-3.5 w-3.5" />
               </Button>
-              <DropdownMenu modal={false}>
+              <DropdownMenu
+                open={!isInteractionDisabled && menuOpen}
+                onOpenChange={handleMenuOpenChange}
+                modal={false}
+              >
                 <DropdownMenuTrigger asChild>
                   <Button
                     type="button"
@@ -937,6 +1043,7 @@ const ProjectRow = memo(function ProjectRow(props: {
                     className={PROJECT_ICON_BUTTON_CLASS}
                     title={t("chat.workspaceMore")}
                     aria-label={t("chat.workspaceMore")}
+                    disabled={isInteractionDisabled}
                   >
                     <MoreHorizontal className="h-3.5 w-3.5" />
                   </Button>
@@ -947,7 +1054,11 @@ const ProjectRow = memo(function ProjectRow(props: {
                   sideOffset={6}
                   className="sidebar-context-menu"
                 >
-                  <DropdownMenuItem onSelect={handleTogglePinned} className="gap-2">
+                  <DropdownMenuItem
+                    disabled={isInteractionDisabled}
+                    onSelect={handleTogglePinned}
+                    className="gap-2"
+                  >
                     {isPinned ? (
                       <PinOff className="h-3.5 w-3.5" />
                     ) : (
@@ -958,6 +1069,7 @@ const ProjectRow = memo(function ProjectRow(props: {
                   {!isDefaultProject ? (
                     <>
                       <DropdownMenuItem
+                        disabled={isInteractionDisabled}
                         onSelect={() => onStartRenamingProject(project)}
                         className="gap-2"
                       >
@@ -965,6 +1077,7 @@ const ProjectRow = memo(function ProjectRow(props: {
                         {t("chat.workspaceRename")}
                       </DropdownMenuItem>
                       <DropdownMenuItem
+                        disabled={isInteractionDisabled}
                         onSelect={handleRequestRemove}
                         className="gap-2 text-destructive focus:bg-destructive/10 focus:text-destructive"
                       >
@@ -974,7 +1087,11 @@ const ProjectRow = memo(function ProjectRow(props: {
                     </>
                   ) : null}
                   {onBrowseProjectInFileTree ? (
-                    <DropdownMenuItem onSelect={handleBrowseInFileTree} className="gap-2">
+                    <DropdownMenuItem
+                      disabled={isInteractionDisabled}
+                      onSelect={handleBrowseInFileTree}
+                      className="gap-2"
+                    >
                       <FolderTree className="h-3.5 w-3.5" />
                       {t("chat.workspaceBrowseInFileTree")}
                     </DropdownMenuItem>
@@ -1033,6 +1150,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     hasMore,
     isLoadingMore,
     errorMessage,
+    actionErrorMessage = null,
     sectionsDisabled = false,
     renamingId,
     renameDraft,
@@ -1082,6 +1200,8 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
   const [pendingProjectRemoveId, setPendingProjectRemoveId] = useState<string | null>(null);
   const [showAllProjects, setShowAllProjects] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [isMobileMenuLayout, setIsMobileMenuLayout] = useState(isMobileSidebarLayout);
   const [projectSectionHeight, setProjectSectionHeight] = useState<number | null>(null);
   const [isProjectSectionResizing, setIsProjectSectionResizing] = useState(false);
@@ -1104,41 +1224,124 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
   });
   const projectSectionResizeFrameRef = useRef<number | null>(null);
   const projectSectionResizeCleanupRef = useRef<(() => void) | null>(null);
-  const handleSelectConversation = useStableEvent(onSelectConversation);
-  const handleStartRenaming = useStableEvent(onStartRenaming);
-  const handleRenameDraftChange = useStableEvent(onRenameDraftChange);
-  const handleCommitRename = useStableEvent(onCommitRename);
+  const handleSelectConversation = useStableEvent((id: string) => {
+    if (!sectionsDisabled) {
+      onSelectConversation(id);
+    }
+  });
+  const handleStartRenaming = useStableEvent((item: ChatHistorySummary) => {
+    if (!sectionsDisabled) {
+      onStartRenaming(item);
+    }
+  });
+  const handleRenameDraftChange = useStableEvent((value: string) => {
+    if (!sectionsDisabled) {
+      onRenameDraftChange(value);
+    }
+  });
+  const handleCommitRename = useStableEvent(() => {
+    if (!sectionsDisabled) {
+      onCommitRename();
+    }
+  });
   const handleCancelRename = useStableEvent(onCancelRename);
-  const handleSetPinned = useStableEvent(onSetPinned);
-  const handleShareConversation = useStableEvent(onShareConversation);
-  const handleOpenSharedConversations = useStableEvent(onOpenSharedConversations);
-  const handleDeleteConversation = useStableEvent(onDeleteConversation);
+  const handleSetPinned = useStableEvent((id: string, isPinned: boolean) => {
+    if (!sectionsDisabled) {
+      onSetPinned(id, isPinned);
+    }
+  });
+  const handleShareConversation = useStableEvent((item: ChatHistorySummary) => {
+    if (!sectionsDisabled) {
+      onShareConversation(item);
+    }
+  });
+  const handleOpenSharedConversations = useStableEvent(() => {
+    if (!sectionsDisabled) {
+      onOpenSharedConversations();
+    }
+  });
+  const handleDeleteConversation = useStableEvent((id: string) => {
+    if (!sectionsDisabled) {
+      onDeleteConversation(id);
+    }
+  });
+  const handleLoadMore = useStableEvent(() => {
+    if (!sectionsDisabled) {
+      onLoadMore();
+    }
+  });
+  const handleSetPendingDelete = useStableEvent((id: string | null) => {
+    if (!sectionsDisabled || id === null) {
+      setPendingDeleteId(id);
+    }
+  });
+  const handleSetPendingProjectRemove = useStableEvent((projectId: string | null) => {
+    if (!sectionsDisabled || projectId === null) {
+      setPendingProjectRemoveId(projectId);
+    }
+  });
+  const handleProjectsCollapsedChange = useStableEvent(() => {
+    if (!sectionsDisabled) {
+      onProjectsCollapsedChange?.(!projectsCollapsed);
+    }
+  });
+  const handleRecentCollapsedChange = useStableEvent(() => {
+    if (!sectionsDisabled) {
+      onRecentCollapsedChange?.(!recentCollapsed);
+    }
+  });
+  const handleCreateProject = useStableEvent(() => {
+    if (!sectionsDisabled) {
+      onCreateProject?.();
+    }
+  });
+  const handleShowAllProjects = useStableEvent(() => {
+    if (!sectionsDisabled) {
+      setShowAllProjects((current) => !current);
+    }
+  });
   const handleSelectProject = useStableEvent((project: WorkspaceProject) => {
-    onSelectProject?.(project);
+    if (!sectionsDisabled) {
+      onSelectProject?.(project);
+    }
   });
   const handleNewConversationForProject = useStableEvent((project: WorkspaceProject) => {
-    onNewConversationForProject?.(project);
+    if (!sectionsDisabled) {
+      onNewConversationForProject?.(project);
+    }
   });
   const handleBrowseProjectInFileTree = useStableEvent((project: WorkspaceProject) => {
-    onBrowseProjectInFileTree?.(project);
+    if (!sectionsDisabled) {
+      onBrowseProjectInFileTree?.(project);
+    }
   });
   const handleStartRenamingProject = useStableEvent((project: WorkspaceProject) => {
-    onStartRenamingProject?.(project);
+    if (!sectionsDisabled) {
+      onStartRenamingProject?.(project);
+    }
   });
   const handleProjectRenameDraftChange = useStableEvent((value: string) => {
-    onProjectRenameDraftChange?.(value);
+    if (!sectionsDisabled) {
+      onProjectRenameDraftChange?.(value);
+    }
   });
   const handleCommitProjectRename = useStableEvent(() => {
-    onCommitProjectRename?.();
+    if (!sectionsDisabled) {
+      onCommitProjectRename?.();
+    }
   });
   const handleCancelProjectRename = useStableEvent(() => {
     onCancelProjectRename?.();
   });
   const handleSetProjectPinned = useStableEvent((project: WorkspaceProject, isPinned: boolean) => {
-    onSetProjectPinned?.(project, isPinned);
+    if (!sectionsDisabled) {
+      onSetProjectPinned?.(project, isPinned);
+    }
   });
   const handleRemoveProject = useStableEvent((project: WorkspaceProject) => {
-    onRemoveProject?.(project);
+    if (!sectionsDisabled) {
+      onRemoveProject?.(project);
+    }
   });
   // Projects arrive pre-sorted from the container; only the render cap is
   // applied here.
@@ -1220,6 +1423,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     sidebarSectionMetrics,
   ]);
   const canResizeProjectSections =
+    !sectionsDisabled &&
     showProjects &&
     !projectsCollapsed &&
     !recentCollapsed &&
@@ -1229,14 +1433,34 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     resizeMinHeight: sidebarSectionLayout.resizeMinHeight,
     resizeMaxHeight: sidebarSectionLayout.resizeMaxHeight,
   };
-  const handleMenuOpenChange = useCallback((id: string, open: boolean) => {
+  const handleMenuOpenChange = useStableEvent((id: string, open: boolean) => {
+    if (open && sectionsDisabled) {
+      return;
+    }
     setOpenMenuId((current) => {
       if (open) {
         return id;
       }
       return current === id ? null : current;
     });
-  }, []);
+  });
+  const handleProjectMenuOpenChange = useStableEvent((projectId: string, open: boolean) => {
+    if (open && sectionsDisabled) {
+      return;
+    }
+    setOpenProjectMenuId((current) => {
+      if (open) {
+        return projectId;
+      }
+      return current === projectId ? null : current;
+    });
+  });
+  const handleWorkspaceMenuOpenChange = useStableEvent((open: boolean) => {
+    if (open && sectionsDisabled) {
+      return;
+    }
+    setWorkspaceMenuOpen(open);
+  });
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1254,8 +1478,30 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
   useEffect(() => {
     if (!isOpen) {
       setOpenMenuId(null);
+      setOpenProjectMenuId(null);
+      setWorkspaceMenuOpen(false);
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!sectionsDisabled) {
+      return;
+    }
+
+    setOpenMenuId(null);
+    setOpenProjectMenuId(null);
+    setWorkspaceMenuOpen(false);
+    setPendingDeleteId(null);
+    setPendingProjectRemoveId(null);
+    handleCancelRename();
+    handleCancelProjectRename();
+    projectSectionResizeCleanupRef.current?.();
+    if (projectSectionResizeFrameRef.current !== null) {
+      window.cancelAnimationFrame(projectSectionResizeFrameRef.current);
+      projectSectionResizeFrameRef.current = null;
+    }
+    setIsProjectSectionResizing(false);
+  }, [handleCancelProjectRename, handleCancelRename, sectionsDisabled]);
 
   useEffect(() => {
     if (!pendingProjectRemoveId) {
@@ -1294,6 +1540,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
 
   useEffect(() => {
     if (
+      sectionsDisabled ||
       !hasMore ||
       listStatus === "loading" ||
       listStatus === "initial" ||
@@ -1304,14 +1551,15 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     ) {
       return;
     }
-    onLoadMore();
+    handleLoadMore();
   }, [
+    sectionsDisabled,
     hasMore,
     listStatus,
     isLoadingMore,
     items.length,
     lastVirtualHistoryIndex,
-    onLoadMore,
+    handleLoadMore,
     recentCollapsed,
   ]);
 
@@ -1391,7 +1639,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
 
   const handleProjectSectionResizeStart = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
-      if (event.button !== 0 || !canResizeProjectSections) {
+      if (sectionsDisabled || event.button !== 0 || !canResizeProjectSections) {
         return;
       }
 
@@ -1479,7 +1727,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
       window.addEventListener("pointercancel", handleUp);
       window.addEventListener("blur", handleBlur);
     },
-    [canResizeProjectSections],
+    [canResizeProjectSections, sectionsDisabled],
   );
 
   const renderHistoryRow = useCallback(
@@ -1494,6 +1742,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
         canShareConversation={canShareConversations}
         isRenaming={renamingId === item.id}
         isPendingDelete={pendingDeleteId === item.id}
+        isInteractionDisabled={sectionsDisabled}
         isMobileMenuLayout={isMobileMenuLayout}
         renameDraft={renamingId === item.id ? renameDraft : ""}
         onSelectConversation={handleSelectConversation}
@@ -1504,8 +1753,8 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
         onSetPinned={handleSetPinned}
         onShareConversation={handleShareConversation}
         onDeleteConversation={handleDeleteConversation}
-        onSetPendingDelete={setPendingDeleteId}
-        menuOpen={openMenuId === item.id}
+        onSetPendingDelete={handleSetPendingDelete}
+        menuOpen={!sectionsDisabled && openMenuId === item.id}
         menuSide={menuSide}
         onMenuOpenChange={handleMenuOpenChange}
       />
@@ -1519,6 +1768,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
       handleRenameDraftChange,
       handleSelectConversation,
       handleSetPinned,
+      handleSetPendingDelete,
       handleShareConversation,
       handleStartRenaming,
       busyConversationIds,
@@ -1530,6 +1780,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
       renameDraft,
       renamingId,
       runningConversationIds,
+      sectionsDisabled,
     ],
   );
 
@@ -1655,14 +1906,19 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                     "flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground outline-hidden",
                     PROJECT_HEADER_BUTTON_CLASS,
                   )}
-                  onClick={() => onProjectsCollapsedChange?.(!projectsCollapsed)}
+                  onClick={handleProjectsCollapsedChange}
+                  disabled={sectionsDisabled}
                 >
                   <ChevronRight
                     className={cn(SIDEBAR_SECTION_CHEVRON_CLASS, !projectsCollapsed && "rotate-90")}
                   />
                   {t("chat.workspaceSection")}
                 </button>
-                <DropdownMenu modal={false}>
+                <DropdownMenu
+                  open={!sectionsDisabled && workspaceMenuOpen}
+                  onOpenChange={handleWorkspaceMenuOpenChange}
+                  modal={false}
+                >
                   <DropdownMenuTrigger asChild>
                     <Button
                       type="button"
@@ -1671,6 +1927,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                       className={PROJECT_ICON_BUTTON_CLASS}
                       title={t("chat.workspaceCreate")}
                       aria-label={t("chat.workspaceCreate")}
+                      disabled={sectionsDisabled}
                     >
                       <MoreHorizontal className="h-3.5 w-3.5" />
                     </Button>
@@ -1682,7 +1939,11 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                     className="sidebar-context-menu"
                   >
                     {onCreateProject ? (
-                      <DropdownMenuItem onSelect={() => onCreateProject()} className="gap-2">
+                      <DropdownMenuItem
+                        disabled={sectionsDisabled}
+                        onSelect={handleCreateProject}
+                        className="gap-2"
+                      >
                         <Plus className="h-3.5 w-3.5" />
                         {t("chat.workspaceCreate")}
                       </DropdownMenuItem>
@@ -1710,6 +1971,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                         isRunning={runningProjectPathKeys.has(pathKey)}
                         isRenaming={projectRenamingId === project.id}
                         isPendingRemove={pendingProjectRemoveId === project.id}
+                        isInteractionDisabled={sectionsDisabled}
                         renameDraft={projectRenameDraft}
                         onSelectProject={handleSelectProject}
                         onNewConversationForProject={handleNewConversationForProject}
@@ -1722,7 +1984,9 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                         onCancelProjectRename={handleCancelProjectRename}
                         onSetProjectPinned={handleSetProjectPinned}
                         onRemoveProject={handleRemoveProject}
-                        onSetPendingRemove={setPendingProjectRemoveId}
+                        onSetPendingRemove={handleSetPendingProjectRemove}
+                        menuOpen={!sectionsDisabled && openProjectMenuId === project.id}
+                        onMenuOpenChange={handleProjectMenuOpenChange}
                       />
                     );
                   })}
@@ -1733,7 +1997,8 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                         "flex w-full items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[11.5px] font-medium text-muted-foreground outline-hidden",
                         PROJECT_HEADER_BUTTON_CLASS,
                       )}
-                      onClick={() => setShowAllProjects((current) => !current)}
+                      onClick={handleShowAllProjects}
+                      disabled={sectionsDisabled}
                     >
                       {showAllProjects
                         ? t("chat.workspaceShowLessProjects")
@@ -1788,7 +2053,8 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
               type="button"
               aria-expanded={!recentCollapsed}
               className="flex min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              onClick={() => onRecentCollapsedChange?.(!recentCollapsed)}
+              onClick={handleRecentCollapsedChange}
+              disabled={sectionsDisabled}
             >
               <ChevronRight
                 className={cn(SIDEBAR_SECTION_CHEVRON_CLASS, !recentCollapsed && "rotate-90")}
@@ -1834,6 +2100,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                   variant="ghost"
                   size="icon"
                   onClick={handleOpenSharedConversations}
+                  disabled={sectionsDisabled}
                   className="h-7 w-7 rounded-full border border-border/50 bg-background/70 text-muted-foreground shadow-xs shadow-black/5 transition-colors hover:border-sky-500/25 hover:bg-sky-500/10 hover:text-sky-600 dark:hover:text-sky-400"
                   title={t("chat.manageSharedConversations").replace(
                     "{count}",
@@ -1860,10 +2127,21 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                 : "translate-y-0 opacity-100",
             )}
           >
-            {/* Render priority: read failures surface as the red count badge
-                in the section header (never a card replacing rows); skeleton
-                only while loading with nothing cached; rows whenever present;
-                empty state only when authoritatively empty. */}
+            {/* Read failures surface as the red count badge in the section
+                header. Mutation/project errors keep their own message surface
+                and never replace or relabel the successfully loaded rows. */}
+            {actionErrorMessage ? (
+              <div className="shrink-0 px-3 pb-2">
+                <div
+                  role="alert"
+                  title={actionErrorMessage}
+                  className="flex items-start gap-2 rounded-xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-[11px] leading-4 text-destructive"
+                >
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span className="min-w-0 break-words">{actionErrorMessage}</span>
+                </div>
+              </div>
+            ) : null}
             <div
               ref={historyScrollRef}
               aria-busy={listStatus === "loading" || listStatus === "syncing" || isLoadingMore}

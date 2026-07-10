@@ -175,6 +175,12 @@ import { useGatewaySettingsSync } from "./hooks/useGatewaySettingsSync";
 import { usePendingUploads } from "./hooks/usePendingUploads";
 import { useProjectToolsRuntime } from "./hooks/useProjectToolsRuntime";
 import { GatewaySidebarContainer } from "./sidebar/GatewaySidebarContainer";
+import {
+  type GatewaySidebarStatusFreshnessEvent,
+  INITIAL_GATEWAY_SIDEBAR_STATUS_FRESHNESS,
+  reduceGatewaySidebarStatusFreshness,
+  shouldDisableGatewaySidebarSections,
+} from "./sidebar/gatewaySidebarAvailability";
 import type { ModelProviderSource, OverlayState, SendChatFn, SendChatOptions } from "./types";
 import { UserMenu } from "./UserMenu";
 import { WorkspaceOverlayHost } from "./WorkspaceOverlayHost";
@@ -208,8 +214,11 @@ export default function GatewayApp() {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   // True only after an authenticated gateway connection has been established
-  // and then dropped; the initial connect (skeleton phase) never disables UI.
+  // and then dropped; the initial connect never shows lost-connection UI.
   const [gatewayConnectionLost, setGatewayConnectionLost] = useState(false);
+  // A cached Agent status is usable only after it has been observed on the
+  // currently authenticated browser-socket epoch.
+  const [sidebarAgentStatusFresh, setSidebarAgentStatusFresh] = useState(false);
   const [conversationId, setConversationId] = useState("");
   const [chatError, setChatError] = useState<string | null>(null);
   // Sidebar errors raised outside the sidebar store (project removal flow).
@@ -270,6 +279,7 @@ export default function GatewayApp() {
   const [sharedManagerErrors, setSharedManagerErrors] = useState<
     Record<string, string | undefined>
   >({});
+  const [sharedHistoryListError, setSharedHistoryListError] = useState<string | null>(null);
   const [sharedHistoryItems, setSharedHistoryItems] = useState<ChatHistorySummary[]>([]);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [activeView, setActiveView] = useState<"chat" | "skills-hub" | "mcp-hub">("chat");
@@ -296,7 +306,10 @@ export default function GatewayApp() {
   const queuedChatEditSessionRef = useRef<{ itemId: string; revision: number } | null>(null);
   const selectedHistoryRef = useRef(selectedHistory);
   const sharedHistoryItemsRef = useRef<ChatHistorySummary[]>([]);
-  const sharedHistoryListRequestRef = useRef<Promise<ChatHistorySummary[]> | null>(null);
+  const sharedHistoryListRequestRef = useRef<{
+    generation: string;
+    promise: Promise<ChatHistorySummary[]>;
+  } | null>(null);
   // Per-conversation runtime workdir (drafts have no persisted summary yet).
   const conversationWorkdirsRef = useRef<Map<string, string>>(new Map());
   const displayedConversationWorkdirRef = useRef("");
@@ -1143,26 +1156,24 @@ export default function GatewayApp() {
 
   useEffect(() => {
     if (!api) {
-      return;
-    }
-
-    const unsubscribe = api.subscribeStatus((nextStatus, error) => {
-      statusRef.current = nextStatus;
-      setStatus(nextStatus);
-      setStatusError(error);
-    });
-    return () => {
-      unsubscribe();
-    };
-  }, [api]);
-
-  useEffect(() => {
-    if (!api) {
       setGatewayConnectionLost(false);
+      setSidebarAgentStatusFresh(false);
       return;
     }
+
     let wasConnected = false;
-    const unsubscribe = api.subscribeConnection((connected) => {
+    let freshnessState = INITIAL_GATEWAY_SIDEBAR_STATUS_FRESHNESS;
+    const applyFreshnessEvent = (event: GatewaySidebarStatusFreshnessEvent) => {
+      freshnessState = reduceGatewaySidebarStatusFreshness(freshnessState, event);
+      setSidebarAgentStatusFresh(freshnessState.agentStatusFresh);
+    };
+
+    setGatewayConnectionLost(false);
+    setSidebarAgentStatusFresh(false);
+    // Subscribe to connection first so an immediately replayed cached status
+    // is interpreted against the socket state that owns the current epoch.
+    const unsubscribeConnection = api.subscribeConnection((connected) => {
+      applyFreshnessEvent({ type: "connection", connected });
       if (connected) {
         wasConnected = true;
         setGatewayConnectionLost(false);
@@ -1170,8 +1181,16 @@ export default function GatewayApp() {
         setGatewayConnectionLost(true);
       }
     });
+    const unsubscribeStatus = api.subscribeStatus((nextStatus, error) => {
+      applyFreshnessEvent({ type: "status" });
+      statusRef.current = nextStatus;
+      setStatus(nextStatus);
+      setStatusError(error);
+    });
+
     return () => {
-      unsubscribe();
+      unsubscribeConnection();
+      unsubscribeStatus();
     };
   }, [api]);
 
@@ -2700,13 +2719,15 @@ export default function GatewayApp() {
   }, []);
 
   const refreshSharedHistoryItems = useCallback(
-    async (currentApi = api) => {
+    async (currentApi = api, options?: { force?: boolean; generation?: string }) => {
       if (!currentApi) {
+        sharedHistoryListRequestRef.current = null;
         setSharedHistoryItemsState([]);
+        setSharedHistoryListError(null);
         return [];
       }
-      if (sharedHistoryListRequestRef.current) {
-        return sharedHistoryListRequestRef.current;
+      if (sharedHistoryListRequestRef.current && options?.force !== true) {
+        return sharedHistoryListRequestRef.current.promise;
       }
 
       const request = (async () => {
@@ -2727,19 +2748,30 @@ export default function GatewayApp() {
           }
         }
 
-        const nextItems = Array.from(byId.values());
-        setSharedHistoryItemsState(nextItems);
-        return sortSidebarConversations(nextItems);
+        return sortSidebarConversations(Array.from(byId.values()));
       })();
 
-      sharedHistoryListRequestRef.current = request;
+      const requestState = {
+        generation: options?.generation?.trim() || "manual",
+        promise: request,
+      };
+      sharedHistoryListRequestRef.current = requestState;
+      setSharedHistoryListError(null);
       try {
-        return await request;
+        const nextItems = await request;
+        if (sharedHistoryListRequestRef.current === requestState) {
+          setSharedHistoryItemsState(nextItems);
+          setSharedHistoryListError(null);
+          return nextItems;
+        }
+        return sharedHistoryItemsRef.current;
       } catch (error) {
-        setSidebarActionError(asErrorMessage(error, "读取已分享历史列表失败"));
+        if (sharedHistoryListRequestRef.current === requestState) {
+          setSharedHistoryListError(asErrorMessage(error, "读取已分享历史列表失败"));
+        }
         return sharedHistoryItemsRef.current;
       } finally {
-        if (sharedHistoryListRequestRef.current === request) {
+        if (sharedHistoryListRequestRef.current === requestState) {
           sharedHistoryListRequestRef.current = null;
         }
       }
@@ -2749,11 +2781,29 @@ export default function GatewayApp() {
 
   useEffect(() => {
     if (!api) {
+      sharedHistoryListRequestRef.current = null;
       setSharedHistoryItemsState([]);
+      setSharedHistoryListError(null);
       return;
     }
-    void refreshSharedHistoryItems(api);
-  }, [api, refreshSharedHistoryItems, setSharedHistoryItemsState]);
+    if (gatewayConnectionLost || status?.online !== true) {
+      return;
+    }
+    // Force a new generation when the browser socket recovers or the desktop
+    // AgentSession identity changes. A request tied to the old generation may
+    // finish with `agent offline`; it must not poison the freshly loaded list.
+    void refreshSharedHistoryItems(api, {
+      force: true,
+      generation: status.session_id?.trim() || "online",
+    });
+  }, [
+    api,
+    gatewayConnectionLost,
+    refreshSharedHistoryItems,
+    setSharedHistoryItemsState,
+    status?.online,
+    status?.session_id,
+  ]);
 
   function markSharedConversation(
     id: string,
@@ -2980,6 +3030,7 @@ export default function GatewayApp() {
     setConversationId("");
     setChatError(null);
     setSidebarActionError(null);
+    setSharedHistoryListError(null);
     setFullHistoryLoading(false);
     setSharedHistoryItems([]);
     queuedChatTurnsRef.current = [];
@@ -3459,6 +3510,11 @@ export default function GatewayApp() {
   const composerIsSending = transcriptBusy;
   const transcriptError = displayedTranscriptRowCount === 0 ? null : chatError;
   const composerCompactionBlocked = transcriptToolStatusIsCompaction;
+  const sidebarSectionsDisabled = shouldDisableGatewaySidebarSections({
+    connectionLost: gatewayConnectionLost,
+    agentStatusFresh: sidebarAgentStatusFresh,
+    agentOnline: status?.online,
+  });
   const composerInputDisabled =
     !status?.online || historyDetailLoading || composerCompactionBlocked;
   const composerPlaceholder = composerCompactionBlocked
@@ -3639,6 +3695,7 @@ export default function GatewayApp() {
             sharedConversationCount={sharedHistoryItems.length}
             externalErrorMessage={sidebarActionError}
             connectionLost={gatewayConnectionLost}
+            sectionsDisabled={sidebarSectionsDisabled}
             isLocalDraftConversationId={isLocalDraftConversationId}
             onProjectsCollapsedChange={handleSidebarProjectsCollapsedChange}
             onRecentCollapsedChange={handleSidebarRecentCollapsedChange}
@@ -3683,6 +3740,7 @@ export default function GatewayApp() {
               loadingIds={sharedManagerLoadingIds}
               updatingIds={sharedManagerUpdatingIds}
               errors={sharedManagerErrors}
+              listError={sharedHistoryListError}
               shareOrigin={settings.remote.gatewayUrl}
               onRefresh={handleRefreshSharedHistoryStatuses}
               onLoadStatus={handleLoadSharedHistoryStatus}

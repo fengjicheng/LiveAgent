@@ -90,9 +90,12 @@ export type GatewaySidebarContainerProps = {
   // GatewayApp-level sidebar errors (project removal flow); store errors are
   // derived locally and take precedence.
   externalErrorMessage: string | null;
-  // Gateway socket dropped after having been connected: the sections are
-  // disabled and error cards are suppressed (the page banner owns messaging).
+  // Gateway socket dropped after having been connected: transport-shaped
+  // error cards are suppressed because the page banner owns that messaging.
   connectionLost: boolean;
+  // Workspace and recent-conversation interactions are available only while
+  // both the browser transport and the desktop Agent are confirmed online.
+  sectionsDisabled: boolean;
   isLocalDraftConversationId: (id: string) => boolean;
   onProjectsCollapsedChange: (collapsed: boolean) => void;
   onRecentCollapsedChange: (collapsed: boolean) => void;
@@ -122,8 +125,14 @@ export type GatewaySidebarContainerProps = {
 };
 
 export function GatewaySidebarContainer(props: GatewaySidebarContainerProps) {
-  const { store, projects, externalErrorMessage, connectionLost, isLocalDraftConversationId } =
-    props;
+  const {
+    store,
+    projects,
+    externalErrorMessage,
+    connectionLost,
+    sectionsDisabled,
+    isLocalDraftConversationId,
+  } = props;
   const { t } = useLocale();
 
   const items = useSidebarSelector(store, selectConversations);
@@ -143,6 +152,14 @@ export function GatewaySidebarContainer(props: GatewaySidebarContainerProps) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
 
+  useEffect(() => {
+    if (!sectionsDisabled) {
+      return;
+    }
+    setRenamingId(null);
+    setRenameDraft("");
+  }, [sectionsDisabled]);
+
   const clearMutationErrors = useCallback(() => {
     for (const id of store.getSnapshot().mutationErrors.keys()) {
       store.clearMutationError(id);
@@ -150,11 +167,19 @@ export function GatewaySidebarContainer(props: GatewaySidebarContainerProps) {
   }, [store]);
 
   const handleStartRenaming = useStableCallback((item: ChatHistorySummary) => {
+    if (sectionsDisabled) {
+      return;
+    }
     setRenamingId(item.id);
     setRenameDraft(item.title);
   });
 
   const handleCommitRename = useStableCallback(() => {
+    if (sectionsDisabled) {
+      setRenamingId(null);
+      setRenameDraft("");
+      return;
+    }
     if (!renamingId) {
       return;
     }
@@ -175,11 +200,17 @@ export function GatewaySidebarContainer(props: GatewaySidebarContainerProps) {
   });
 
   const handleSetPinned = useStableCallback((id: string, isPinned: boolean) => {
+    if (sectionsDisabled) {
+      return;
+    }
     clearMutationErrors();
     void store.setPinned(id, isPinned);
   });
 
   const handleDeleteConversation = useStableCallback((id: string) => {
+    if (sectionsDisabled) {
+      return;
+    }
     clearMutationErrors();
     const existing = store.peek(id);
     if (existing?.isPending === true || isLocalDraftConversationId(id)) {
@@ -191,6 +222,9 @@ export function GatewaySidebarContainer(props: GatewaySidebarContainerProps) {
   });
 
   const handleLoadMore = useStableCallback(() => {
+    if (sectionsDisabled) {
+      return;
+    }
     void store.loadMore();
   });
 
@@ -223,7 +257,16 @@ export function GatewaySidebarContainer(props: GatewaySidebarContainerProps) {
     (code: SidebarErrorCode) => t(`chat.history.${code}`),
     [t],
   );
-  const errorMessage = useMemo(() => {
+  const listErrorMessage = useMemo(() => {
+    if (connectionLost) {
+      return null;
+    }
+    if (listState.error && !isGatewayTransportErrorDetail(listState.errorDetail)) {
+      return listState.errorDetail?.trim() || translateErrorCode(listState.error);
+    }
+    return null;
+  }, [connectionLost, listState.error, listState.errorDetail, translateErrorCode]);
+  const actionErrorMessage = useMemo(() => {
     if (connectionLost) {
       return null;
     }
@@ -234,18 +277,8 @@ export function GatewaySidebarContainer(props: GatewaySidebarContainerProps) {
     if (lastMutationError) {
       return translateErrorCode(lastMutationError);
     }
-    if (listState.error && !isGatewayTransportErrorDetail(listState.errorDetail)) {
-      return listState.errorDetail?.trim() || translateErrorCode(listState.error);
-    }
     return externalErrorMessage;
-  }, [
-    connectionLost,
-    externalErrorMessage,
-    listState.error,
-    listState.errorDetail,
-    mutationErrors,
-    translateErrorCode,
-  ]);
+  }, [connectionLost, externalErrorMessage, mutationErrors, translateErrorCode]);
 
   // --- Projects -------------------------------------------------------------
   const sortedProjects = useMemo(
@@ -268,8 +301,9 @@ export function GatewaySidebarContainer(props: GatewaySidebarContainerProps) {
       totalItems={listState.totalCount}
       hasMore={listState.hasMore}
       isLoadingMore={listState.isLoadingMore}
-      errorMessage={errorMessage}
-      sectionsDisabled={connectionLost}
+      errorMessage={listErrorMessage}
+      actionErrorMessage={actionErrorMessage}
+      sectionsDisabled={sectionsDisabled}
       renamingId={renamingId}
       renameDraft={renameDraft}
       isOpen={props.isOpen}

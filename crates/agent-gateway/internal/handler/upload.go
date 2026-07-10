@@ -76,15 +76,11 @@ func ImportReadableFiles(
 			})
 		}
 
-		requestID := newRequestID()
-		ch, done, cleanup, err := sm.RegisterStream(requestID)
-		if err != nil {
-			writeError(w, http.StatusServiceUnavailable, "agent offline")
-			return
-		}
-		defer cleanup()
+		ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
+		defer cancel()
 
-		if err := sm.SendToAgent(&gatewayv1.GatewayEnvelope{
+		requestID := newRequestID()
+		ch, done, cleanup, err := sm.RegisterStreamAndSendContext(ctx, requestID, &gatewayv1.GatewayEnvelope{
 			RequestId: requestID,
 			Timestamp: time.Now().Unix(),
 			Payload: &gatewayv1.GatewayEnvelope_UploadReadableFiles{
@@ -93,13 +89,12 @@ func ImportReadableFiles(
 					Files:   uploads,
 				},
 			},
-		}); err != nil {
+		})
+		if err != nil {
 			writeError(w, http.StatusServiceUnavailable, "agent offline")
 			return
 		}
-
-		ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
-		defer cancel()
+		defer cleanup()
 
 		env, err := waitForEnvelope(ctx, ch, done)
 		if err != nil {

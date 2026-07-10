@@ -41,6 +41,7 @@ function createFakeApi() {
     workdirs: [],
     historyListeners: new Set(),
     connectionListeners: new Set(),
+    statusListeners: new Set(),
     calls: { list: [], workdirs: 0, rename: [], pin: [], delete: [] },
   };
   const api = {
@@ -71,12 +72,22 @@ function createFakeApi() {
       state.connectionListeners.add(listener);
       return () => state.connectionListeners.delete(listener);
     },
+    subscribeStatus: (listener) => {
+      state.statusListeners.add(listener);
+      return () => state.statusListeners.delete(listener);
+    },
   };
   return {
     api,
     state,
     emitHistory: (event) => {
       for (const listener of state.historyListeners) listener(event);
+    },
+    emitConnection: (connected) => {
+      for (const listener of state.connectionListeners) listener(connected);
+    },
+    emitStatus: (status, error = null) => {
+      for (const listener of state.statusListeners) listener(status, error);
     },
   };
 }
@@ -258,6 +269,44 @@ test("subscribeEvents seeds the already-running set on attach", () => {
   assert.equal(events[0].kind, "running");
   assert.equal(events[0].conversationId, "pre-running");
   unsubscribe();
+});
+
+test("subscribeConnection waits for fresh status and detects online session replacement", () => {
+  const { api, state, emitConnection, emitStatus } = createFakeApi();
+  const activityStore = createActivityStore();
+  const backend = createWebSidebarBackend({
+    api,
+    activityStore,
+    getProtectedConversationIds: () => [],
+  });
+  const events = [];
+  const unsubscribe = backend.subscribeConnection((connected) => events.push(connected));
+
+  // Socket auth alone is insufficient; readiness belongs to the fresh status
+  // snapshot replayed on that socket.
+  emitConnection(true);
+  assert.deepEqual(events, [false]);
+  emitStatus({ online: true, session_id: "session-1" });
+  assert.deepEqual(events, [false, true]);
+
+  emitConnection(false);
+  emitConnection(true);
+  assert.deepEqual(events, [false, true, false]);
+  emitStatus({ online: true, session_id: "session-1" });
+  assert.deepEqual(events, [false, true, false, true]);
+
+  // A seamless AgentSession replacement stays online at the gateway level,
+  // yet every old pending history stream is closed. Surface a synthetic
+  // reconnect edge so the sidebar re-fetches against the new session.
+  emitStatus({ online: true, session_id: "session-2" });
+  assert.deepEqual(events, [false, true, false, true, false, true]);
+
+  emitStatus({ online: true, session_id: "session-2" });
+  assert.deepEqual(events, [false, true, false, true, false, true]);
+
+  unsubscribe();
+  assert.equal(state.connectionListeners.size, 0);
+  assert.equal(state.statusListeners.size, 0);
 });
 
 test("mutations delegate to the gateway api and normalize returned summaries", async () => {

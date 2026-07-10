@@ -313,7 +313,9 @@ func (c *websocketConnection) close() {
 		}
 		c.cleanupChatStreamSubscriptions()
 		c.cleanupWorkspaceSubscriptions()
-		_ = c.conn.Close()
+		if c.conn != nil {
+			_ = c.conn.Close()
+		}
 	})
 }
 
@@ -782,12 +784,12 @@ func isControlEnvelopeType(envelopeType string) bool {
 	}
 }
 
-// writeEnvelope queues an envelope for delivery. Congestion never closes the
-// connection: control envelopes ride a small priority queue, data envelopes
-// report errWriteQueueFull after writeTimeout so the caller sheds that stream
-// (drop the frame or reset the subscription) while the link stays up. Only
-// the write loop's direct-write failures — a genuinely unwritable socket —
-// terminate the connection.
+// writeEnvelope queues an envelope for delivery. Control envelopes ride a
+// small priority queue; shed-able event/stream data reports errWriteQueueFull
+// without dropping the whole link. Correlated unary responses are different:
+// silently losing one leaves the browser pending until its much later timeout,
+// so a persistently full data queue closes the socket and lets the client
+// reconnect/retry instead. Direct-write failures likewise terminate it.
 func (c *websocketConnection) writeEnvelope(envelope websocketEnvelope) error {
 	if envelope.priority || isControlEnvelopeType(envelope.Type) {
 		return c.enqueueControlEnvelope(envelope)
@@ -795,6 +797,9 @@ func (c *websocketConnection) writeEnvelope(envelope websocketEnvelope) error {
 	err := c.enqueueEnvelope(envelope)
 	if errors.Is(err, errWriteQueueFull) {
 		c.noteDroppedEnvelope(envelope.Type)
+		if envelope.Type == "response" && envelope.ID != "" {
+			c.close()
+		}
 	}
 	return err
 }

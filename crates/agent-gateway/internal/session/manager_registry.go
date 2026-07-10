@@ -346,3 +346,36 @@ func (m *Manager) RegisterStream(requestID string) (<-chan *gatewayv1.AgentEnvel
 
 	return stream.ch, stream.done, cleanup, nil
 }
+
+// RegisterStreamAndSendContext binds response correlation and request delivery
+// to the same AgentSession instance. Calling RegisterStream followed by
+// Manager.SendToAgentContext performs two independent current-session lookups;
+// a seamless session replacement between them can register the stream on the
+// old session while sending the request to the new one, making every response
+// unmatchable. Capturing the session once closes that TOCTOU window.
+func (m *Manager) RegisterStreamAndSendContext(
+	ctx context.Context,
+	requestID string,
+	env *gatewayv1.GatewayEnvelope,
+) (<-chan *gatewayv1.AgentEnvelope, <-chan struct{}, func(), error) {
+	m.registry.mu.RLock()
+	session := m.registry.session
+	m.registry.mu.RUnlock()
+	if session == nil {
+		return nil, nil, nil, ErrAgentOffline
+	}
+
+	stream, err := session.registerStream(requestID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	cleanup := func() {
+		session.unregisterStream(requestID, stream)
+	}
+	if err := session.SendToAgentContext(ctx, env); err != nil {
+		cleanup()
+		return nil, nil, nil, err
+	}
+
+	return stream.ch, stream.done, cleanup, nil
+}

@@ -128,6 +128,25 @@ func TestWriteEnvelopeQueueFullDoesNotCloseConnection(t *testing.T) {
 	}
 }
 
+func TestWriteResponseQueueFullClosesConnectionForRecovery(t *testing.T) {
+	t.Parallel()
+
+	c := newEnqueueTestConnection(1, 20*time.Millisecond)
+	c.outbox <- websocketEnvelope{Type: "chat.event"}
+
+	err := c.writeResponse("history-1", map[string]any{"total_count": 1})
+	if !errors.Is(err, errWriteQueueFull) {
+		t.Fatalf("writeResponse with stuck outbox = %v, want errWriteQueueFull", err)
+	}
+	select {
+	case <-c.done:
+		// Expected: the client observes a disconnect and can recover the
+		// correlated request instead of waiting for a silently dropped reply.
+	default:
+		t.Fatal("writeResponse left the connection open after dropping a correlated response")
+	}
+}
+
 func TestEnqueueControlEnvelopeDropsPingWhenFull(t *testing.T) {
 	t.Parallel()
 
