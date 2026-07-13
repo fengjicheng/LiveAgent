@@ -89,6 +89,7 @@ import {
   getFirstUserMessageText,
   isAbortLikeError,
 } from "../lib/chat/page/chatPageHelpers";
+import type { ScrollFollowHandle } from "../lib/chat-scroll/useScrollFollow";
 import { createStreamDebugLogger } from "../lib/debug/agentDebug";
 import { tauriGitClient } from "../lib/git/tauriGitClient";
 import { memoryDeleteProject } from "../lib/memory/api";
@@ -222,7 +223,6 @@ import {
   normalizeGatewayExecutionMode,
   normalizeGatewayWorkdir,
 } from "./chat/gateway/gatewayBridgeTypes";
-import type { ScrollFollowHandle } from "./chat/hooks/useScrollFollow";
 import {
   appendQueuedChatTurn,
   buildQueuedChatTurnPreview,

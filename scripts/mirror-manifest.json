@@ -32,6 +32,8 @@
     "components/Markdown.tsx",
     "components/workspace-editor/workspaceMarkdownAssets.ts",
     "components/workspace-editor/WorkspaceMarkdownPreview.tsx",
+    "lib/chat-scroll/scrollFollowCore.ts",
+    "lib/chat-scroll/useScrollFollow.ts",
     "lib/workspace-activity/types.ts",
     "lib/workspace-activity/useWorkspaceInvalidation.ts",
     "lib/sidebar/types.ts",

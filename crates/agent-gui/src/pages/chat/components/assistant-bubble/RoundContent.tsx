@@ -5,7 +5,7 @@ import { Markdown } from "../../../../components/Markdown";
 import { useLocale } from "../../../../i18n";
 import type { UiRound } from "../../../../lib/chat/messages/uiMessages";
 import { normalizeLiveToolStatus, VIBING_STATUS } from "../../../../lib/chat/page/chatPageHelpers";
-import { useScrollFollow } from "../../hooks/useScrollFollow";
+import { useScrollFollow } from "../../../../lib/chat-scroll/useScrollFollow";
 import { groupRoundBlocks } from "./assistantBubbleUtils";
 import { HostedSearchGroupView } from "./HostedSearchGroupView";
 import { CompactingText, VibingText } from "./StatusText";

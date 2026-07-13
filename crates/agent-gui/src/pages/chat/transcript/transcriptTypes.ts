@@ -6,9 +6,9 @@ import type {
 } from "../../../lib/chat/conversation/conversationState";
 import type { LiveTranscriptStore } from "../../../lib/chat/conversation/liveTranscriptStore";
 import type { PendingUploadedFile } from "../../../lib/chat/messages/uploadedFiles";
+import type { ScrollFollowHandle } from "../../../lib/chat-scroll/useScrollFollow";
 import type { GitClient } from "../../../lib/git/types";
 import type { SectionId } from "../../settings/types";
-import type { ScrollFollowHandle } from "../hooks/useScrollFollow";
 
 export type ChatTranscriptProps = {
   conversationId: string;

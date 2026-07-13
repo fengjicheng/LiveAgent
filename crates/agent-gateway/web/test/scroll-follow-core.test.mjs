@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createTsModuleLoader } from "../helpers/load-ts-module.mjs";
 
-const rootDir = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
-const modulePath = path.join(rootDir, "src/lib/chat-scroll/scrollFollowCore.ts");
+import { createWebModuleLoader } from "../../test/helpers/load-web-module.mjs";
+
+const loader = createWebModuleLoader({
+  rootDir: fileURLToPath(new URL("../", import.meta.url)),
+});
+
 const {
   BOTTOM_ATTACH_THRESHOLD_PX,
   BOTTOM_REATTACH_ZONE_PX,
@@ -13,7 +15,7 @@ const {
   createFollowState,
   isDominantVerticalWheel,
   reduceFollowEvent,
-} = createTsModuleLoader({ rootDir }).loadModule(modulePath);
+} = loader.loadModule("src/lib/chat-scroll/scrollFollowCore.ts");
 
 function run(events, { state = createFollowState(), config = DEFAULT_FOLLOW_CONFIG } = {}) {
   let pin = false;
