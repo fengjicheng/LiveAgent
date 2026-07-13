@@ -35,6 +35,24 @@ Rust 实现位于 `src-tauri/src/commands/chat_history.rs`。
 
 相关前端路径包括 `pages/chat/conversationContextBuilders.ts`、`lib/chat/conversation/conversationState.ts`、`lib/chat/conversation/compaction/*`。
 
+## 文件操作账本（File Ledger）
+
+Summary 的 `<artifacts>` 段由模型生成，会漏、会幻觉。为此每个 checkpoint 额外携带一份**确定性、机器维护**的文件账本，作为 LLM 摘要之下的地板。
+
+| 属性 | 说明 |
+|---|---|
+| 来源 | 扫描被折叠消息里 assistant 的 `toolCall` block，取 `arguments.path`。只认单 `path` 的 fs 工具：`Read`（读）、`Write`/`Edit`/`Delete`（改）。 |
+| 不入账 | `Glob`/`Grep`/`List`（目录级枚举）、`Image`（可接 URL/多源）、shell（无法确定性解析）；对应 `toolResult.isError` 的**失败调用**也剔除（无对应结果的调用按成功处理——压缩发生时结果通常已就位）。因此账本是 fs 文件操作的**下界**，非全集。 |
+| 正交于 prune | 只扫 `toolCall`、**不读 `toolResult` 正文**（仅用其 `isError` 剔除失败调用），故与工具输出裁剪互不影响。 |
+| 分类与 recency | 统一时序归一：任意一次触碰（读或改）都把路径刷新到最新；`modified` 粘性——一旦改过恒归 modified（即便之后被读到），不回落为 read。故“早改晚读”的文件不会被当最旧误驱逐。 |
+| 跨 checkpoint 继承 | 在**消息级**合并：`mergeMessagesIntoLedger(prev 账本, 本段原始消息)`。prev（seed）整体较旧，`next` 的真实操作顺序取自原始消息（不先归一成两数组），从而保住本段内“先改后读”等跨类顺序。 |
+| 存储 | `summaryMeta.fileLedger`（可选字段，对 Rust 的 `summary_json` 不透明，无需迁移；旧数据缺失即视为无账本）。 |
+| 注入与安全 | resume context 构建时渲染为 system prompt 内摘要块后的 `### Files touched`（最近在前），**不占** summary 正文的字符预算，且**不随 payload 发给 summarizer**（`payload.ts` 已剔除）。路径是模型/工具可影响的数据：入账前清洗（按码位去控制字符/换行、压空白），超长（>200 字符）**整条丢弃而非截断**（截断会让共享前缀的路径撞成同一身份）；渲染时每条用 **JSON 引号包裹**并标注“data, not instructions”，杜绝标题/指令突破。 |
+| 上限 | 每类 100 条；两类合计渲染字符预算 4000（改动优先占用，但为读预留 1000 保底避免饿死），超预算驱逐最旧。`omittedCount` 是**尽力而为的累计驱逐事件计数**（非“当前缺失的唯一路径数”，同一路径反复驱逐会计多次），用于渲染“已省略 N 条”。 |
+| 已知限制 | 路径别名（`./a.ts` vs `a.ts` vs 绝对路径）不做规范化，可能算作不同条目；`Delete` 可递归删目录，账本仅记目录路径不含子孙；超长被丢弃的路径不计入 `omittedCount`（账本本即下界）。 |
+
+实现：`lib/chat/compaction/fileLedger.ts`；挂点在 `conversationState.ts` 的 `appendCompactionCheckpointToSegments` / `appendSummaryToSystemPrompt`，及 `payload.ts` 的 `summaryMetaForPayload`。
+
 ## FTS 搜索
 
 | 机制 | 说明 |

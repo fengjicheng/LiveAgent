@@ -4,7 +4,11 @@ import type { StreamDebugLogger } from "../../debug/agentDebug";
 import { assistantMessageToText } from "../../providers/llm";
 import type { ProviderModelConfig } from "../../settings";
 import { sanitizeMessageForModelContext } from "../context/requestContextSanitizer";
-import { type ConversationViewState, getActiveSegment } from "../conversation/conversationState";
+import {
+  type ConversationViewState,
+  getActiveSegment,
+  type StoredSummaryMessage,
+} from "../conversation/conversationState";
 import { estimateTextTokens } from "./tokenLedger";
 import type { CompactionIntent } from "./types";
 
@@ -178,6 +182,14 @@ export function serializeMessageForCompaction(
   };
 }
 
+// fileLedger 是给下游模型（注入 system prompt）的，summarizer 不需要它；且它不受 payload
+// 裁剪覆盖，故从发给 summarizer 的 summaryMeta 中剔除，避免超大账本膨胀压缩请求本身。
+function summaryMetaForPayload(meta: StoredSummaryMessage["summaryMeta"]) {
+  const { fileLedger, ...rest } = meta;
+  void fileLedger;
+  return rest;
+}
+
 export function buildCompactionPayload(params: {
   state: ConversationViewState;
   incomingUserText?: string;
@@ -200,7 +212,7 @@ export function buildCompactionPayload(params: {
       ? {
           id: activeSegment.summary.id,
           content: activeSegment.summary.content,
-          summaryMeta: activeSegment.summary.summaryMeta,
+          summaryMeta: summaryMetaForPayload(activeSegment.summary.summaryMeta),
         }
       : null,
     active_segment_messages: activeSegment.messages.map((message, index) =>

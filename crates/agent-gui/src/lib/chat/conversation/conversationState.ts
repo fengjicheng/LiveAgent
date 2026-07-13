@@ -2,6 +2,11 @@ import type { AssistantMessage, Context, Message } from "@earendil-works/pi-ai";
 
 import { assistantMessageToText } from "../../providers/llm";
 import {
+  type FileLedger,
+  formatFileLedgerBlock,
+  mergeMessagesIntoLedger,
+} from "../compaction/fileLedger";
+import {
   sanitizeMessagesForContinuation,
   sanitizeMessagesForModelContext,
 } from "../context/requestContextSanitizer";
@@ -29,6 +34,9 @@ export type StoredSummaryMessage = {
     coversThroughMessageId: string;
     coveredMessageCount: number;
     basedOnSummaryMessageId?: string;
+    // 确定性机器维护的文件账本，跨 checkpoint 继承。可选字段；旧数据缺失即视为无账本。
+    // 存储在 summaryMeta（对 Rust 的 summary_json 不透明），不占摘要正文的字符预算。
+    fileLedger?: FileLedger;
     generatedBy: {
       providerId: string;
       model: string;
@@ -419,12 +427,20 @@ function appendCompactionCheckpointToSegments(
     nextSegmentIndex,
     checkpointMessage.timestamp ?? Date.now(),
   );
+  // 累积账本：上一 checkpoint 的账本（seed）+ 本段被折叠消息的新增操作。在消息级合并，
+  // 以保住本段内“先改后读”等真实时序。previousSegment.summary 恰是上一次压缩产生的
+  // checkpoint（basedOn 亦指向它），其 fileLedger 覆盖 previousSegment.messages 之前的历史。
+  const fileLedger = mergeMessagesIntoLedger(
+    previousSegment.summary?.summaryMeta.fileLedger,
+    previousSegment.messages,
+  );
   nextSegment.summary = createSummaryFromAssistant(checkpointMessage, {
     segmentIndex: nextSegmentIndex,
     coveredMessageCount,
     coversThroughMessageId,
     basedOnSummaryMessageId: getSummaryId(previousSegment.summary),
     sourceMessageCount: previousSegment.messages.length,
+    fileLedger,
   });
   segments.push(nextSegment);
 
@@ -465,6 +481,7 @@ function createSummaryFromAssistant(
     coversThroughMessageId: string;
     basedOnSummaryMessageId?: string;
     sourceMessageCount: number;
+    fileLedger?: FileLedger;
   },
 ): StoredSummaryMessage {
   const content = assistantMessageToText(assistant).trim();
@@ -483,6 +500,7 @@ function createSummaryFromAssistant(
       coversThroughMessageId: params.coversThroughMessageId,
       coveredMessageCount: params.coveredMessageCount,
       basedOnSummaryMessageId: params.basedOnSummaryMessageId,
+      fileLedger: params.fileLedger,
       generatedBy: {
         providerId:
           typeof assistant.provider === "string" && assistant.provider.trim()
@@ -544,9 +562,11 @@ function normalizeSegment(
 export function appendSummaryToSystemPrompt(
   baseSystemPrompt: string | undefined,
   summaryContent: string | undefined,
+  fileLedger?: FileLedger,
 ) {
   if (!summaryContent?.trim()) return baseSystemPrompt;
 
+  const ledgerBlock = formatFileLedgerBlock(fileLedger);
   const summaryBlock = [
     "",
     "## Previous Conversation Summary",
@@ -555,6 +575,7 @@ export function appendSummaryToSystemPrompt(
     "but do not repeat work that has already been completed.",
     "",
     summaryContent.trim(),
+    ...(ledgerBlock ? ["", ledgerBlock] : []),
     "",
   ].join("\n");
 
@@ -735,6 +756,7 @@ export function buildRequestContext(
   const systemPrompt = appendSummaryToSystemPrompt(
     state.meta.systemPrompt,
     activeSegment.summary?.content,
+    activeSegment.summary?.summaryMeta.fileLedger,
   );
   if (typeof systemPrompt === "string") {
     next.systemPrompt = systemPrompt;
