@@ -94,14 +94,16 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "settings.groupGeneral",
     items: [
       { id: "system", icon: <Settings2 className="h-3.5 w-3.5" /> },
-      { id: "systemTools", icon: <Wrench className="h-3.5 w-3.5" /> },
       { id: "providers", icon: <Cpu className="h-3.5 w-3.5" /> },
       { id: "agents", icon: <BookOpen className="h-3.5 w-3.5" /> },
     ],
   },
   {
     labelKey: "settings.groupIntelligence",
-    items: [{ id: "memory", icon: <Brain className="h-3.5 w-3.5" /> }],
+    items: [
+      { id: "memory", icon: <Brain className="h-3.5 w-3.5" /> },
+      { id: "systemTools", icon: <Wrench className="h-3.5 w-3.5" /> },
+    ],
   },
   {
     labelKey: "settings.groupAutomation",
