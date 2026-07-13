@@ -3188,7 +3188,6 @@ function RoundContent(props: {
             key={block.key}
             content={block.text}
             className="font-openai-chat"
-            isAnimating={Boolean(isLive && isActive)}
             renderMode={renderMode}
             showCaret={Boolean(isLive && isActive && isStreaming)}
             readOnly={readOnly}

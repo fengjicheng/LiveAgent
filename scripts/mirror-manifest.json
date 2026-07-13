@@ -29,6 +29,7 @@
     "components/project-tools/file-tree/useFileTreeData.ts",
     "components/project-tools/file-tree/Row.tsx",
     "components/project-tools/file-tree/ContextMenu.tsx",
+    "components/Markdown.tsx",
     "components/workspace-editor/workspaceMarkdownAssets.ts",
     "components/workspace-editor/WorkspaceMarkdownPreview.tsx",
     "lib/workspace-activity/types.ts",

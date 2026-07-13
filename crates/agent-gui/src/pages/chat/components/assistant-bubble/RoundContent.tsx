@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ChevronRight, Loader2, Sparkles } from "../../../../components/icons";
-import { LiveMarkdown, Markdown } from "../../../../components/Markdown";
+import { Markdown } from "../../../../components/Markdown";
 import { useLocale } from "../../../../i18n";
 import type { UiRound } from "../../../../lib/chat/messages/uiMessages";
 import { normalizeLiveToolStatus, VIBING_STATUS } from "../../../../lib/chat/page/chatPageHelpers";
@@ -192,15 +192,14 @@ export function RoundContent(props: {
 
         if (!block.text.trim()) return null;
 
-        return isLive && isActive ? (
-          <LiveMarkdown
+        return (
+          <Markdown
             key={block.key}
             content={block.text}
             className="font-openai-chat"
-            isAnimating
+            renderMode={isLive ? "streaming" : "static"}
+            showCaret={Boolean(isLive && isActive)}
           />
-        ) : (
-          <Markdown key={block.key} content={block.text} className="font-openai-chat" />
         );
       })}
 

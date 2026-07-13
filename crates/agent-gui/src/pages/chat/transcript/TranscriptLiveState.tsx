@@ -1,6 +1,6 @@
 import { memo, useSyncExternalStore } from "react";
 
-import { LiveMarkdown } from "../../../components/Markdown";
+import { Markdown } from "../../../components/Markdown";
 import { normalizeLiveToolStatus, VIBING_STATUS } from "../../../lib/chat/page/chatPageHelpers";
 import {
   AssistantAvatar,
@@ -80,7 +80,12 @@ export const TranscriptLiveState = memo(function TranscriptLiveState(
         <AssistantAvatar />
         <div className="min-w-0 flex-1 pt-0.5">
           {draftAssistantText ? (
-            <LiveMarkdown content={draftAssistantText} className="font-openai-chat" isAnimating />
+            <Markdown
+              content={draftAssistantText}
+              className="font-openai-chat"
+              renderMode="streaming"
+              showCaret
+            />
           ) : isCompactionRunning ? (
             <div className="flex items-center py-1">
               <CompactingText className="text-sm font-medium text-muted-foreground" />
