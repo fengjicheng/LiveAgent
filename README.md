@@ -132,6 +132,7 @@ docker run -p 50051:50051 -p 50052:8080 \
 <details>
 <summary><b>Nginx 反向代理配置</b> — 自建域名 / TLS 时参考</summary>
 
+
 > Gateway 对外有两类流量：
 >
 > 桌面端的 **gRPC 双向流** (默认 50051) 与浏览器端的 **HTTP / WebSocket ** (默认 50052)。
