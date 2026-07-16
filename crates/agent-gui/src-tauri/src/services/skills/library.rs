@@ -254,13 +254,25 @@ pub(crate) fn read_skill_source_metadata(skill_dir: &Path) -> Option<SystemSkill
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
+    let optional_string = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
     let published_at = value.get("publishedAt").and_then(Value::as_u64);
 
     Some(SystemSkillSourceMetadata {
         registry: "clawhub".to_string(),
         slug,
+        owner_handle: optional_string("ownerHandle"),
         version,
         published_at,
+        original_name: optional_string("originalName"),
+        normalized_name: optional_string("normalizedName"),
+        compatibility_transform: optional_string("compatibilityTransform"),
     })
 }
 

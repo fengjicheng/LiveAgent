@@ -113,8 +113,7 @@ fn readme_without_frontmatter_derives_metadata_for_management() {
     )
     .expect("write readme");
 
-    let raw_metadata =
-        read_skill_metadata_file(&dir.join("README.md")).expect("read raw metadata");
+    let raw_metadata = read_skill_metadata_file(&dir.join("README.md")).expect("read raw metadata");
     assert!(raw_metadata.name.is_none());
     assert!(raw_metadata.description.is_none());
 
@@ -372,8 +371,7 @@ fn builtin_seed_removes_retired_builtin_files() {
     ensure_builtin_agent_skills_in_root(&root).expect("seed builtins");
     let creator_dir = root.join("skills-creator");
     let retired_script = creator_dir.join("scripts").join("old_helper.py");
-    fs::create_dir_all(retired_script.parent().expect("script parent"))
-        .expect("create scripts");
+    fs::create_dir_all(retired_script.parent().expect("script parent")).expect("create scripts");
     fs::write(&retired_script, "#!/usr/bin/env python3\nprint('old')\n")
         .expect("write retired script");
 
@@ -462,8 +460,8 @@ fn clawhub_download_url_preserves_slug_and_tag_params() {
 
 #[test]
 fn clawhub_download_url_appends_owner_handle_for_disambiguation() {
-    let url = clawhub_download_url_for_slug("example-skill", Some("acme"), None)
-        .expect("download url");
+    let url =
+        clawhub_download_url_for_slug("example-skill", Some("acme"), None).expect("download url");
     let parsed = reqwest::Url::parse(&url).expect("parse url");
     let pairs = parsed
         .query_pairs()
@@ -474,35 +472,56 @@ fn clawhub_download_url_appends_owner_handle_for_disambiguation() {
     assert_eq!(pairs.get("tag").map(String::as_str), Some("latest"));
     assert_eq!(pairs.get("ownerHandle").map(String::as_str), Some("acme"));
 
-    let blank_owner = clawhub_download_url_for_slug("example-skill", Some("  "), None)
-        .expect("download url");
+    let blank_owner =
+        clawhub_download_url_for_slug("example-skill", Some("  "), None).expect("download url");
     assert!(!blank_owner.contains("ownerHandle"));
 }
 
 #[test]
-fn normalize_clawhub_skill_card_supports_search_shape() {
+fn normalize_clawhub_skill_card_supports_live_list_shape_without_owner() {
     let raw = json!({
-        "slug": "owner/example-skill",
+        "slug": "example-skill",
         "displayName": "Example Skill",
         "summary": "Example summary",
         "latestVersion": { "version": "1.0.0" },
         "stats": {
             "downloads": 11,
             "stars": 7,
-            "installsCurrent": 3
+            "installs": 3
         },
-        "updatedAt": 12345,
-        "owner": { "handle": "owner" }
+        "updatedAt": 12345
     });
 
     let card = normalize_clawhub_skill_card(&raw).expect("normalize card");
 
-    assert_eq!(card.slug, "owner/example-skill");
+    assert_eq!(card.slug, "example-skill");
     assert_eq!(card.display_name, "Example Skill");
     assert_eq!(card.latest_version.as_deref(), Some("1.0.0"));
     assert_eq!(card.downloads, 11);
     assert_eq!(card.stars, 7);
     assert_eq!(card.installs_current, 3);
+    assert_eq!(card.owner_handle, None);
+    assert!(!card.download_url.contains("ownerHandle"));
+}
+
+#[test]
+fn normalize_clawhub_skill_card_supports_live_search_shape_with_owner() {
+    let raw = json!({
+        "slug": "example-skill",
+        "displayName": "Example Skill",
+        "summary": "Example summary",
+        "version": "1.0.0",
+        "downloads": 11,
+        "updatedAt": 12345,
+        "ownerHandle": "owner",
+        "owner": { "handle": "owner" }
+    });
+
+    let card = normalize_clawhub_skill_card(&raw).expect("normalize card");
+
+    assert_eq!(card.slug, "example-skill");
+    assert_eq!(card.latest_version.as_deref(), Some("1.0.0"));
+    assert_eq!(card.downloads, 11);
     assert_eq!(card.owner_handle.as_deref(), Some("owner"));
     assert!(card.download_url.contains("/api/v1/download"));
     assert!(card.download_url.contains("ownerHandle=owner"));
@@ -517,7 +536,8 @@ fn install_source_persists_clawhub_metadata_when_slug_is_present() {
     let payload = json!({
         "source": source.to_string_lossy(),
         "conflict": "fail",
-        "slug": "owner/clawhub-skill",
+        "slug": "clawhub-skill",
+        "ownerHandle": "owner",
         "version": "1.0.0",
         "publishedAt": 12345
     });
@@ -528,9 +548,52 @@ fn install_source_persists_clawhub_metadata_when_slug_is_present() {
         read_skill_source_metadata(&root.join(&installed[0].name)).expect("read source meta");
 
     assert_eq!(source_metadata.registry, "clawhub");
-    assert_eq!(source_metadata.slug, "owner/clawhub-skill");
+    assert_eq!(source_metadata.slug, "clawhub-skill");
+    assert_eq!(source_metadata.owner_handle.as_deref(), Some("owner"));
     assert_eq!(source_metadata.version.as_deref(), Some("1.0.0"));
     assert_eq!(source_metadata.published_at, Some(12345));
+}
+
+#[test]
+fn clawhub_candidate_normalizes_nonportable_name_when_it_matches_slug() {
+    let tmp = TempDir::new("liveagent-clawhub-name-normalize-test").expect("temp dir");
+    let candidate = tmp.path().join("candidate");
+    fs::create_dir_all(&candidate).expect("create candidate");
+    fs::write(
+        candidate.join("SKILL.md"),
+        "---\nname: SkillScan\nmetadata:\n  version: 1.1.6\ndescription: Security gate\n---\n\n# SkillScan\n",
+    )
+    .expect("write skill");
+
+    let transform = normalize_clawhub_candidate_name(&candidate, "skillscan")
+        .expect("normalize candidate")
+        .expect("compatibility transform");
+    let metadata = read_skill_metadata_from_dir(&candidate).expect("read normalized metadata");
+    let content = fs::read_to_string(candidate.join("SKILL.md")).expect("read normalized skill");
+
+    assert_eq!(transform.original_name, "SkillScan");
+    assert_eq!(transform.normalized_name, "skillscan");
+    assert_eq!(metadata.name, "skillscan");
+    assert!(content.contains("name: skillscan"));
+    assert!(content.contains("metadata:\n  version: 1.1.6"));
+}
+
+#[test]
+fn clawhub_candidate_does_not_normalize_name_that_does_not_match_slug() {
+    let tmp = TempDir::new("liveagent-clawhub-name-mismatch-test").expect("temp dir");
+    let candidate = tmp.path().join("candidate");
+    fs::create_dir_all(&candidate).expect("create candidate");
+    fs::write(
+        candidate.join("SKILL.md"),
+        "---\nname: DifferentName\ndescription: Mismatch\n---\n",
+    )
+    .expect("write skill");
+
+    let transform =
+        normalize_clawhub_candidate_name(&candidate, "skillscan").expect("inspect candidate");
+
+    assert_eq!(transform, None);
+    assert!(read_skill_metadata_from_dir(&candidate).is_err());
 }
 
 #[test]
@@ -566,8 +629,7 @@ fn delete_installed_skill_rejects_builtin_skill() {
     let root = tmp.path().join("skills");
     write_skill(&root, "skills-installer", "Built-in replacement");
 
-    let error =
-        delete_installed_skill(&root, "skills-installer").expect_err("delete should fail");
+    let error = delete_installed_skill(&root, "skills-installer").expect_err("delete should fail");
 
     assert!(
         error.contains("cannot modify built-in Skill"),
@@ -659,8 +721,7 @@ fn validate_accepts_non_english_markdown_documentation() {
     )
     .expect("write skill");
 
-    let validation =
-        validate_installed_skill(&root, "multilingual-skill").expect("validate skill");
+    let validation = validate_installed_skill(&root, "multilingual-skill").expect("validate skill");
 
     assert!(validation.ok, "{:?}", validation.errors);
 }
@@ -800,7 +861,10 @@ fn install_skill_dir_failure_leaves_existing_target_untouched() {
     let bad_dir = write_skill(&bad_source, "different-name", "Bad");
     let error = install_skill_dir(&root, &bad_dir, "stable-skill", "overwrite", None)
         .expect_err("name mismatch should fail");
-    assert!(error.contains("does not match"), "unexpected error: {error}");
+    assert!(
+        error.contains("does not match"),
+        "unexpected error: {error}"
+    );
 
     let content = fs::read_to_string(root.join("stable-skill").join("SKILL.md"))
         .expect("target survives failed overwrite");
@@ -827,7 +891,10 @@ fn concurrent_same_name_installs_serialize_into_one_target_and_complete_backups(
         })
         .collect();
     for handle in handles {
-        handle.join().expect("join writer").expect("install succeeds");
+        handle
+            .join()
+            .expect("join writer")
+            .expect("install succeeds");
     }
 
     // Exactly one complete live target...
@@ -867,14 +934,22 @@ fn concurrent_distinct_installs_all_succeed_and_staging_is_drained() {
         })
         .collect();
     for handle in handles {
-        handle.join().expect("join writer").expect("install succeeds");
+        handle
+            .join()
+            .expect("join writer")
+            .expect("install succeeds");
     }
 
     let (skills, invalid) = list_installed_skills(&root).expect("list skills");
     assert_eq!(skills.len(), WRITERS);
-    assert!(invalid.is_empty(), "unexpected invalid entries: {invalid:?}");
+    assert!(
+        invalid.is_empty(),
+        "unexpected invalid entries: {invalid:?}"
+    );
     assert_eq!(
-        fs::read_dir(root.join(".staging")).expect("staging").count(),
+        fs::read_dir(root.join(".staging"))
+            .expect("staging")
+            .count(),
         0
     );
 }
@@ -907,7 +982,8 @@ fn cancel_install_job_flags_running_jobs_and_rejects_finished_ones() {
         phase: "downloading".to_string(),
         source: "https://example.test/skill.zip".to_string(),
         label: None,
-        slug: None,
+        slug: Some("github".to_string()),
+        owner_handle: Some("acme".to_string()),
         version: None,
         downloaded_bytes: 0,
         total_bytes: None,
@@ -920,6 +996,10 @@ fn cancel_install_job_flags_running_jobs_and_rejects_finished_ones() {
         cancel_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     })
     .expect("insert job");
+
+    let snapshot = get_install_job_snapshot(&job_id).expect("read job snapshot");
+    assert_eq!(snapshot.slug.as_deref(), Some("github"));
+    assert_eq!(snapshot.owner_handle.as_deref(), Some("acme"));
 
     cancel_install_job(&job_id).expect("cancel running job");
     let flagged = skill_install_jobs()

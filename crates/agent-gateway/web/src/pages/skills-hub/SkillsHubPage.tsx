@@ -46,11 +46,13 @@ import {
 } from "../../lib/skills";
 import {
   buildClawHubDownloadUrl,
+  buildClawHubSkillKey,
   type ClawHubSkillCard,
   type ClawHubSkillDetail,
   type ClawHubSort,
   getClawHubSkillDetail,
   listClawHubSkills,
+  resolveClawHubSkillOwner,
   searchClawHubSkills,
 } from "../../lib/skills/clawHub";
 
@@ -76,6 +78,7 @@ const STORE_SORT_OPTIONS: Array<{ value: ClawHubSort; labelKey: string }> = [
 type StoreSkillInstallState = {
   done: boolean;
   installing: boolean;
+  pending: boolean;
   terminalJob: boolean;
   job: SkillInstallJobSnapshot | undefined;
   progress: number | null;
@@ -330,7 +333,11 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
   const [storeLoadingMore, setStoreLoadingMore] = useState(false);
   const [storeError, setStoreError] = useState<string | null>(null);
   const [installJobs, setInstallJobs] = useState<Record<string, SkillInstallJobSnapshot>>({});
-  const [installingBySlug, setInstallingBySlug] = useState<Record<string, string>>({});
+  const [installingByStoreKey, setInstallingByStoreKey] = useState<Record<string, string>>({});
+  const [pendingInstallKeys, setPendingInstallKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const pendingInstallTokensRef = useRef(new Map<string, symbol>());
   const [deletingSkillName, setDeletingSkillName] = useState<string | null>(null);
   const [externalScans, setExternalScans] = useState<ExternalToolScan[] | null>(null);
   const [externalLoading, setExternalLoading] = useState(false);
@@ -548,37 +555,58 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
     };
   }, [previewInstalledSkill, t]);
 
-  const installedBySlug = useMemo(() => {
+  const installedStoreState = useMemo(() => {
     const installed = new Map<string, SkillSummary>();
+    const slugs = new Set<string>();
     for (const skill of skills) {
       if (skill.source?.registry !== "clawhub") continue;
       const slug = skill.source.slug?.trim();
-      if (slug) installed.set(slug, skill);
+      if (!slug) continue;
+      slugs.add(slug);
+      installed.set(
+        buildClawHubSkillKey({ slug, ownerHandle: skill.source.ownerHandle ?? null }),
+        skill,
+      );
     }
-    return installed;
+    return { installed, slugs };
   }, [skills]);
-  const completedInstallSlugs = useMemo(() => {
+  const completedInstallState = useMemo(() => {
+    const keys = new Set<string>();
     const slugs = new Set<string>();
-    for (const [slug, jobId] of Object.entries(installingBySlug)) {
+    for (const [storeKey, jobId] of Object.entries(installingByStoreKey)) {
       const job = installJobs[jobId];
-      if (job?.phase === "done" && slug.trim()) {
-        slugs.add(slug.trim());
+      if (job?.phase === "done") {
+        keys.add(storeKey);
+        if (job.slug?.trim()) slugs.add(job.slug.trim());
       }
     }
     for (const job of Object.values(installJobs)) {
       if (job.phase === "done" && job.slug?.trim()) {
         slugs.add(job.slug.trim());
+        keys.add(
+          buildClawHubSkillKey({
+            slug: job.slug.trim(),
+            ownerHandle: job.ownerHandle ?? null,
+          }),
+        );
       }
     }
-    return slugs;
-  }, [installJobs, installingBySlug]);
+    return { keys, slugs };
+  }, [installJobs, installingByStoreKey]);
+  const installedStoreKeys = useMemo(() => {
+    const keys = new Set(installedStoreState.installed.keys());
+    for (const key of completedInstallState.keys) {
+      keys.add(key);
+    }
+    return keys;
+  }, [completedInstallState.keys, installedStoreState.installed]);
   const installedStoreSlugs = useMemo(() => {
-    const slugs = new Set(installedBySlug.keys());
-    for (const slug of completedInstallSlugs) {
+    const slugs = new Set(installedStoreState.slugs);
+    for (const slug of completedInstallState.slugs) {
       slugs.add(slug);
     }
     return slugs;
-  }, [completedInstallSlugs, installedBySlug]);
+  }, [completedInstallState.slugs, installedStoreState.slugs]);
 
   useEffect(() => {
     if (view !== "store" || lockedByChatMode) return;
@@ -732,30 +760,76 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
   }
 
   async function installStoreSkill(skill: ClawHubSkillCard) {
-    const existingJobId = installingBySlug[skill.slug];
-    const existingJob = existingJobId ? installJobs[existingJobId] : undefined;
+    const initialStoreKey = buildClawHubSkillKey(skill);
+    const initialJobId = installingByStoreKey[initialStoreKey];
+    const initialJob = initialJobId ? installJobs[initialJobId] : undefined;
     if (
       lockedByChatMode ||
-      installedStoreSlugs.has(skill.slug) ||
-      (existingJob && !TERMINAL_INSTALL_PHASES.has(existingJob.phase))
+      pendingInstallTokensRef.current.has(initialStoreKey) ||
+      installedStoreKeys.has(initialStoreKey) ||
+      (!skill.ownerHandle && installedStoreSlugs.has(skill.slug)) ||
+      (initialJob && !TERMINAL_INSTALL_PHASES.has(initialJob.phase))
     ) {
       return;
     }
+
+    const pendingToken = Symbol(initialStoreKey);
+    pendingInstallTokensRef.current.set(initialStoreKey, pendingToken);
+    setPendingInstallKeys(new Set(pendingInstallTokensRef.current.keys()));
     setStoreError(null);
     try {
+      const resolvedSkill = await resolveClawHubSkillOwner(skill);
+      const storeKey = buildClawHubSkillKey(resolvedSkill);
+      const activePendingToken = pendingInstallTokensRef.current.get(storeKey);
+      if (activePendingToken && activePendingToken !== pendingToken) return;
+      if (storeKey !== initialStoreKey) {
+        pendingInstallTokensRef.current.set(storeKey, pendingToken);
+        setPendingInstallKeys(new Set(pendingInstallTokensRef.current.keys()));
+      }
+      setStoreItems((prev) =>
+        prev.map((item) =>
+          item.slug === resolvedSkill.slug &&
+          item.updatedAt === resolvedSkill.updatedAt &&
+          (!item.ownerHandle || item.ownerHandle === resolvedSkill.ownerHandle)
+            ? resolvedSkill
+            : item,
+        ),
+      );
+      const existingJobId = installingByStoreKey[storeKey];
+      const existingJob = existingJobId ? installJobs[existingJobId] : undefined;
+      if (
+        installedStoreKeys.has(storeKey) ||
+        (existingJob && !TERMINAL_INSTALL_PHASES.has(existingJob.phase))
+      ) {
+        return;
+      }
       const job = await startSkillInstallJob({
-        source: buildClawHubDownloadUrl(skill.slug, skill.ownerHandle),
-        label: skill.displayName,
-        slug: skill.slug,
-        ownerHandle: skill.ownerHandle,
-        version: skill.latestVersion,
+        source: buildClawHubDownloadUrl(resolvedSkill.slug, resolvedSkill.ownerHandle),
+        label: resolvedSkill.displayName,
+        slug: resolvedSkill.slug,
+        ownerHandle: resolvedSkill.ownerHandle,
+        version: resolvedSkill.latestVersion,
         conflict: "backup",
       });
       setInstallJobs((prev) => ({ ...prev, [job.jobId]: job }));
-      setInstallingBySlug((prev) => ({ ...prev, [skill.slug]: job.jobId }));
+      setInstallingByStoreKey((prev) => ({
+        ...prev,
+        [initialStoreKey]: job.jobId,
+        [storeKey]: job.jobId,
+      }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setStoreError(msg || t("settings.skillsHubInstallFailed"));
+    } finally {
+      let changed = false;
+      for (const [storeKey, token] of pendingInstallTokensRef.current) {
+        if (token !== pendingToken) continue;
+        pendingInstallTokensRef.current.delete(storeKey);
+        changed = true;
+      }
+      if (changed) {
+        setPendingInstallKeys(new Set(pendingInstallTokensRef.current.keys()));
+      }
     }
   }
 
@@ -763,6 +837,8 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
     if (lockedByChatMode || isAlwaysEnabledSkillName(skill.name) || deletingSkillName) return;
     const skillName = skill.name;
     const sourceSlug = skill.source?.registry === "clawhub" ? skill.source.slug?.trim() || "" : "";
+    const sourceOwnerHandle =
+      skill.source?.registry === "clawhub" ? skill.source.ownerHandle?.trim() || null : null;
     setLoadError(null);
     setDeletingSkillName(skillName);
     try {
@@ -775,17 +851,24 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
       setSkills((prev) => prev.filter((item) => item.name !== skillName));
       setPreviewInstalledSkill((current) => (current?.name === skillName ? null : current));
       if (sourceSlug) {
-        setInstallingBySlug((prev) => {
-          if (!(sourceSlug in prev)) return prev;
+        const sourceKey = buildClawHubSkillKey({
+          slug: sourceSlug,
+          ownerHandle: sourceOwnerHandle,
+        });
+        setInstallingByStoreKey((prev) => {
+          if (!(sourceKey in prev)) return prev;
           const next = { ...prev };
-          delete next[sourceSlug];
+          delete next[sourceKey];
           return next;
         });
         setInstallJobs((prev) => {
           let changed = false;
           const next = { ...prev };
           for (const [jobId, job] of Object.entries(prev)) {
-            if (job.slug?.trim() === sourceSlug) {
+            if (
+              job.slug?.trim() === sourceSlug &&
+              (!sourceOwnerHandle || job.ownerHandle?.trim() === sourceOwnerHandle)
+            ) {
               delete next[jobId];
               changed = true;
             }
@@ -1339,8 +1422,10 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                       loadingMore={storeLoadingMore}
                       error={storeError}
                       cursor={storeCursor}
+                      installedKeys={installedStoreKeys}
                       installedSlugs={installedStoreSlugs}
-                      installingBySlug={installingBySlug}
+                      pendingInstallKeys={pendingInstallKeys}
+                      installingByStoreKey={installingByStoreKey}
                       installJobs={installJobs}
                       onSortChange={setStoreSort}
                       onLoadMore={() => void loadMoreStore()}
@@ -1925,8 +2010,10 @@ function SkillsStoreView(props: {
   loadingMore: boolean;
   error: string | null;
   cursor: string | null;
+  installedKeys: Set<string>;
   installedSlugs: Set<string>;
-  installingBySlug: Record<string, string>;
+  pendingInstallKeys: ReadonlySet<string>;
+  installingByStoreKey: Record<string, string>;
   installJobs: Record<string, SkillInstallJobSnapshot>;
   onSortChange: (value: ClawHubSort) => void;
   onLoadMore: () => void;
@@ -1940,8 +2027,10 @@ function SkillsStoreView(props: {
     loadingMore,
     error,
     cursor,
+    installedKeys,
     installedSlugs,
-    installingBySlug,
+    pendingInstallKeys,
+    installingByStoreKey,
     installJobs,
     onSortChange,
     onLoadMore,
@@ -1968,7 +2057,16 @@ function SkillsStoreView(props: {
     setPreviewError(null);
     setPreviewLoading(true);
 
-    void getClawHubSkillDetail(previewSkill.slug, previewSkill.ownerHandle)
+    void resolveClawHubSkillOwner(previewSkill)
+      .then((resolvedSkill) => {
+        if (
+          !cancelled &&
+          buildClawHubSkillKey(resolvedSkill) !== buildClawHubSkillKey(previewSkill)
+        ) {
+          setPreviewSkill(resolvedSkill);
+        }
+        return getClawHubSkillDetail(resolvedSkill.slug, resolvedSkill.ownerHandle);
+      })
       .then((detail) => {
         if (!cancelled) {
           setPreviewDetail(detail);
@@ -1992,16 +2090,22 @@ function SkillsStoreView(props: {
   }, [previewSkill, t]);
 
   function getInstallState(skill: ClawHubSkillCard): StoreSkillInstallState {
-    const jobId = installingBySlug[skill.slug];
+    const storeKey = buildClawHubSkillKey(skill);
+    const pending = pendingInstallKeys.has(storeKey);
+    const jobId = installingByStoreKey[storeKey];
     const job = jobId ? installJobs[jobId] : undefined;
     const terminalJob = Boolean(job && TERMINAL_INSTALL_PHASES.has(job.phase));
-    const done = installedSlugs.has(skill.slug) || job?.phase === "done";
+    const done =
+      installedKeys.has(storeKey) ||
+      (!skill.ownerHandle && installedSlugs.has(skill.slug)) ||
+      job?.phase === "done";
     return {
       done,
-      installing: Boolean(job && !terminalJob),
+      installing: pending || Boolean(job && !terminalJob),
+      pending,
       terminalJob,
       job,
-      progress: job ? getInstallProgressPercent(job) : null,
+      progress: pending ? null : job ? getInstallProgressPercent(job) : null,
     };
   }
 
@@ -2114,13 +2218,13 @@ function SkillsStoreView(props: {
               )}
             >
               {items.map((skill) => {
-                const { done, installing, terminalJob, job, progress } = getInstallState(skill);
+                const { done, installing, pending, job, progress } = getInstallState(skill);
                 const link = buildClawHubSkillUrl(skill);
 
                 return (
                   // biome-ignore lint/a11y/useSemanticElements: The card contains nested controls and cannot be a native button.
                   <div
-                    key={skill.slug}
+                    key={buildClawHubSkillKey(skill)}
                     role="button"
                     tabIndex={0}
                     aria-label={skill.displayName}
@@ -2210,25 +2314,27 @@ function SkillsStoreView(props: {
                         ) : null}
                       </div>
 
-                      {job && !done && !terminalJob ? (
+                      {installing && !done ? (
                         <div className="space-y-1.5">
                           <div className="flex items-center justify-between gap-3 text-[10.5px] text-muted-foreground">
-                            <span>{installPhaseLabel(job, t)}</span>
-                            <span className="flex items-center gap-1.5">
-                              {formatInstallProgress(job)}
-                              <button
-                                type="button"
-                                title={t("settings.cancel")}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  void cancelSkillInstallJob(job.jobId).catch(() => undefined);
-                                }}
-                                onKeyDown={(event) => event.stopPropagation()}
-                                className="text-muted-foreground/70 transition-colors hover:text-foreground"
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            </span>
+                            <span>{installPhaseLabel(pending ? undefined : job, t)}</span>
+                            {job && !pending ? (
+                              <span className="flex items-center gap-1.5">
+                                {formatInstallProgress(job)}
+                                <button
+                                  type="button"
+                                  title={t("settings.cancel")}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void cancelSkillInstallJob(job.jobId).catch(() => undefined);
+                                  }}
+                                  onKeyDown={(event) => event.stopPropagation()}
+                                  className="text-muted-foreground/70 transition-colors hover:text-foreground"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </span>
+                            ) : null}
                           </div>
                           <div className="h-1.5 overflow-hidden rounded-full bg-foreground/[0.08]">
                             {progress === null ? (
@@ -2243,7 +2349,7 @@ function SkillsStoreView(props: {
                         </div>
                       ) : null}
 
-                      {job?.phase === "error" && job.error && !done ? (
+                      {job?.phase === "error" && job.error && !done && !pending ? (
                         <div className="rounded-xl border border-destructive/25 bg-destructive/5 px-3 py-2 text-[11px] text-destructive">
                           {job.error}
                         </div>
@@ -2259,6 +2365,7 @@ function SkillsStoreView(props: {
                             "border-border/55 bg-background/75 text-foreground/85 backdrop-blur-md",
                         )}
                         disabled={done || installing}
+                        aria-busy={installing}
                         onClick={(event) => {
                           event.stopPropagation();
                           onInstall(skill);
@@ -2273,7 +2380,7 @@ function SkillsStoreView(props: {
                           <Cloud className="h-3.5 w-3.5" />
                         )}
                         {installing
-                          ? installPhaseLabel(job, t)
+                          ? installPhaseLabel(pending ? undefined : job, t)
                           : done
                             ? t("settings.skillsStoreInstalled")
                             : t("settings.skillsStoreInstall")}
@@ -2337,7 +2444,7 @@ function SkillsStorePreviewDrawer(props: {
   const supportedOs = detail?.supportedOs ?? [];
   const supportedSystems = detail?.supportedSystems ?? [];
   const actionLabel = installState.installing
-    ? installPhaseLabel(installState.job, t)
+    ? installPhaseLabel(installState.pending ? undefined : installState.job, t)
     : installState.done
       ? t("settings.skillsStoreInstalled")
       : t("settings.skillsStoreInstall");
@@ -2439,11 +2546,15 @@ function SkillsStorePreviewDrawer(props: {
               />
             </div>
 
-            {installState.job && installState.installing ? (
+            {installState.installing && !installState.done ? (
               <div className="rounded-2xl border border-border/50 bg-background/75 p-3 backdrop-blur-md">
                 <div className="flex items-center justify-between gap-3 text-[11px] text-foreground/85">
-                  <span>{installPhaseLabel(installState.job, t)}</span>
-                  <span>{formatInstallProgress(installState.job)}</span>
+                  <span>
+                    {installPhaseLabel(installState.pending ? undefined : installState.job, t)}
+                  </span>
+                  {installState.job && !installState.pending ? (
+                    <span>{formatInstallProgress(installState.job)}</span>
+                  ) : null}
                 </div>
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-foreground/[0.08]">
                   {installState.progress === null ? (
@@ -2458,7 +2569,10 @@ function SkillsStorePreviewDrawer(props: {
               </div>
             ) : null}
 
-            {installState.job?.phase === "error" && installState.job.error && !installState.done ? (
+            {installState.job?.phase === "error" &&
+            installState.job.error &&
+            !installState.done &&
+            !installState.pending ? (
               <div className="rounded-2xl border border-destructive/25 bg-destructive/5 p-3 text-[12px] text-destructive">
                 {installState.job.error}
               </div>
@@ -2569,6 +2683,7 @@ function SkillsStorePreviewDrawer(props: {
                 "border-border/55 bg-background/75 text-foreground/85 backdrop-blur-md",
             )}
             disabled={installState.done || installState.installing}
+            aria-busy={installState.installing}
             onClick={onInstall}
           >
             {installState.installing ? (
@@ -2644,8 +2759,9 @@ function StorePreviewField(props: { label: string; value?: string | null }) {
 function dedupeStoreItems(items: ClawHubSkillCard[]) {
   const seen = new Set<string>();
   return items.filter((item) => {
-    if (seen.has(item.slug)) return false;
-    seen.add(item.slug);
+    const storeKey = buildClawHubSkillKey(item);
+    if (seen.has(storeKey)) return false;
+    seen.add(storeKey);
     return true;
   });
 }

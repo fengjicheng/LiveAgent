@@ -355,7 +355,12 @@ test("Codex Chat Completions streams forward reasoning effort", async () => {
 
   const result = localProviders.streamSimpleByApi(
     model,
-    { messages: [] },
+    {
+      // toolChoice 只在请求真正携带 tools 时下发（无工具下发会被严格
+      // OpenAI 兼容端点 400），透传断言需要一个非空 tools。
+      tools: [{ name: "echo", description: "Echo tool", parameters: { type: "object" } }],
+      messages: [],
+    },
     { reasoning: "high", toolChoice: "auto" },
   );
 

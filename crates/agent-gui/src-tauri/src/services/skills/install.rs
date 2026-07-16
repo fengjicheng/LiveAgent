@@ -28,7 +28,10 @@ fn unique_suffix() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    format!("{nanos}-{}", UNIQUE_SUFFIX_SEQ.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "{nanos}-{}",
+        UNIQUE_SUFFIX_SEQ.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn staging_root(dest_root: &Path) -> PathBuf {
@@ -268,7 +271,10 @@ pub(crate) fn install_skill_dir(
     })
 }
 
-pub(crate) fn normalize_conflict(value: Option<&str>, default_value: &str) -> Result<String, String> {
+pub(crate) fn normalize_conflict(
+    value: Option<&str>,
+    default_value: &str,
+) -> Result<String, String> {
     let raw = value.unwrap_or(default_value).trim();
     match raw {
         "backup" | "fail" | "overwrite" => Ok(raw.to_string()),
@@ -284,8 +290,123 @@ pub(crate) fn normalize_method(value: Option<&str>) -> Result<String, String> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SkillNameCompatibilityTransform {
+    pub(crate) original_name: String,
+    pub(crate) normalized_name: String,
+}
+
+fn is_clawhub_download_source(source: &str) -> bool {
+    reqwest::Url::parse(source)
+        .ok()
+        .map(|url| url.host_str() == Some("clawhub.ai") && url.path() == "/api/v1/download")
+        .unwrap_or(false)
+}
+
+fn registry_skill_slug(value: &str) -> &str {
+    value
+        .trim()
+        .trim_start_matches('@')
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+}
+
+fn rewrite_skill_metadata_name(metadata_file: &Path, normalized_name: &str) -> Result<(), String> {
+    if is_skill_json(metadata_file) {
+        let content = fs::read_to_string(metadata_file)
+            .map_err(|e| format!("Failed to read {}: {e}", metadata_file.display()))?;
+        let mut value = serde_json::from_str::<Value>(&content)
+            .map_err(|e| format!("Failed to parse {}: {e}", metadata_file.display()))?;
+        let object = value.as_object_mut().ok_or_else(|| {
+            format!(
+                "Skill metadata must be an object: {}",
+                metadata_file.display()
+            )
+        })?;
+        object.insert(
+            "name".to_string(),
+            Value::String(normalized_name.to_string()),
+        );
+        let next = serde_json::to_vec_pretty(&value)
+            .map_err(|e| format!("Failed to serialize {}: {e}", metadata_file.display()))?;
+        return fs::write(metadata_file, next)
+            .map_err(|e| format!("Failed to update {}: {e}", metadata_file.display()));
+    }
+
+    let content = fs::read_to_string(metadata_file)
+        .map_err(|e| format!("Failed to read {}: {e}", metadata_file.display()))?;
+    let (yaml, body) = split_frontmatter(&content)?;
+    if yaml.lines().count() == 1 && frontmatter_keys(&yaml).len() > 1 {
+        return Err("Cannot safely normalize an inline Skill frontmatter name".to_string());
+    }
+
+    let mut replaced = false;
+    let mut lines = Vec::new();
+    for line in yaml.lines() {
+        let is_top_level = !line
+            .chars()
+            .next()
+            .map(char::is_whitespace)
+            .unwrap_or(false);
+        let is_name = is_top_level
+            && line
+                .split_once(':')
+                .map(|(key, _)| key.trim() == "name")
+                .unwrap_or(false);
+        if is_name {
+            lines.push(format!("name: {normalized_name}"));
+            replaced = true;
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    if !replaced {
+        return Err(format!(
+            "Missing top-level Skill name in {}",
+            metadata_file.display()
+        ));
+    }
+
+    let next = format!("---\n{}\n---\n{}", lines.join("\n"), body);
+    fs::write(metadata_file, next)
+        .map_err(|e| format!("Failed to update {}: {e}", metadata_file.display()))
+}
+
+pub(crate) fn normalize_clawhub_candidate_name(
+    candidate: &Path,
+    slug: &str,
+) -> Result<Option<SkillNameCompatibilityTransform>, String> {
+    let metadata_file = metadata_file_for(candidate).ok_or_else(|| {
+        format!(
+            "No SKILL.md, skill.md, skill.json, or README.md found in {}",
+            candidate.display()
+        )
+    })?;
+    let metadata = read_skill_metadata_file(&metadata_file)?;
+    let Some(original_name) = metadata.name else {
+        return Ok(None);
+    };
+    if sanitize_skill_name(&original_name).is_ok() {
+        return Ok(None);
+    }
+
+    let normalized_name = normalize_skill_name(&original_name);
+    let expected_name = registry_skill_slug(slug);
+    if normalized_name != expected_name || sanitize_skill_name(expected_name).is_err() {
+        return Ok(None);
+    }
+
+    rewrite_skill_metadata_name(&metadata_file, expected_name)?;
+    Ok(Some(SkillNameCompatibilityTransform {
+        original_name,
+        normalized_name,
+    }))
+}
+
 fn build_skill_source_metadata(
     payload: &serde_json::Map<String, Value>,
+    compatibility: Option<&SkillNameCompatibilityTransform>,
 ) -> Result<Option<Vec<u8>>, String> {
     let Some(slug) = object_string(payload, "slug") else {
         return Ok(None);
@@ -297,6 +418,9 @@ fn build_skill_source_metadata(
             .or_else(|| object_string(payload, "owner")),
         "version": object_string(payload, "version"),
         "publishedAt": payload.get("publishedAt").and_then(Value::as_u64),
+        "originalName": compatibility.map(|value| value.original_name.as_str()),
+        "normalizedName": compatibility.map(|value| value.normalized_name.as_str()),
+        "compatibilityTransform": compatibility.map(|_| "normalize-agent-skill-name"),
     });
     serde_json::to_vec_pretty(&metadata)
         .map(Some)
@@ -327,8 +451,6 @@ where
     let name_override = object_string(payload, "name")
         .map(sanitize_skill_name)
         .transpose()?;
-    let source_meta = build_skill_source_metadata(payload)?;
-
     if should_cancel() {
         return Err(INSTALL_CANCELLED_ERROR.to_string());
     }
@@ -375,14 +497,37 @@ where
     if name_override.is_some() && candidates.len() != 1 {
         return Err("name can only be used when exactly one skill is installed".to_string());
     }
+    let normalize_clawhub_name = candidates.len() == 1 && is_clawhub_download_source(source);
+    let registry_slug = object_string(payload, "slug").map(ToOwned::to_owned);
 
     let mut results = Vec::new();
     for candidate in candidates {
         if should_cancel() {
             return Err(INSTALL_CANCELLED_ERROR.to_string());
         }
+        let compatibility = if normalize_clawhub_name {
+            registry_slug
+                .as_deref()
+                .map(|slug| normalize_clawhub_candidate_name(&candidate, slug))
+                .transpose()?
+                .flatten()
+        } else {
+            None
+        };
+        if let Some(transform) = compatibility.as_ref() {
+            on_progress(SkillInstallProgressUpdate {
+                phase: "validating",
+                downloaded_bytes: None,
+                total_bytes: None,
+                message: Some(format!(
+                    "Normalizing Skill name '{}' to '{}' for Agent Skills compatibility",
+                    transform.original_name, transform.normalized_name
+                )),
+            });
+        }
         let metadata = read_skill_metadata_from_dir(&candidate)?;
         let skill_name = name_override.as_deref().unwrap_or(&metadata.name);
+        let source_meta = build_skill_source_metadata(payload, compatibility.as_ref())?;
         ensure_not_builtin_skill_management_target(root, skill_name, "install")?;
         on_progress(SkillInstallProgressUpdate {
             phase: "installing",

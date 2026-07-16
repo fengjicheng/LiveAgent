@@ -35,6 +35,16 @@
 
 另有 UI 专用的后台安装 job 动作（不在 agent 工具 schema 内）：`install_start` 启动带进度的后台安装线程、`install_status` 轮询快照、`install_cancel` 协作式取消（下载与逐 skill 安装循环检查取消标记，终态为 `phase: "cancelled"`）。
 
+## ClawHub 兼容边界
+
+| 场景 | 处理规则 |
+|---|---|
+| Store identity | ClawHub Skill 以 `ownerHandle + slug` 作为唯一身份；React key、安装任务、已安装状态和 `_meta.json` 回读不得只按 slug 合并。 |
+| list 缺 owner | `/api/v1/skills` 条目缺少发布者时，详情/安装前通过精确搜索按 `updatedAt`、version、downloads 等字段懒解析 owner；无法唯一匹配时明确失败，不盲选发布者。 |
+| 下载/详情 | 所有已解析的详情和 `/api/v1/download` 请求都携带 `ownerHandle`，避免重名 slug 返回 HTTP 409。 |
+| 非便携名称 | 仍严格执行 Agent Skills 小写名称规范；只有 ClawHub 单 Skill 包的非法名称归一化后与 registry slug 完全一致时，才改写临时副本并把原名、规范名和转换类型写入 `_meta.json`。 |
+| 原始内容 | 名称兼容转换只发生在下载临时目录，不修改注册表下载包；其他名称不匹配继续按严格校验拒绝。 |
+
 ## Skills 选择与 Prompt 注入
 
 | 阶段 | 说明 |
@@ -82,7 +92,7 @@ Registry card 会被归一化为统一的 `McpRegistryCard`，其中 `installDra
 
 | 区域 | 注意事项 |
 |---|---|
-| Skills Hub | GUI/WebUI 都有 installed/store、preview drawer、install job 状态和 installedBySlug 推导。 |
+| Skills Hub | GUI/WebUI 都有 installed/store、preview drawer、install job 状态，并以 `ownerHandle + slug` 推导 ClawHub 安装身份。 |
 | MCP Hub | GUI/WebUI 都有 server form、registry browser、preview drawer、install draft。 |
 | i18n | 双端有各自 `i18n/config.ts`，新增文案要同步。 |
 | settings sync | Skills/MCP settings 从 GUI 经 Gateway 同步到 WebUI，WebUI 修改再回写 GUI。 |

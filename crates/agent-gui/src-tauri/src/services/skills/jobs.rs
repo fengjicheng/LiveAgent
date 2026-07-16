@@ -17,6 +17,7 @@ pub(crate) struct SkillInstallJobState {
     pub(crate) source: String,
     pub(crate) label: Option<String>,
     pub(crate) slug: Option<String>,
+    pub(crate) owner_handle: Option<String>,
     pub(crate) version: Option<String>,
     pub(crate) downloaded_bytes: u64,
     pub(crate) total_bytes: Option<u64>,
@@ -52,6 +53,7 @@ pub(crate) fn install_job_snapshot(job: &SkillInstallJobState) -> SystemSkillIns
         source: job.source.clone(),
         label: job.label.clone(),
         slug: job.slug.clone(),
+        owner_handle: job.owner_handle.clone(),
         version: job.version.clone(),
         downloaded_bytes: job.downloaded_bytes,
         total_bytes: job.total_bytes,
@@ -141,6 +143,9 @@ pub(crate) fn start_install_job_from_payload(
         .to_string();
     let label = object_string(payload, "label").map(ToOwned::to_owned);
     let slug = object_string(payload, "slug").map(ToOwned::to_owned);
+    let owner_handle = object_string(payload, "ownerHandle")
+        .or_else(|| object_string(payload, "owner"))
+        .map(ToOwned::to_owned);
     let version = object_string(payload, "version").map(ToOwned::to_owned);
     normalize_conflict(object_string(payload, "conflict"), "backup")?;
     normalize_method(object_string(payload, "method"))?;
@@ -154,6 +159,7 @@ pub(crate) fn start_install_job_from_payload(
         source,
         label,
         slug,
+        owner_handle,
         version,
         downloaded_bytes: 0,
         total_bytes: None,

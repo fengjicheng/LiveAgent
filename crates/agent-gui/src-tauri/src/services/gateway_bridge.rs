@@ -154,6 +154,7 @@ fn build_proto_history_list_response(
             model: item.model,
             session_id: item.session_id.unwrap_or_default(),
             cwd: item.cwd.unwrap_or_default(),
+            selected_model_json: item.selected_model_json.unwrap_or_default(),
             is_pinned: item.is_pinned,
             pinned_at: item.pinned_at.unwrap_or_default(),
             is_shared: item.is_shared,
@@ -341,7 +342,12 @@ pub async fn handle_file_mention_list(
         .filter(|value| *value > 0);
 
     tauri::async_runtime::spawn_blocking(move || {
-        fs_mention_list_sync(request.workdir, max_results, Some(request.query))
+        fs_mention_list_sync(
+            request.workdir,
+            max_results,
+            Some(request.query),
+            request.show_hidden,
+        )
     })
     .await
     .map_err(|e| format!("gateway file mention list join failed: {e}"))?
@@ -352,6 +358,7 @@ pub async fn handle_file_mention_list(
             .map(|entry| proto::FileMentionEntry {
                 path: entry.path,
                 kind: entry.kind,
+                hidden: entry.hidden,
             })
             .collect(),
         truncated: response.truncated,
@@ -431,7 +438,14 @@ pub async fn handle_fs_list(
         .filter(|value| *value > 0);
 
     tauri::async_runtime::spawn_blocking(move || {
-        fs_list_sync(request.workdir, path, depth, offset, max_results)
+        fs_list_sync(
+            request.workdir,
+            path,
+            depth,
+            offset,
+            max_results,
+            request.show_hidden,
+        )
     })
     .await
     .map_err(|e| format!("gateway fs list join failed: {e}"))?
@@ -452,6 +466,7 @@ pub async fn handle_fs_list(
                 .map(|entry| proto::FsListEntry {
                     path: entry.path,
                     kind: entry.kind,
+                    hidden: entry.hidden,
                 })
                 .collect(),
         }
@@ -1495,6 +1510,7 @@ fn build_proto_conversation_summary_from_record(
         model: record.model.clone(),
         session_id: record.session_id.clone().unwrap_or_default(),
         cwd: record.cwd.clone().unwrap_or_default(),
+        selected_model_json: record.selected_model_json.clone().unwrap_or_default(),
         is_pinned: record.is_pinned,
         pinned_at: record.pinned_at.unwrap_or_default(),
         is_shared: record.is_shared,
@@ -1514,6 +1530,7 @@ fn build_proto_conversation_summary(
         model: summary.model,
         session_id: summary.session_id.unwrap_or_default(),
         cwd: summary.cwd.unwrap_or_default(),
+        selected_model_json: summary.selected_model_json.unwrap_or_default(),
         is_pinned: summary.is_pinned,
         pinned_at: summary.pinned_at.unwrap_or_default(),
         is_shared: summary.is_shared,
@@ -1546,6 +1563,7 @@ fn history_list_json(page: chat_history::ChatHistoryListResponse) -> Value {
                 "model": item.model,
                 "session_id": item.session_id.unwrap_or_default(),
                 "cwd": item.cwd.unwrap_or_default(),
+                "selected_model_json": item.selected_model_json.unwrap_or_default(),
                 "is_pinned": item.is_pinned,
                 "pinned_at": item.pinned_at.unwrap_or_default(),
                 "is_shared": item.is_shared,

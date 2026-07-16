@@ -33,8 +33,12 @@ export type SkillSummary = {
 export type SkillSourceMetadata = {
   registry: string;
   slug: string;
+  ownerHandle?: string | null;
   version?: string | null;
   publishedAt?: number | null;
+  originalName?: string | null;
+  normalizedName?: string | null;
+  compatibilityTransform?: string | null;
 };
 
 export type SkillDiscovery = {
@@ -93,6 +97,7 @@ export type SkillInstallJobSnapshot = {
   source: string;
   label?: string | null;
   slug?: string | null;
+  ownerHandle?: string | null;
   version?: string | null;
   downloadedBytes: number;
   totalBytes?: number | null;

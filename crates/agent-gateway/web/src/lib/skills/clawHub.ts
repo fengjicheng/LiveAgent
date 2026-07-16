@@ -43,10 +43,6 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function asNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
 function asNullableNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -62,7 +58,13 @@ function buildClawHubWebUrl(ownerHandle: string | null, slug: string) {
   return `${CLAWHUB_API_BASE}/${encodeURIComponent(ownerHandle)}/${encodeURIComponent(slug)}`;
 }
 
-function normalizeSkillCard(raw: unknown): ClawHubSkillCard | null {
+export function buildClawHubSkillKey(skill: Pick<ClawHubSkillCard, "slug" | "ownerHandle">) {
+  const slug = skill.slug.trim().toLowerCase();
+  const ownerHandle = skill.ownerHandle?.trim().replace(/^@+/, "").toLowerCase();
+  return `clawhub:${ownerHandle || "?"}/${slug}`;
+}
+
+export function normalizeClawHubSkillCard(raw: unknown): ClawHubSkillCard | null {
   const item = asRecord(raw);
   const slug = asString(item.slug);
   if (!slug) return null;
@@ -78,9 +80,14 @@ function normalizeSkillCard(raw: unknown): ClawHubSkillCard | null {
     summary: asString(item.summary) ?? "",
     latestVersion:
       asString(latestVersion.version) ?? asString(tags.latest) ?? asString(item.version),
-    downloads: asNumber(stats.downloads),
-    stars: asNumber(stats.stars),
-    installsCurrent: asNumber(stats.installsCurrent),
+    downloads: asNullableNumber(item.downloads) ?? asNullableNumber(stats.downloads) ?? 0,
+    stars: asNullableNumber(item.stars) ?? asNullableNumber(stats.stars) ?? 0,
+    installsCurrent:
+      asNullableNumber(item.installsCurrent) ??
+      asNullableNumber(item.installs) ??
+      asNullableNumber(stats.installsCurrent) ??
+      asNullableNumber(stats.installs) ??
+      0,
     updatedAt: asNullableNumber(item.updatedAt),
     ownerHandle,
     webUrl: asString(item.webUrl) ?? buildClawHubWebUrl(ownerHandle, slug),
@@ -96,7 +103,7 @@ function normalizeSkillDetail(raw: unknown): ClawHubSkillDetail | null {
   const owner = asRecord(payload.owner ?? item.owner);
   const metadata = asRecord(payload.metadata ?? item.metadata);
   const moderation = asRecord(payload.moderation ?? item.moderation);
-  const card = normalizeSkillCard({
+  const card = normalizeClawHubSkillCard({
     ...item,
     latestVersion,
     owner,
@@ -118,14 +125,28 @@ function normalizeSkillDetail(raw: unknown): ClawHubSkillDetail | null {
   };
 }
 
+export class ClawHubHttpError extends Error {
+  readonly status: number;
+  readonly body: string;
+
+  constructor(status: number, body: string) {
+    const detail = body.trim();
+    super(`ClawHub request failed with HTTP ${status}${detail ? `: ${detail}` : ""}`);
+    this.name = "ClawHubHttpError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
 async function fetchClawHubJson(url: URL): Promise<unknown> {
   const response = await fetch(url.toString(), {
     headers: { Accept: "application/json" },
   });
+  const body = await response.text();
   if (!response.ok) {
-    throw new Error(`ClawHub request failed with HTTP ${response.status}`);
+    throw new ClawHubHttpError(response.status, body);
   }
-  return response.json();
+  return JSON.parse(body) as unknown;
 }
 
 export async function listClawHubSkills(params: {
@@ -143,7 +164,9 @@ export async function listClawHubSkills(params: {
 
   const json = asRecord(await fetchClawHubJson(url));
   const items = Array.isArray(json.items)
-    ? json.items.map(normalizeSkillCard).filter((item): item is ClawHubSkillCard => Boolean(item))
+    ? json.items
+        .map(normalizeClawHubSkillCard)
+        .filter((item): item is ClawHubSkillCard => Boolean(item))
     : [];
   return {
     items,
@@ -162,8 +185,76 @@ export async function searchClawHubSkills(params: {
 
   const json = asRecord(await fetchClawHubJson(url));
   return Array.isArray(json.results)
-    ? json.results.map(normalizeSkillCard).filter((item): item is ClawHubSkillCard => Boolean(item))
+    ? json.results
+        .map(normalizeClawHubSkillCard)
+        .filter((item): item is ClawHubSkillCard => Boolean(item))
     : [];
+}
+
+function narrowOwnerCandidates(
+  candidates: ClawHubSkillCard[],
+  predicate: (candidate: ClawHubSkillCard) => boolean,
+) {
+  const narrowed = candidates.filter(predicate);
+  return narrowed.length > 0 ? narrowed : candidates;
+}
+
+export function selectClawHubOwnerCandidate(
+  skill: ClawHubSkillCard,
+  candidates: ClawHubSkillCard[],
+): ClawHubSkillCard | null {
+  let exact = candidates.filter(
+    (candidate) =>
+      candidate.slug.toLowerCase() === skill.slug.toLowerCase() && Boolean(candidate.ownerHandle),
+  );
+  if (exact.length === 1) return exact[0];
+  if (exact.length === 0) return null;
+
+  if (skill.updatedAt !== null) {
+    exact = narrowOwnerCandidates(exact, (candidate) => candidate.updatedAt === skill.updatedAt);
+    if (exact.length === 1) return exact[0];
+  }
+  if (skill.latestVersion) {
+    exact = narrowOwnerCandidates(
+      exact,
+      (candidate) => candidate.latestVersion === skill.latestVersion,
+    );
+    if (exact.length === 1) return exact[0];
+  }
+  if (skill.downloads > 0) {
+    exact = narrowOwnerCandidates(exact, (candidate) => candidate.downloads === skill.downloads);
+    if (exact.length === 1) return exact[0];
+  }
+  if (skill.summary) {
+    exact = narrowOwnerCandidates(exact, (candidate) => candidate.summary === skill.summary);
+    if (exact.length === 1) return exact[0];
+  }
+  if (skill.displayName) {
+    exact = narrowOwnerCandidates(
+      exact,
+      (candidate) => candidate.displayName === skill.displayName,
+    );
+  }
+  return exact.length === 1 ? exact[0] : null;
+}
+
+export async function resolveClawHubSkillOwner(skill: ClawHubSkillCard): Promise<ClawHubSkillCard> {
+  if (skill.ownerHandle) return skill;
+
+  const candidates = await searchClawHubSkills({ query: skill.slug, limit: 50 });
+  const resolved = selectClawHubOwnerCandidate(skill, candidates);
+  if (!resolved?.ownerHandle) {
+    throw new Error(
+      `ClawHub skill "${skill.slug}" has multiple publishers, but the catalog item does not identify one`,
+    );
+  }
+
+  return {
+    ...skill,
+    ownerHandle: resolved.ownerHandle,
+    webUrl: resolved.webUrl ?? buildClawHubWebUrl(resolved.ownerHandle, skill.slug),
+    downloadUrl: buildClawHubDownloadUrl(skill.slug, resolved.ownerHandle),
+  };
 }
 
 export async function getClawHubSkillDetail(

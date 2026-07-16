@@ -40,25 +40,6 @@ pub(crate) fn json_string(item: &serde_json::Map<String, Value>, key: &str) -> O
         .map(ToOwned::to_owned)
 }
 
-pub(crate) fn json_u64(item: &serde_json::Map<String, Value>, key: &str) -> u64 {
-    match item.get(key) {
-        Some(Value::Number(number)) => number
-            .as_u64()
-            .or_else(|| number.as_i64().and_then(|value| u64::try_from(value).ok()))
-            .or_else(|| {
-                number.as_f64().and_then(|value| {
-                    if value.is_finite() && value >= 0.0 {
-                        Some(value as u64)
-                    } else {
-                        None
-                    }
-                })
-            })
-            .unwrap_or(0),
-        _ => 0,
-    }
-}
-
 pub(crate) fn json_optional_u64(item: &serde_json::Map<String, Value>, key: &str) -> Option<u64> {
     item.get(key).and_then(|value| match value {
         Value::Number(number) => number
@@ -88,7 +69,10 @@ pub(crate) fn clawhub_download_url_for_slug(
         .append_pair("slug", slug)
         .append_pair("tag", tag);
     // ClawHub 对重名 slug 返回 409，必须带 ownerHandle 消歧。
-    if let Some(owner) = owner_handle.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(owner) = owner_handle
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         url.query_pairs_mut().append_pair("ownerHandle", owner);
     }
     Ok(url.into())
@@ -123,10 +107,16 @@ pub(crate) fn normalize_clawhub_skill_card(raw: &Value) -> Option<SystemClawHubS
         display_name: json_string(item, "displayName").unwrap_or(slug),
         summary: json_string(item, "summary").unwrap_or_default(),
         latest_version,
-        downloads: stats.map(|value| json_u64(value, "downloads")).unwrap_or(0),
-        stars: stats.map(|value| json_u64(value, "stars")).unwrap_or(0),
-        installs_current: stats
-            .map(|value| json_u64(value, "installsCurrent"))
+        downloads: json_optional_u64(item, "downloads")
+            .or_else(|| stats.and_then(|value| json_optional_u64(value, "downloads")))
+            .unwrap_or(0),
+        stars: json_optional_u64(item, "stars")
+            .or_else(|| stats.and_then(|value| json_optional_u64(value, "stars")))
+            .unwrap_or(0),
+        installs_current: json_optional_u64(item, "installsCurrent")
+            .or_else(|| json_optional_u64(item, "installs"))
+            .or_else(|| stats.and_then(|value| json_optional_u64(value, "installsCurrent")))
+            .or_else(|| stats.and_then(|value| json_optional_u64(value, "installs")))
             .unwrap_or(0),
         updated_at: json_optional_u64(item, "updatedAt"),
         owner_handle,

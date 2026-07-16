@@ -29,8 +29,12 @@ pub struct SystemReadSkillMetadataResponse {
 pub struct SystemSkillSourceMetadata {
     pub registry: String,
     pub slug: String,
+    pub owner_handle: Option<String>,
     pub version: Option<String>,
     pub published_at: Option<u64>,
+    pub original_name: Option<String>,
+    pub normalized_name: Option<String>,
+    pub compatibility_transform: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -138,6 +142,7 @@ pub struct SystemSkillInstallJobSnapshot {
     pub source: String,
     pub label: Option<String>,
     pub slug: Option<String>,
+    pub owner_handle: Option<String>,
     pub version: Option<String>,
     pub downloaded_bytes: u64,
     pub total_bytes: Option<u64>,

@@ -69,6 +69,7 @@ test("normalizeRightDockProjectState migrates the full legacy tabs shape", () =>
           query: "abc",
           selectedPath: "src/x.ts",
           expandedPaths: ["", "src"],
+          showHidden: true,
           revision: 2,
           stateVersion: 3,
         },
@@ -93,6 +94,7 @@ test("normalizeRightDockProjectState migrates the full legacy tabs shape", () =>
         query: "abc",
         selectedPath: "src/x.ts",
         expandedPaths: ["", "src"],
+        showHidden: true,
         revision: 2,
       },
     },
@@ -486,6 +488,7 @@ test("right dock merge accepts legacy-shaped incoming project state", () => {
               query: "web",
               selectedPath: "web.ts",
               expandedPaths: ["", "src"],
+              showHidden: true,
               revision: 1,
               stateVersion: 2,
             },
@@ -508,6 +511,7 @@ test("right dock merge accepts legacy-shaped incoming project state", () => {
     query: "web",
     selectedPath: "web.ts",
     expandedPaths: ["", "src"],
+    showHidden: true,
     revision: 1,
   });
 });

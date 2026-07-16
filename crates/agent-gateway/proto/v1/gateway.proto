@@ -729,6 +729,7 @@ message ConversationSummary {
   bool is_pinned = 10;
   int64 pinned_at = 11;
   bool is_shared = 12;
+  string selected_model_json = 13;
 }
 
 message HistoryGetRequest {
@@ -915,11 +916,13 @@ message FileMentionListRequest {
   string workdir = 1;
   uint32 max_results = 2;
   string query = 3;
+  optional bool show_hidden = 4;
 }
 
 message FileMentionEntry {
   string path = 1;
   string kind = 2;
+  bool hidden = 3;
 }
 
 message FileMentionListResponse {
@@ -969,11 +972,13 @@ message FsListRequest {
   uint32 depth = 3;
   uint32 offset = 4;
   uint32 max_results = 5;
+  optional bool show_hidden = 6;
 }
 
 message FsListEntry {
   string path = 1;
   string kind = 2;
+  bool hidden = 3;
 }
 
 message FsListResponse {

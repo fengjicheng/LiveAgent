@@ -6902,21 +6902,22 @@ func (x *HistoryListResponse) GetTotalCount() int32 {
 }
 
 type ConversationSummary struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
-	CreatedAt     int64                  `protobuf:"varint,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     int64                  `protobuf:"varint,4,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	MessageCount  int32                  `protobuf:"varint,5,opt,name=message_count,json=messageCount,proto3" json:"message_count,omitempty"`
-	ProviderId    string                 `protobuf:"bytes,6,opt,name=provider_id,json=providerId,proto3" json:"provider_id,omitempty"`
-	Model         string                 `protobuf:"bytes,7,opt,name=model,proto3" json:"model,omitempty"`
-	SessionId     string                 `protobuf:"bytes,8,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Cwd           string                 `protobuf:"bytes,9,opt,name=cwd,proto3" json:"cwd,omitempty"`
-	IsPinned      bool                   `protobuf:"varint,10,opt,name=is_pinned,json=isPinned,proto3" json:"is_pinned,omitempty"`
-	PinnedAt      int64                  `protobuf:"varint,11,opt,name=pinned_at,json=pinnedAt,proto3" json:"pinned_at,omitempty"`
-	IsShared      bool                   `protobuf:"varint,12,opt,name=is_shared,json=isShared,proto3" json:"is_shared,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Title             string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	CreatedAt         int64                  `protobuf:"varint,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt         int64                  `protobuf:"varint,4,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	MessageCount      int32                  `protobuf:"varint,5,opt,name=message_count,json=messageCount,proto3" json:"message_count,omitempty"`
+	ProviderId        string                 `protobuf:"bytes,6,opt,name=provider_id,json=providerId,proto3" json:"provider_id,omitempty"`
+	Model             string                 `protobuf:"bytes,7,opt,name=model,proto3" json:"model,omitempty"`
+	SessionId         string                 `protobuf:"bytes,8,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Cwd               string                 `protobuf:"bytes,9,opt,name=cwd,proto3" json:"cwd,omitempty"`
+	IsPinned          bool                   `protobuf:"varint,10,opt,name=is_pinned,json=isPinned,proto3" json:"is_pinned,omitempty"`
+	PinnedAt          int64                  `protobuf:"varint,11,opt,name=pinned_at,json=pinnedAt,proto3" json:"pinned_at,omitempty"`
+	IsShared          bool                   `protobuf:"varint,12,opt,name=is_shared,json=isShared,proto3" json:"is_shared,omitempty"`
+	SelectedModelJson string                 `protobuf:"bytes,13,opt,name=selected_model_json,json=selectedModelJson,proto3" json:"selected_model_json,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ConversationSummary) Reset() {
@@ -7031,6 +7032,13 @@ func (x *ConversationSummary) GetIsShared() bool {
 		return x.IsShared
 	}
 	return false
+}
+
+func (x *ConversationSummary) GetSelectedModelJson() string {
+	if x != nil {
+		return x.SelectedModelJson
+	}
+	return ""
 }
 
 type HistoryGetRequest struct {
@@ -8974,6 +8982,7 @@ type FileMentionListRequest struct {
 	Workdir       string                 `protobuf:"bytes,1,opt,name=workdir,proto3" json:"workdir,omitempty"`
 	MaxResults    uint32                 `protobuf:"varint,2,opt,name=max_results,json=maxResults,proto3" json:"max_results,omitempty"`
 	Query         string                 `protobuf:"bytes,3,opt,name=query,proto3" json:"query,omitempty"`
+	ShowHidden    *bool                  `protobuf:"varint,4,opt,name=show_hidden,json=showHidden,proto3,oneof" json:"show_hidden,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -9029,10 +9038,18 @@ func (x *FileMentionListRequest) GetQuery() string {
 	return ""
 }
 
+func (x *FileMentionListRequest) GetShowHidden() bool {
+	if x != nil && x.ShowHidden != nil {
+		return *x.ShowHidden
+	}
+	return false
+}
+
 type FileMentionEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	Hidden        bool                   `protobuf:"varint,3,opt,name=hidden,proto3" json:"hidden,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -9079,6 +9096,13 @@ func (x *FileMentionEntry) GetKind() string {
 		return x.Kind
 	}
 	return ""
+}
+
+func (x *FileMentionEntry) GetHidden() bool {
+	if x != nil {
+		return x.Hidden
+	}
+	return false
 }
 
 type FileMentionListResponse struct {
@@ -9548,6 +9572,7 @@ type FsListRequest struct {
 	Depth         uint32                 `protobuf:"varint,3,opt,name=depth,proto3" json:"depth,omitempty"`
 	Offset        uint32                 `protobuf:"varint,4,opt,name=offset,proto3" json:"offset,omitempty"`
 	MaxResults    uint32                 `protobuf:"varint,5,opt,name=max_results,json=maxResults,proto3" json:"max_results,omitempty"`
+	ShowHidden    *bool                  `protobuf:"varint,6,opt,name=show_hidden,json=showHidden,proto3,oneof" json:"show_hidden,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -9617,10 +9642,18 @@ func (x *FsListRequest) GetMaxResults() uint32 {
 	return 0
 }
 
+func (x *FsListRequest) GetShowHidden() bool {
+	if x != nil && x.ShowHidden != nil {
+		return *x.ShowHidden
+	}
+	return false
+}
+
 type FsListEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	Hidden        bool                   `protobuf:"varint,3,opt,name=hidden,proto3" json:"hidden,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -9667,6 +9700,13 @@ func (x *FsListEntry) GetKind() string {
 		return x.Kind
 	}
 	return ""
+}
+
+func (x *FsListEntry) GetHidden() bool {
+	if x != nil {
+		return x.Hidden
+	}
+	return false
 }
 
 type FsListResponse struct {
@@ -11315,7 +11355,7 @@ const file_proto_v1_gateway_proto_rawDesc = "" +
 	"\x13HistoryListResponse\x12O\n" +
 	"\rconversations\x18\x01 \x03(\v2).liveagent.gateway.v1.ConversationSummaryR\rconversations\x12\x1f\n" +
 	"\vtotal_count\x18\x02 \x01(\x05R\n" +
-	"totalCount\"\xdd\x02\n" +
+	"totalCount\"\x8d\x03\n" +
 	"\x13ConversationSummary\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x1d\n" +
@@ -11333,7 +11373,8 @@ const file_proto_v1_gateway_proto_rawDesc = "" +
 	"\tis_pinned\x18\n" +
 	" \x01(\bR\bisPinned\x12\x1b\n" +
 	"\tpinned_at\x18\v \x01(\x03R\bpinnedAt\x12\x1b\n" +
-	"\tis_shared\x18\f \x01(\bR\bisShared\"_\n" +
+	"\tis_shared\x18\f \x01(\bR\bisShared\x12.\n" +
+	"\x13selected_model_json\x18\r \x01(\tR\x11selectedModelJson\"_\n" +
 	"\x11HistoryGetRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12!\n" +
 	"\fmax_messages\x18\x02 \x01(\x05R\vmaxMessages\"\xb2\x02\n" +
@@ -11447,15 +11488,19 @@ const file_proto_v1_gateway_proto_rawDesc = "" +
 	"\fpayload_json\x18\x01 \x01(\tR\vpayloadJson\"6\n" +
 	"\x13SkillManageResponse\x12\x1f\n" +
 	"\vresult_json\x18\x01 \x01(\tR\n" +
-	"resultJson\"i\n" +
+	"resultJson\"\x9f\x01\n" +
 	"\x16FileMentionListRequest\x12\x18\n" +
 	"\aworkdir\x18\x01 \x01(\tR\aworkdir\x12\x1f\n" +
 	"\vmax_results\x18\x02 \x01(\rR\n" +
 	"maxResults\x12\x14\n" +
-	"\x05query\x18\x03 \x01(\tR\x05query\":\n" +
+	"\x05query\x18\x03 \x01(\tR\x05query\x12$\n" +
+	"\vshow_hidden\x18\x04 \x01(\bH\x00R\n" +
+	"showHidden\x88\x01\x01B\x0e\n" +
+	"\f_show_hidden\"R\n" +
 	"\x10FileMentionEntry\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
-	"\x04kind\x18\x02 \x01(\tR\x04kind\"y\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x16\n" +
+	"\x06hidden\x18\x03 \x01(\bR\x06hidden\"y\n" +
 	"\x17FileMentionListResponse\x12@\n" +
 	"\aentries\x18\x01 \x03(\v2&.liveagent.gateway.v1.FileMentionEntryR\aentries\x12\x1c\n" +
 	"\ttruncated\x18\x02 \x01(\bR\ttruncated\"V\n" +
@@ -11483,17 +11528,21 @@ const file_proto_v1_gateway_proto_rawDesc = "" +
 	"\x06parent\x18\x01 \x01(\tR\x06parent\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"3\n" +
 	"\x1dFsCreateProjectFolderResponse\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\"\x8c\x01\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"\xc2\x01\n" +
 	"\rFsListRequest\x12\x18\n" +
 	"\aworkdir\x18\x01 \x01(\tR\aworkdir\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x14\n" +
 	"\x05depth\x18\x03 \x01(\rR\x05depth\x12\x16\n" +
 	"\x06offset\x18\x04 \x01(\rR\x06offset\x12\x1f\n" +
 	"\vmax_results\x18\x05 \x01(\rR\n" +
-	"maxResults\"5\n" +
+	"maxResults\x12$\n" +
+	"\vshow_hidden\x18\x06 \x01(\bH\x00R\n" +
+	"showHidden\x88\x01\x01B\x0e\n" +
+	"\f_show_hidden\"M\n" +
 	"\vFsListEntry\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
-	"\x04kind\x18\x02 \x01(\tR\x04kind\"\xfc\x01\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x16\n" +
+	"\x06hidden\x18\x03 \x01(\bR\x06hidden\"\xfc\x01\n" +
 	"\x0eFsListResponse\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x19\n" +
 	"\bhas_path\x18\x02 \x01(\bR\ahasPath\x12\x14\n" +
@@ -12025,6 +12074,8 @@ func file_proto_v1_gateway_proto_init() {
 	file_proto_v1_gateway_proto_msgTypes[17].OneofWrappers = []any{}
 	file_proto_v1_gateway_proto_msgTypes[25].OneofWrappers = []any{}
 	file_proto_v1_gateway_proto_msgTypes[76].OneofWrappers = []any{}
+	file_proto_v1_gateway_proto_msgTypes[103].OneofWrappers = []any{}
+	file_proto_v1_gateway_proto_msgTypes[114].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
