@@ -1,6 +1,14 @@
 import type { KnownProvider, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { DEFAULT_LOCALE, type Locale, normalizeLocale } from "../../i18n/config";
+import {
+  ANTHROPIC_LONG_CONTEXT_WINDOW,
+  hasAnthropicLongContextSuffix,
+  isAnthropicAdaptiveModelId,
+  resolveAnthropicContextWindow,
+  resolveAnthropicKnownModelLimits,
+  shouldSendAnthropicLongContextHeader,
+} from "../providers/anthropicModels";
 import { getAvailableThinkingLevelsForModel } from "../providers/runtime/modelFactory";
 import { mergeAlwaysEnabledSkillNames } from "../skills/builtin";
 import { SYSTEM_TOOL_OPTIONS, type SystemToolId } from "../tools/systemToolOptions";
@@ -140,6 +148,9 @@ export type SystemSettings = {
   activeWorkspaceProjectId?: string;
   hiddenWorkspaceProjectPaths: string[];
   missingWorkspaceProjectPaths: string[];
+  // Archived workspaces (path-keyed, like hidden/missing). Archived rows stay
+  // in the merged list but render disabled and can never be active.
+  archivedWorkspaceProjectPaths: string[];
 };
 
 export type WorkspaceProjectKind = "managed" | "folder" | "history";
@@ -583,6 +594,18 @@ export function normalizeMissingWorkspaceProjectPaths(input: unknown): string[] 
   return out;
 }
 
+export function normalizeArchivedWorkspaceProjectPaths(input: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const path of normalizeStringArray(input)) {
+    const key = workspaceProjectPathKey(path);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(path);
+  }
+  return out;
+}
+
 export function resolveWorkspaceProjects(
   system: SystemSettings,
   defaultWorkdir: string,
@@ -648,11 +671,35 @@ export function resolveWorkspaceProjects(
   const missingWorkspaceProjectPaths = normalizeMissingWorkspaceProjectPaths(
     system.missingWorkspaceProjectPaths,
   ).filter((path) => !hiddenWorkspaceProjectPathKeys.has(workspaceProjectPathKey(path)));
-  const activeProjectId = projects.some((project) => project.id === system.activeWorkspaceProjectId)
+  // Hidden means removed — a removed workspace has nothing left to archive.
+  const normalizedArchivedWorkspaceProjectPaths = normalizeArchivedWorkspaceProjectPaths(
+    system.archivedWorkspaceProjectPaths,
+  ).filter((path) => !hiddenWorkspaceProjectPathKeys.has(workspaceProjectPathKey(path)));
+  const normalizedArchivedWorkspaceProjectPathKeys = new Set(
+    normalizedArchivedWorkspaceProjectPaths.map(workspaceProjectPathKey),
+  );
+  const archivedWorkspaceProjectPaths = projects.every((project) =>
+    normalizedArchivedWorkspaceProjectPathKeys.has(workspaceProjectPathKey(project.path)),
+  )
+    ? normalizedArchivedWorkspaceProjectPaths.filter(
+        (path) => workspaceProjectPathKey(path) !== defaultKey,
+      )
+    : normalizedArchivedWorkspaceProjectPaths;
+  const archivedWorkspaceProjectPathKeys = new Set(
+    archivedWorkspaceProjectPaths.map(workspaceProjectPathKey),
+  );
+  const selectableProjects = projects.filter(
+    (project) => !archivedWorkspaceProjectPathKeys.has(workspaceProjectPathKey(project.path)),
+  );
+  const activeProjectId = selectableProjects.some(
+    (project) => project.id === system.activeWorkspaceProjectId,
+  )
     ? system.activeWorkspaceProjectId
-    : DEFAULT_WORKSPACE_PROJECT_ID;
+    : (selectableProjects.find((project) => project.id === DEFAULT_WORKSPACE_PROJECT_ID)?.id ??
+      selectableProjects[0]?.id ??
+      DEFAULT_WORKSPACE_PROJECT_ID);
   const activeProject =
-    projects.find((project) => project.id === activeProjectId) ?? defaultProject;
+    selectableProjects.find((project) => project.id === activeProjectId) ?? defaultProject;
   const workdir = normalizeWorkdir(system.workdir) || defaultPath;
 
   return {
@@ -662,6 +709,7 @@ export function resolveWorkspaceProjects(
     activeWorkspaceProjectId: activeProject.id,
     hiddenWorkspaceProjectPaths,
     missingWorkspaceProjectPaths,
+    archivedWorkspaceProjectPaths,
   };
 }
 
@@ -941,9 +989,15 @@ function toKnownProvider(providerId: ProviderId): KnownProvider {
 function getKnownModelLimits(
   providerId: ProviderId,
   modelId: string | undefined,
+  baseUrl?: string,
 ): Pick<ProviderModelConfig, "contextWindow" | "maxOutputToken"> | undefined {
   const trimmedId = modelId?.trim();
   if (!trimmedId) return undefined;
+  // Anthropic 走规范化目录回查（装饰 id/[1m] 后缀也能继承默认值），并对旧世代
+  // 钳出退役后的有效窗口；contextWindow > 200K 即请求侧启用 1M beta 的开关。
+  if (toKnownProvider(providerId) === "anthropic") {
+    return resolveAnthropicKnownModelLimits(trimmedId, baseUrl);
+  }
   const known = getBuiltinModels(toKnownProvider(providerId)).find(
     (model) => model.id === trimmedId,
   );
@@ -954,8 +1008,9 @@ function getKnownModelLimits(
 export function getProviderModelDefaults(
   providerId: ProviderId,
   modelId?: string,
+  baseUrl?: string,
 ): Pick<ProviderModelConfig, "contextWindow" | "maxOutputToken"> {
-  const known = getKnownModelLimits(providerId, modelId);
+  const known = getKnownModelLimits(providerId, modelId, baseUrl);
   if (known) return known;
 
   if (providerId === "codex") {
@@ -969,6 +1024,18 @@ export function getProviderModelDefaults(
     return {
       contextWindow: DEFAULT_GEMINI_CONTEXT_WINDOW,
       maxOutputToken: DEFAULT_GEMINI_MAX_OUTPUT_TOKEN,
+    };
+  }
+
+  if (modelId && (hasAnthropicLongContextSuffix(modelId) || isAnthropicAdaptiveModelId(modelId))) {
+    return {
+      contextWindow:
+        hasAnthropicLongContextSuffix(modelId) &&
+        baseUrl &&
+        !shouldSendAnthropicLongContextHeader(baseUrl)
+          ? DEFAULT_CLAUDE_CONTEXT_WINDOW
+          : ANTHROPIC_LONG_CONTEXT_WINDOW,
+      maxOutputToken: DEFAULT_CLAUDE_MAX_OUTPUT_TOKEN,
     };
   }
 
@@ -1040,12 +1107,28 @@ export function normalizeProviderModelConfigs(
 }
 
 export function findProviderModelConfig(
-  provider: Pick<CustomProvider, "models" | "type">,
+  provider: Pick<CustomProvider, "models" | "type"> & { baseUrl?: string },
   modelId: string,
 ): ProviderModelConfig {
   const normalizedId = modelId.trim();
   const matched = provider.models.find((item) => item.id === normalizedId);
-  return matched ?? createProviderModelConfig(provider.type, normalizedId);
+  if (!matched) {
+    const defaults = getProviderModelDefaults(provider.type, normalizedId, provider.baseUrl);
+    return {
+      id: normalizedId,
+      contextWindow: defaults.contextWindow,
+      maxOutputToken: defaults.maxOutputToken,
+    };
+  }
+  if (provider.type !== "claude_code") return matched;
+  return {
+    ...matched,
+    contextWindow: resolveAnthropicContextWindow(
+      normalizedId,
+      matched.contextWindow,
+      provider.baseUrl,
+    ),
+  };
 }
 
 function normalizeProviderId(input: unknown): ProviderId {
@@ -1258,6 +1341,9 @@ export function normalizeSystemSettings(input: unknown): SystemSettings {
     ),
     missingWorkspaceProjectPaths: normalizeMissingWorkspaceProjectPaths(
       obj.missingWorkspaceProjectPaths,
+    ),
+    archivedWorkspaceProjectPaths: normalizeArchivedWorkspaceProjectPaths(
+      obj.archivedWorkspaceProjectPaths,
     ),
   };
 }
@@ -1781,6 +1867,7 @@ export function getDefaultSettings(): AppSettings {
       activeWorkspaceProjectId: undefined,
       hiddenWorkspaceProjectPaths: [],
       missingWorkspaceProjectPaths: [],
+      archivedWorkspaceProjectPaths: [],
     },
     customProviders,
     mcp: {

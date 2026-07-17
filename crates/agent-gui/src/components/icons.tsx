@@ -3,6 +3,8 @@ import McpLogoSource from "~icons/gravity-ui/logo-mcp";
 import ConnectionIconSource from "~icons/gravity-ui/plug-connection";
 import ClaudeSource from "~icons/logos/claude-icon";
 import OpenAISource from "~icons/logos/openai-icon";
+import ArchiveSource from "~icons/lucide/archive";
+import ArchiveRestoreSource from "~icons/lucide/archive-restore";
 import ArrowLeftSource from "~icons/lucide/arrow-left";
 import BanSource from "~icons/lucide/ban";
 import BlendSource from "~icons/lucide/blend";
@@ -441,6 +443,8 @@ function GeminiIconSource({ title, ...props }: SVGProps<SVGSVGElement> & { title
 export const AlertTriangle = createIcon(AlertTriangleSource);
 export const ClaudeIcon = createIcon(ClaudeSource);
 export const GeminiIcon = createIcon(GeminiIconSource);
+export const Archive = createIcon(ArchiveSource);
+export const ArchiveRestore = createIcon(ArchiveRestoreSource);
 export const ArrowLeft = createIcon(ArrowLeftSource);
 export const Ban = createIcon(BanSource);
 export const Blend = createIcon(BlendSource);

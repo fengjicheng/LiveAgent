@@ -183,7 +183,7 @@ function CodeBlockActions({ code }: { code: string }) {
 
   return (
     <div className="pointer-events-none absolute right-0 top-0 z-20 flex h-8 items-center justify-end">
-      <div className="pointer-events-auto flex shrink-0 items-center gap-2 rounded-md bg-background/80 px-1.5 py-1 backdrop-blur">
+      <div className="pointer-events-auto flex shrink-0 items-center gap-2 rounded-md bg-background/95 px-1.5 py-1">
         <button
           type="button"
           aria-label={copied ? t("chat.markdown.copied") : t("chat.markdown.copyCode")}

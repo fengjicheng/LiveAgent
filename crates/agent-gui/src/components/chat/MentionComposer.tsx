@@ -32,6 +32,12 @@ import { invokeFs } from "../../lib/tools/fsBackend";
 import { Blend, ClipboardPaste, Copy, ScanText, Scissors, SKILL_ICON_SVG_MARKUP } from "../icons";
 import { getFileTypeIcon, getFileTypeIconSvg } from "./fileTypeIcons";
 import { mentionChipClassName } from "./mentionChipStyles";
+import {
+  caretPromptHistoryLine,
+  type PromptHistorySession,
+  type PromptHistoryStash,
+  stepPromptHistory,
+} from "./promptHistory";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -165,6 +171,12 @@ export interface MentionComposerProps {
   onEmptyChange?: (isEmpty: boolean) => void;
   onBusyChange?: (isBusy: boolean) => void;
   onPasteFiles?: (files: File[]) => void;
+  /**
+   * Returns prompts previously sent in this conversation, oldest → newest.
+   * Enables shell-style ↑/↓ recall while the caret sits on the first/last
+   * line of the editor. Read lazily when recall starts.
+   */
+  loadHistoryPrompts?: () => readonly string[];
   disabled?: boolean;
   placeholder?: string;
   workdir: string;
@@ -1725,6 +1737,7 @@ export const MentionComposer = memo(
       onEmptyChange,
       onBusyChange,
       onPasteFiles,
+      loadHistoryPrompts,
       disabled = false,
       placeholder = "",
       workdir,
@@ -1751,6 +1764,13 @@ export const MentionComposer = memo(
     const isBusyRef = useRef(false);
     const largePastesRef = useRef(new Map<string, MentionComposerLargePaste>());
     const largePasteCounterRef = useRef(0);
+    // Active ↑/↓ prompt-history recall; null while the user is editing.
+    const promptHistorySessionRef = useRef<PromptHistorySession<MentionComposerLargePaste> | null>(
+      null,
+    );
+    const resetPromptHistoryRecall = useCallback(() => {
+      promptHistorySessionRef.current = null;
+    }, []);
     const [composerContextMenu, setComposerContextMenu] = useState<ComposerContextMenuState | null>(
       null,
     );
@@ -2207,6 +2227,7 @@ export const MentionComposer = memo(
           const el = editorRef.current;
           if (!el) return;
           cancelTypewriter();
+          resetPromptHistoryRecall();
           el.innerHTML = "";
           largePastesRef.current.clear();
           closeCommitTooltip();
@@ -2223,6 +2244,7 @@ export const MentionComposer = memo(
           const el = editorRef.current;
           if (!el) return;
           cancelTypewriter();
+          resetPromptHistoryRecall();
           el.innerHTML = "";
           largePastesRef.current.clear();
           closeCommitTooltip();
@@ -2253,11 +2275,14 @@ export const MentionComposer = memo(
           ensureTrailingCaretAnchor(el);
           closeMentionSession();
           refreshEmptyState();
+          placeCaretAtEditorEnd();
+          scheduleComposerSelectionScroll(el);
         },
         insertFileMention: (path: string, kind: "file" | "dir") => {
           const el = editorRef.current;
           if (!el) return;
           finishTypewriter();
+          resetPromptHistoryRecall();
           el.focus();
           const chip = createFileMentionChip(path, kind);
           if (!chip) return;
@@ -2269,6 +2294,7 @@ export const MentionComposer = memo(
           const el = editorRef.current;
           if (!el) return;
           finishTypewriter();
+          resetPromptHistoryRecall();
           el.focus();
           insertNodeAtCursor(el, createSkillMentionChip(skill), { ensureSpaceAfterNode: true });
           closeMentionSession();
@@ -2278,6 +2304,7 @@ export const MentionComposer = memo(
           const el = editorRef.current;
           if (!el) return;
           finishTypewriter();
+          resetPromptHistoryRecall();
           el.focus();
           insertNodeAtCursor(el, createCommitMentionChip(commit), { ensureSpaceAfterNode: true });
           closeMentionSession();
@@ -2287,6 +2314,7 @@ export const MentionComposer = memo(
           const el = editorRef.current;
           if (!el) return;
           finishTypewriter();
+          resetPromptHistoryRecall();
           el.focus();
           insertNodeAtCursor(el, createGitFileMentionChip(file), { ensureSpaceAfterNode: true });
           closeMentionSession();
@@ -2296,6 +2324,7 @@ export const MentionComposer = memo(
           const el = editorRef.current;
           if (!el) return;
           cancelTypewriter();
+          resetPromptHistoryRecall();
           el.innerHTML = "";
           largePastesRef.current.clear();
           closeCommitTooltip();
@@ -2308,6 +2337,7 @@ export const MentionComposer = memo(
           const el = editorRef.current;
           if (!el) return Promise.resolve();
           cancelTypewriter();
+          resetPromptHistoryRecall();
           el.innerHTML = "";
           largePastesRef.current.clear();
           closeCommitTooltip();
@@ -2397,6 +2427,7 @@ export const MentionComposer = memo(
         insertLargePaste,
         placeCaretAtEditorEnd,
         refreshEmptyState,
+        resetPromptHistoryRecall,
       ],
     );
 
@@ -2413,11 +2444,12 @@ export const MentionComposer = memo(
         } else {
           insertMentionChip(mentionCtx, suggestion.entry.path, suggestion.entry.kind);
         }
+        resetPromptHistoryRecall();
         closeMentionSession();
         refreshEmptyState();
         editorRef.current?.focus();
       },
-      [closeMentionSession, mentionCtx, refreshEmptyState],
+      [closeMentionSession, mentionCtx, refreshEmptyState, resetPromptHistoryRecall],
     );
 
     const restoreComposerContextSelection = useCallback(() => {
@@ -2472,6 +2504,7 @@ export const MentionComposer = memo(
       restoreComposerContextSelection();
       if (!deleteComposerSelection(el, largePastesRef.current)) return;
 
+      resetPromptHistoryRecall();
       writeTextToClipboard(selectedText);
       closeMentionSession();
       refreshEmptyState();
@@ -2485,6 +2518,7 @@ export const MentionComposer = memo(
       disabled,
       refreshEmptyState,
       refreshMention,
+      resetPromptHistoryRecall,
       restoreComposerContextSelection,
     ]);
 
@@ -2492,6 +2526,7 @@ export const MentionComposer = memo(
       const el = editorRef.current;
       if (!el || disabled) return;
 
+      resetPromptHistoryRecall();
       el.focus({ preventScroll: true });
 
       let text: string | null = null;
@@ -2536,6 +2571,7 @@ export const MentionComposer = memo(
       insertLargePaste,
       refreshEmptyState,
       refreshMention,
+      resetPromptHistoryRecall,
       restoreComposerContextSelection,
     ]);
 
@@ -2604,6 +2640,10 @@ export const MentionComposer = memo(
     }, []);
 
     const handleInput = useCallback(() => {
+      // Any edit invalidates the ↑/↓ recall session: the stash no longer
+      // reflects what should come back and the cursor must restart from the
+      // newest entry.
+      resetPromptHistoryRecall();
       closeComposerContextMenu();
       const el = editorRef.current;
       if (el) {
@@ -2615,7 +2655,13 @@ export const MentionComposer = memo(
       if (!isComposingRef.current) {
         refreshMention();
       }
-    }, [closeComposerContextMenu, pruneDetachedLargePastes, refreshEmptyState, refreshMention]);
+    }, [
+      closeComposerContextMenu,
+      pruneDetachedLargePastes,
+      refreshEmptyState,
+      refreshMention,
+      resetPromptHistoryRecall,
+    ]);
 
     const handleKeyUp = useCallback(
       (e: KeyboardEvent<HTMLDivElement>) => {
@@ -2699,6 +2745,60 @@ export const MentionComposer = memo(
         updateCommitTooltipFromTarget(event.target);
       },
       [updateCommitTooltipFromTarget],
+    );
+
+    // ---- Prompt-history recall (↑/↓) ----
+    const applyPromptHistoryText = useCallback(
+      (text: string) => {
+        const el = editorRef.current;
+        if (!el) return;
+        el.innerHTML = "";
+        largePastesRef.current.clear();
+        closeCommitTooltip();
+        closeComposerContextMenu();
+        if (isLargePasteText(text)) {
+          insertLargePaste(text);
+        } else {
+          el.innerText = text;
+          closeMentionSession();
+          refreshEmptyState();
+        }
+        placeCaretAtEditorEnd();
+        scheduleComposerSelectionScroll(el);
+      },
+      [
+        closeCommitTooltip,
+        closeComposerContextMenu,
+        closeMentionSession,
+        insertLargePaste,
+        placeCaretAtEditorEnd,
+        refreshEmptyState,
+      ],
+    );
+
+    const restorePromptHistoryStash = useCallback(
+      (stash: PromptHistoryStash<MentionComposerLargePaste>) => {
+        const el = editorRef.current;
+        if (!el) return;
+        el.innerHTML = stash.html;
+        largePastesRef.current.clear();
+        for (const [id, paste] of stash.pastes) {
+          largePastesRef.current.set(id, paste);
+        }
+        closeCommitTooltip();
+        closeComposerContextMenu();
+        closeMentionSession();
+        refreshEmptyState();
+        placeCaretAtEditorEnd();
+        scheduleComposerSelectionScroll(el);
+      },
+      [
+        closeCommitTooltip,
+        closeComposerContextMenu,
+        closeMentionSession,
+        placeCaretAtEditorEnd,
+        refreshEmptyState,
+      ],
     );
 
     const handleKeyDown = useCallback(
@@ -2787,11 +2887,53 @@ export const MentionComposer = memo(
           return;
         }
 
+        // Shell-style ↑/↓ recall of previously sent prompts. Only fires with
+        // the caret on the first/last logical line so plain caret movement
+        // inside multi-line drafts stays untouched; any edit resets the
+        // session (handleInput).
+        if (
+          loadHistoryPrompts &&
+          !popupVisible &&
+          (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+          !e.shiftKey &&
+          !e.altKey &&
+          !e.ctrlKey &&
+          !e.metaKey
+        ) {
+          const el = editorRef.current;
+          const caretLine = el ? caretPromptHistoryLine(el) : null;
+          if (el && caretLine) {
+            const step = stepPromptHistory({
+              direction: e.key === "ArrowUp" ? "prev" : "next",
+              session: promptHistorySessionRef.current,
+              caretOnFirstLine: caretLine.onFirstLine,
+              caretOnLastLine: caretLine.onLastLine,
+              loadEntries: loadHistoryPrompts,
+              makeStash: () => ({
+                html: el.innerHTML,
+                pastes: [...largePastesRef.current],
+              }),
+            });
+            if (step.type !== "pass") {
+              e.preventDefault();
+              if (step.type === "apply") {
+                promptHistorySessionRef.current = step.session;
+                applyPromptHistoryText(step.text);
+              } else if (step.type === "restore") {
+                promptHistorySessionRef.current = null;
+                restorePromptHistoryStash(step.stash);
+              }
+              return;
+            }
+          }
+        }
+
         // Backspace: delete mention chip if cursor is right after one
         if (e.key === "Backspace") {
           const el = editorRef.current;
           if (el && deleteChipBeforeCursor(el, largePastesRef.current)) {
             e.preventDefault();
+            resetPromptHistoryRecall();
             refreshEmptyState();
             refreshMention();
             return;
@@ -2831,6 +2973,10 @@ export const MentionComposer = memo(
         onSend,
         refreshEmptyState,
         refreshMention,
+        loadHistoryPrompts,
+        applyPromptHistoryText,
+        restorePromptHistoryStash,
+        resetPromptHistoryRecall,
       ],
     );
 
@@ -2844,6 +2990,9 @@ export const MentionComposer = memo(
           e.preventDefault();
           return;
         }
+        // The large-paste chip path mutates the DOM without an input event,
+        // so the recall session must reset here as well.
+        resetPromptHistoryRecall();
         const clipboardFiles = extractClipboardFiles(e.clipboardData);
         if (clipboardFiles.length > 0) {
           e.preventDefault();
@@ -2860,7 +3009,14 @@ export const MentionComposer = memo(
         refreshEmptyState();
         refreshMention();
       },
-      [disabled, insertLargePaste, onPasteFiles, refreshEmptyState, refreshMention],
+      [
+        disabled,
+        insertLargePaste,
+        onPasteFiles,
+        refreshEmptyState,
+        refreshMention,
+        resetPromptHistoryRecall,
+      ],
     );
 
     const handleCompositionStart = useCallback(() => {

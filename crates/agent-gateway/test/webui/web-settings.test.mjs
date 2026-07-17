@@ -352,6 +352,39 @@ test("web chat runtime controls default and follow model-aware reasoning support
   );
 });
 
+test("Anthropic settings keep 1M context parity for adaptive and explicit relay suffix models", () => {
+  assert.equal(
+    settings.getProviderModelDefaults("claude_code", "claude-sonnet-4-6").contextWindow,
+    1_000_000,
+  );
+  assert.equal(
+    settings.getProviderModelDefaults("claude_code", "claude-sonnet-4-5").contextWindow,
+    200_000,
+  );
+  assert.equal(
+    settings.getProviderModelDefaults("claude_code", "claude-sonnet-4-5[1m]").contextWindow,
+    1_000_000,
+  );
+  assert.equal(
+    settings.getProviderModelDefaults("claude_code", "claude-4.6-sonnet").contextWindow,
+    1_000_000,
+  );
+  assert.equal(
+    settings.findProviderModelConfig(
+      { models: [], type: "claude_code", baseUrl: "https://relay.example.com/v1" },
+      "claude-sonnet-4-5[1m]",
+    ).contextWindow,
+    1_000_000,
+  );
+  assert.equal(
+    settings.findProviderModelConfig(
+      { models: [], type: "claude_code", baseUrl: "https://api.anthropic.com/v1" },
+      "claude-sonnet-4-5[1m]",
+    ).contextWindow,
+    200_000,
+  );
+});
+
 test("loadWebSettings forces current gateway URL/token over stale persisted remote settings", () => {
   const store = installWindow("https://new.example");
   const stale = webSettings.getWebDefaultSettings("old-token");
