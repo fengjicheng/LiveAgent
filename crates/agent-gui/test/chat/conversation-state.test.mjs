@@ -425,7 +425,17 @@ test("incremental append: sequential turns equal a one-shot build", () => {
   }
   const oneShot = conversationState.createConversationStateFromContext({ messages });
 
-  assert.deepEqual(sequential.historyRenderItems, oneShot.historyRenderItems);
+  // The two builds mint independent segment UUIDs, and render keys embed the
+  // segmentId — compare everything but the id-bearing fields.
+  const withoutSegmentIds = (items) =>
+    items.map(({ key, messageRef, ...rest }) => ({
+      ...rest,
+      messageRef: messageRef ? { ...messageRef, segmentId: "(segment-id)" } : undefined,
+    }));
+  assert.deepEqual(
+    withoutSegmentIds(sequential.historyRenderItems),
+    withoutSegmentIds(oneShot.historyRenderItems),
+  );
   assertMatchesFullRebuild(sequential);
 });
 
@@ -446,7 +456,7 @@ test("mergeHydratedConversationState reuses warm items for an unchanged active s
   }
 });
 
-test("mergeHydratedConversationState prepends older segments around reused warm items", () => {
+test("mergeHydratedConversationState keeps re-homed warm keys stable across hydration", () => {
   const base = conversationState.createConversationStateFromContext({
     messages: [user("q1", 1), assistant("a1", 2)],
   });
@@ -462,16 +472,21 @@ test("mergeHydratedConversationState prepends older segments around reused warm 
     assistant("a2", 5),
   ]);
 
-  // Warm phase-1 state: only the active segment, re-homed at index 0 — the
-  // segment-index mismatch must force the full state (item keys differ).
+  // Warm phase-1 state: only the active segment, re-homed at index 0. The
+  // index mismatch forces the full state (warm items carry the stale
+  // segmentIndex), which must be remount-free: every warm render key must
+  // reappear verbatim in the full state so rows reconcile in place and keep
+  // their measured heights — the post-hydration jump regression guard.
   const warmRehomed = conversationState.normalizeConversationState({
     meta: {},
     segments: [structuredClone(full.segments[full.activeSegmentIndex])],
   });
-  assert.equal(
-    conversationState.mergeHydratedConversationState(warmRehomed, full),
-    full,
-  );
+  assert.equal(conversationState.mergeHydratedConversationState(warmRehomed, full), full);
+
+  const fullKeys = new Set(full.historyRenderItems.map((item) => item.key));
+  for (const item of warmRehomed.historyRenderItems) {
+    assert.ok(fullKeys.has(item.key), `warm key ${item.key} must survive hydration`);
+  }
 });
 
 test("mergeHydratedConversationState falls back when the active segment changed on disk", () => {

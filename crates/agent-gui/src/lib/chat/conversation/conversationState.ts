@@ -603,10 +603,15 @@ function buildTimelineItemsForSegment(
 ): RenderTimelineItem[] {
   const items: RenderTimelineItem[] = [];
 
+  // Render keys derive from the segmentId, never the segmentIndex: the
+  // phase-1 warm view re-homes the active segment at index 0 while the full
+  // record keeps its true index, and index-based keys would remount every
+  // row (and drop its measured height) when hydration lands — the visible
+  // post-load jump. segmentIds are persisted and identical in both views.
   if (startMessageIndex === 0 && segment.summary) {
     items.push({
       kind: "summary",
-      key: `summary-${segment.segmentIndex}-${segment.summary.id}`,
+      key: `summary-${segment.segmentId}-${segment.summary.id}`,
       segmentIndex: segment.segmentIndex,
       summaryId: segment.summary.id,
       content: segment.summary.content,
@@ -636,7 +641,7 @@ function buildTimelineItemsForSegment(
       });
       items.push({
         kind: "user",
-        key: `segment-${segment.segmentIndex}-${uiMessage.key}`,
+        key: `segment-${segment.segmentId}-${uiMessage.key}`,
         segmentIndex: segment.segmentIndex,
         messageRef,
         text: uiMessage.text,
@@ -649,7 +654,7 @@ function buildTimelineItemsForSegment(
 
     items.push({
       kind: "assistant",
-      key: `segment-${segment.segmentIndex}-${uiMessage.key}`,
+      key: `segment-${segment.segmentId}-${uiMessage.key}`,
       segmentIndex: segment.segmentIndex,
       rounds: uiMessage.rounds ?? [],
       // 使用本组自身的回复时间；仅在缺失时才回退到段内最后一条消息的时间
@@ -725,7 +730,7 @@ function extendSegmentTimelineItems(
         lastAssistantTimestamp = message.timestamp ?? lastAssistantTimestamp;
       }
     }
-    const expectedKey = `segment-${previousSegment.segmentIndex}-assistant-${runStart}-${prevMessages.length}-${lastAssistantTimestamp}`;
+    const expectedKey = `segment-${previousSegment.segmentId}-assistant-${runStart}-${prevMessages.length}-${lastAssistantTimestamp}`;
     if (previousItems[previousItems.length - 1]?.key === expectedKey) {
       reused = previousItems.slice(0, -1);
     }
@@ -807,9 +812,13 @@ function rebuildTimelineFromSegment(params: {
 // already-painted warm state (same segmentId at the same index with identical
 // content markers), reuse the warm timeline items for it by identity — the
 // hydration then only prepends the older segments' items and the mounted tail
-// rows never re-render. Any mismatch (content advanced on disk, or the warm
-// single-segment view re-homed a compacted segment at index 0) falls back to
-// the full state as-is.
+// rows never re-render. Any mismatch falls back to the full state as-is:
+// content advanced on disk, or a compacted conversation whose warm view
+// re-homed the active segment at index 0 (its items carry that stale
+// segmentIndex, so reusing them by identity would poison index-based logic
+// like compaction marking). The fallback is still remount-free — render keys
+// derive from segmentIds, so the full state's items reconcile onto the same
+// rows and their measured heights survive.
 export function mergeHydratedConversationState(
   warmState: ConversationViewState | null | undefined,
   fullState: ConversationViewState,
@@ -1042,7 +1051,7 @@ export function appendRenderOnlyMessagesToConversation(
 
     historyRenderItems.push({
       kind: "assistant",
-      key: `render-only-${state.activeSegmentIndex}-${historyRenderItems.length}-${timestamp}`,
+      key: `render-only-${getActiveSegment(state)?.segmentId ?? state.activeSegmentIndex}-${historyRenderItems.length}-${timestamp}`,
       segmentIndex: state.activeSegmentIndex,
       rounds: sourceRounds,
       timestamp,
