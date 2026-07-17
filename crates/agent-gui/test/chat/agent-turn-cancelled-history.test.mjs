@@ -82,6 +82,9 @@ const todoToolsPath = fileURLToPath(
 const loader = createTsModuleLoader({
   mocks: {
     [agentRunnerPath]: {
+      // Replays the real runner's hook payload shape by hand; that contract
+      // (1-based rounds, results paired by toolCallId) is pinned against the
+      // real runner in agent-runner.test.mjs.
       async runAssistantWithTools(params) {
         params.onTurnStart?.(1);
         params.onToolCall?.(parentToolCall, 1);
