@@ -782,12 +782,16 @@
   /* Settings page section transitions */
   .settings-section-enter {
     animation: settingsSectionIn 0.28s cubic-bezier(0.16, 1, 0.3, 1);
-    will-change: transform, opacity;
+    /*
+     * No `will-change` here: this class sits on the settings scroll container
+     * itself, and a permanent layer promotion on a scroller makes Android
+     * Chrome skip rasterizing parts of the scrolled content (blank card-sized
+     * gaps). The one-shot mount animation self-promotes while it runs.
+     */
   }
 
   .settings-section-title-enter {
     animation: settingsSectionTitleIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-    will-change: transform, opacity;
   }
 
   .settings-section-shell {
