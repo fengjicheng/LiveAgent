@@ -9,6 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useLocale } from "../../i18n";
+import { useMenuExitPresence } from "../../lib/shared/menuMotion";
 import { cn } from "../../lib/shared/utils";
 import { ClipboardPaste, Copy, ScanText, Scissors } from "../icons";
 import {
@@ -390,16 +391,22 @@ export function useNativeInputContextMenu(): {
     closeMenu();
   }, [closeMenu]);
 
-  const items = snapshot ? computeMenuItems(snapshot) : null;
+  // Clearing the snapshot starts the exit animation; the retained snapshot
+  // keeps the menu rendered (inert) until the fade-out completes.
+  const { rendered: renderedSnapshot, isExiting } = useMenuExitPresence(snapshot);
+  const items = renderedSnapshot ? computeMenuItems(renderedSnapshot) : null;
 
   const menu =
-    snapshot && items
+    renderedSnapshot && items
       ? createPortal(
           <div
             ref={menuRef}
             role="menu"
-            className="editor-context-menu fixed z-[10000] w-max min-w-[9.5rem] max-w-[calc(100vw-1.5rem)] select-none overflow-hidden rounded-lg border border-border/70 bg-popover p-1.5 text-popover-foreground shadow-[0_20px_60px_-20px_rgba(15,23,42,0.35)]"
-            style={{ left: snapshot.x, top: snapshot.y }}
+            className={cn(
+              "editor-context-menu fixed z-[10000] w-max min-w-[9.5rem] max-w-[calc(100vw-1.5rem)] select-none overflow-hidden rounded-lg border border-border/70 bg-popover p-1.5 text-popover-foreground shadow-[0_20px_60px_-20px_rgba(15,23,42,0.35)]",
+              isExiting && "editor-context-menu-exit",
+            )}
+            style={{ left: renderedSnapshot.x, top: renderedSnapshot.y }}
             onContextMenu={(event) => {
               event.preventDefault();
             }}
