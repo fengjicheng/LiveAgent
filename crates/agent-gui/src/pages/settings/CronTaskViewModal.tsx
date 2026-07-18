@@ -137,84 +137,14 @@ function LeftPanel({
         <div className="absolute -right-10 -top-10 h-32 w-32 rounded-full bg-gradient-to-br from-white/10 to-transparent blur-2xl" />
 
         <div className="relative px-5 pb-4 pt-5">
-          {/* Type badge */}
-          <div
-            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${cfg.accent} ${cfg.accentBg} ${cfg.accentBorder}`}
-          >
-            <TypeIcon className="h-3 w-3" />
-            {t(cfg.label)}
-          </div>
-
-          {/* Name */}
-          <h2 className="mt-3 text-base font-bold leading-tight text-foreground">{task.name}</h2>
-
-          {/* Description */}
-          <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
-            {task.description || t("settings.cronViewNoDesc")}
-          </p>
-
-          {/* Meta pills. The run-now button sits outside the wrapping pill
-              container so a second pill row can never push it out of place. */}
-          <div className="mt-3 flex items-start gap-2">
-            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-              <div className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
-                <Clock3 className="h-3 w-3" />
-                <span className="font-mono">{task.cron}</span>
-              </div>
-              <div
-                className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-medium ${
-                  task.enabled
-                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                    : "bg-muted text-muted-foreground"
-                }`}
-              >
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${task.enabled ? "bg-emerald-500" : "bg-muted-foreground/40"}`}
-                />
-                {task.enabled
-                  ? t("settings.cronViewStatusEnabled")
-                  : t("settings.cronViewStatusDisabled")}
-              </div>
-              <div
-                className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium ${
-                  task.remainingExecutions === 0
-                    ? "bg-red-500/10 text-red-600 dark:text-red-400"
-                    : task.remainingExecutions == null
-                      ? "bg-muted text-muted-foreground"
-                      : "bg-sky-500/10 text-sky-600 dark:text-sky-400"
-                }`}
-                title={
-                  task.remainingExecutions == null
-                    ? t("settings.cronRemainingExecutionsUnlimited")
-                    : `${task.remainingExecutions} ${t("settings.cronRemainingExecutionsUnit")}`
-                }
-              >
-                <span className="tabular-nums">
-                  {task.remainingExecutions == null ? "∞" : task.remainingExecutions}
-                </span>
-                {task.remainingExecutions == null ? null : (
-                  <span>{t("settings.cronRemainingExecutionsUnitShort")}</span>
-                )}
-              </div>
-              <div
-                className="inline-flex items-center gap-1 rounded-lg bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground"
-                title={t("settings.cronTimeoutSeconds")}
-              >
-                <Timer className="h-3 w-3" />
-                <span className="tabular-nums">
-                  {task.timeoutSeconds ?? DEFAULT_CRON_TIMEOUT_SECONDS}
-                  {t("settings.cronTimeoutSecondsUnitShort")}
-                </span>
-              </div>
-              {task.workdir ? (
-                <div
-                  className="inline-flex max-w-56 items-center gap-1.5 rounded-lg bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground"
-                  title={task.workdir}
-                >
-                  <Folder className="h-3 w-3 shrink-0" />
-                  <span className="truncate">{task.workdir}</span>
-                </div>
-              ) : null}
+          {/* Type badge + run-now button on the hero's top row, kept out of
+              the meta/content area so pill wrapping never moves the button */}
+          <div className="flex items-center justify-between gap-2">
+            <div
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${cfg.accent} ${cfg.accentBg} ${cfg.accentBorder}`}
+            >
+              <TypeIcon className="h-3 w-3" />
+              {t(cfg.label)}
             </div>
             <button
               type="button"
@@ -232,6 +162,76 @@ function LeftPanel({
                 <Play className="h-3.5 w-3.5" />
               )}
             </button>
+          </div>
+
+          {/* Name */}
+          <h2 className="mt-3 text-base font-bold leading-tight text-foreground">{task.name}</h2>
+
+          {/* Description */}
+          <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
+            {task.description || t("settings.cronViewNoDesc")}
+          </p>
+
+          {/* Meta pills */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <div className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+              <Clock3 className="h-3 w-3" />
+              <span className="font-mono">{task.cron}</span>
+            </div>
+            <div
+              className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-medium ${
+                task.enabled
+                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                  : "bg-muted text-muted-foreground"
+              }`}
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${task.enabled ? "bg-emerald-500" : "bg-muted-foreground/40"}`}
+              />
+              {task.enabled
+                ? t("settings.cronViewStatusEnabled")
+                : t("settings.cronViewStatusDisabled")}
+            </div>
+            <div
+              className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium ${
+                task.remainingExecutions === 0
+                  ? "bg-red-500/10 text-red-600 dark:text-red-400"
+                  : task.remainingExecutions == null
+                    ? "bg-muted text-muted-foreground"
+                    : "bg-sky-500/10 text-sky-600 dark:text-sky-400"
+              }`}
+              title={
+                task.remainingExecutions == null
+                  ? t("settings.cronRemainingExecutionsUnlimited")
+                  : `${task.remainingExecutions} ${t("settings.cronRemainingExecutionsUnit")}`
+              }
+            >
+              <span className="tabular-nums">
+                {task.remainingExecutions == null ? "∞" : task.remainingExecutions}
+              </span>
+              {task.remainingExecutions == null ? null : (
+                <span>{t("settings.cronRemainingExecutionsUnitShort")}</span>
+              )}
+            </div>
+            <div
+              className="inline-flex items-center gap-1 rounded-lg bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground"
+              title={t("settings.cronTimeoutSeconds")}
+            >
+              <Timer className="h-3 w-3" />
+              <span className="tabular-nums">
+                {task.timeoutSeconds ?? DEFAULT_CRON_TIMEOUT_SECONDS}
+                {t("settings.cronTimeoutSecondsUnitShort")}
+              </span>
+            </div>
+            {task.workdir ? (
+              <div
+                className="inline-flex max-w-56 items-center gap-1.5 rounded-lg bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground"
+                title={task.workdir}
+              >
+                <Folder className="h-3 w-3 shrink-0" />
+                <span className="truncate">{task.workdir}</span>
+              </div>
+            ) : null}
           </div>
 
           {runNowError ? (
