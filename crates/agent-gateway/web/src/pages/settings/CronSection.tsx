@@ -138,8 +138,8 @@ export function CronSection(props: SettingsSectionProps) {
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+      <div className="settings-section-heading-row flex items-center justify-between gap-4">
+        <div className="settings-section-title-group flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/10">
             <Clock3 className="h-[18px] w-[18px] text-amber-500" />
           </div>
@@ -149,8 +149,8 @@ export function CronSection(props: SettingsSectionProps) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2 rounded-lg bg-muted/50 px-2.5 py-1.5 text-xs text-muted-foreground">
+        <div className="settings-section-actions flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg bg-muted/50 px-2.5 py-1.5 text-xs text-muted-foreground">
             <span className="tabular-nums font-medium text-foreground">{tasks.length}</span>
             {t("settings.cronCount")}
             <span className="text-border">|</span>
@@ -217,7 +217,7 @@ export function CronSection(props: SettingsSectionProps) {
                     : "border-border/40 bg-muted/20 opacity-60 hover:opacity-80"
                 }`}
               >
-                <div className="flex items-center gap-3 px-4 py-3">
+                <div className="settings-card-row flex items-center gap-3 px-4 py-3">
                   {/* Icon */}
                   <div
                     className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${tone.bg} ${tone.text}`}
@@ -275,7 +275,7 @@ export function CronSection(props: SettingsSectionProps) {
                   </div>
 
                   {/* Actions */}
-                  <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                  <div className="settings-hover-actions flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
                     <button
                       type="button"
                       onClick={() => setModal({ open: true, mode: "view", taskId: task.id })}
