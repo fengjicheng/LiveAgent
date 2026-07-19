@@ -87,7 +87,7 @@ type ModalProps = {
   onClose: () => void;
 };
 
-type ProviderDialogPanel = "general" | "network" | "headers";
+type ProviderDialogPanel = "general" | "request";
 
 type ModelEditDraft = {
   model: ProviderModelConfig;
@@ -245,6 +245,11 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
   const [activePanel, setActivePanel] = useState<ProviderDialogPanel>("general");
   const [visibleHeaderValues, setVisibleHeaderValues] = useState<Set<number>>(new Set());
   const [headerValidationSubmitted, setHeaderValidationSubmitted] = useState(false);
+  const [headerSuggest, setHeaderSuggest] = useState<{
+    index: number;
+    rect: { left: number; top: number; width: number };
+  } | null>(null);
+  const [headerSuggestActive, setHeaderSuggestActive] = useState(0);
   const [showApiKey, setShowApiKey] = useState(false);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -427,6 +432,24 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
     });
   }
 
+  function openHeaderSuggest(index: number) {
+    const input = headerKeyRefs.current[index];
+    if (!input) return;
+    const rect = input.getBoundingClientRect();
+    setHeaderSuggest({
+      index,
+      rect: { left: rect.left, top: rect.bottom + 4, width: rect.width },
+    });
+    setHeaderSuggestActive(0);
+  }
+
+  function applyHeaderSuggestion(preset: string) {
+    if (!headerSuggest) return;
+    updateCustomHeader(headerSuggest.index, "key", preset);
+    setHeaderSuggest(null);
+    focusCustomHeader(headerSuggest.index, "value");
+  }
+
   function handleSave() {
     if (!name.trim()) return;
     const invalidHeaderIndex = customHeaders.findIndex(
@@ -434,7 +457,7 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
     );
     if (invalidHeaderIndex >= 0) {
       setHeaderValidationSubmitted(true);
-      setActivePanel("headers");
+      setActivePanel("request");
       focusCustomHeader(invalidHeaderIndex, "key");
       return;
     }
@@ -476,6 +499,40 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
         : orderedModels,
     [orderedModels, modelSearchQuery],
   );
+  const headerSuggestQuery = headerSuggest
+    ? (customHeaders[headerSuggest.index]?.key ?? "").trim().toLowerCase()
+    : "";
+  const headerSuggestUsed = new Set(
+    headerSuggest
+      ? customHeaders
+          .filter((_, index) => index !== headerSuggest.index)
+          .map((header) => header.key.trim().toLowerCase())
+          .filter(Boolean)
+      : [],
+  );
+  const headerSuggestItems = headerSuggest
+    ? headerSuggestQuery
+      ? CUSTOM_HEADER_KEY_PRESETS.filter((preset) => {
+          const lower = preset.toLowerCase();
+          if (headerSuggestUsed.has(lower)) return false;
+          return lower.includes(headerSuggestQuery) && lower !== headerSuggestQuery;
+        })
+      : []
+    : [];
+  const headerSuggestActiveIndex = Math.min(
+    headerSuggestActive,
+    Math.max(0, headerSuggestItems.length - 1),
+  );
+  const firstHeaderIssue =
+    customHeaders
+      .map((header) => getCustomHeaderKeyIssue(header.key, headerValidationSubmitted))
+      .find((issue) => issue !== null) ?? null;
+  const headerIssueMessage =
+    firstHeaderIssue === "reserved"
+      ? t("settings.customHeaderReservedTitle")
+      : firstHeaderIssue === "invalid"
+        ? t("settings.invalidCustomHeaderKey")
+        : null;
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 max-[720px]:p-0">
@@ -530,32 +587,20 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
               type="button"
               className={cn(
                 "flex h-10 items-center gap-2 rounded-lg px-3 text-left text-sm text-muted-foreground max-[720px]:min-w-max max-[720px]:flex-1 max-[720px]:justify-center max-[720px]:px-2 max-[720px]:text-xs transition-colors hover:bg-accent/50 hover:text-foreground",
-                activePanel === "network" && "bg-primary/10 font-medium text-primary",
+                activePanel === "request" && "bg-primary/10 font-medium text-primary",
               )}
-              onClick={() => setActivePanel("network")}
-              aria-current={activePanel === "network" ? "page" : undefined}
+              onClick={() => setActivePanel("request")}
+              aria-current={activePanel === "request" ? "page" : undefined}
             >
               <Globe className="h-4 w-4 shrink-0 max-[720px]:h-3.5 max-[720px]:w-3.5" />
-              {t("settings.providerDialogNetwork")}
-            </button>
-            <button
-              type="button"
-              className={cn(
-                "flex h-10 items-center gap-2 rounded-lg px-3 text-left text-sm text-muted-foreground max-[720px]:min-w-max max-[720px]:flex-1 max-[720px]:justify-center max-[720px]:px-2 max-[720px]:text-xs transition-colors hover:bg-accent/50 hover:text-foreground",
-                activePanel === "headers" && "bg-primary/10 font-medium text-primary",
-              )}
-              onClick={() => setActivePanel("headers")}
-              aria-current={activePanel === "headers" ? "page" : undefined}
-            >
-              <List className="h-4 w-4 shrink-0 max-[720px]:h-3.5 max-[720px]:w-3.5" />
               <span className="min-w-0 flex-1 max-[720px]:basis-[calc(100%-3rem)]">
-                {t("settings.providerDialogHeaders")}
+                {t("settings.providerDialogRequest")}
               </span>
               {customHeaders.length > 0 ? (
                 <span
                   className={cn(
                     "min-w-5 rounded-full bg-muted px-1.5 py-0.5 text-center text-[10px] tabular-nums text-muted-foreground",
-                    activePanel === "headers" && "bg-primary text-primary-foreground",
+                    activePanel === "request" && "bg-primary text-primary-foreground",
                   )}
                 >
                   {customHeaders.length}
@@ -564,7 +609,10 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
             </button>
           </nav>
 
-          <div className="min-w-0 flex-1 overflow-y-auto px-6 py-5 max-[720px]:px-3.5 max-[720px]:pb-[calc(0.875rem+env(safe-area-inset-bottom))] max-[720px]:pt-3.5">
+          <div
+            className="min-w-0 flex-1 overflow-y-auto px-6 py-5 max-[720px]:px-3.5 max-[720px]:pb-[calc(0.875rem+env(safe-area-inset-bottom))] max-[720px]:pt-3.5"
+            onScroll={() => setHeaderSuggest(null)}
+          >
             {activePanel === "general" ? (
               <section key="general" className="provider-panel-enter">
                 <div className="text-sm font-semibold">{t("settings.basicInformation")}</div>
@@ -902,10 +950,24 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
                   </div>
                 </div>
               </section>
-            ) : activePanel === "network" ? (
-              <section key="network" className="provider-panel-enter">
-                <div className="text-sm font-semibold">{t("settings.providerDialogNetwork")}</div>
-                <div className="mt-3 flex items-center gap-3 rounded-xl border bg-card px-4 py-3">
+            ) : (
+              <section key="request" className="provider-panel-enter">
+                <div className="text-sm font-semibold">{t("settings.providerDialogRequest")}</div>
+
+                <div
+                  className={cn(
+                    "mt-3 flex items-center gap-3 rounded-xl border bg-card px-4 py-3 transition-colors",
+                    useSystemProxy && "border-primary/35 bg-primary/[0.04]",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors",
+                      useSystemProxy && "bg-primary/15 text-primary",
+                    )}
+                  >
+                    <Waypoints className="h-4 w-4" />
+                  </span>
                   <div className="min-w-0 flex-1 text-sm font-medium">
                     {t("settings.providerUseSystemProxy")}
                   </div>
@@ -915,141 +977,238 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
                     ariaLabel={t("settings.providerUseSystemProxy")}
                   />
                 </div>
-              </section>
-            ) : (
-              <section key="headers" className="provider-panel-enter">
-                <div className="text-sm font-semibold">{t("settings.customHeaders")}</div>
 
-                <div className="mt-3 overflow-hidden rounded-xl border max-[720px]:border-0 max-[720px]:overflow-visible">
-                  <div className="grid grid-cols-[220px_minmax(0,1fr)_40px_40px] items-center border-b bg-muted/40 max-[720px]:hidden text-[11px] font-medium uppercase tracking-[0.05em] text-muted-foreground">
-                    <div className="px-3 py-2">{t("settings.customHeaderName")}</div>
-                    <div className="px-3 py-2">{t("settings.customHeaderValue")}</div>
-                    <div />
-                    <div />
+                <div className="mt-6 flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="text-sm font-semibold">{t("settings.customHeaders")}</span>
+                    {customHeaders.length > 0 ? (
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                        {customHeaders.length}
+                      </span>
+                    ) : null}
                   </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 shrink-0 gap-1.5 max-[720px]:h-10"
+                    onClick={() => addCustomHeader()}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    {t("settings.addCustomHeader")}
+                  </Button>
+                </div>
 
-                  {customHeaders.length === 0 ? (
-                    <div className="px-4 py-10 text-center text-xs text-muted-foreground">
+                {customHeaders.length === 0 ? (
+                  <button
+                    type="button"
+                    className="mt-3 flex w-full flex-col items-center gap-1 rounded-xl border border-dashed px-4 py-8 text-center transition-colors hover:border-primary/50 hover:bg-accent/20"
+                    onClick={() => addCustomHeader()}
+                  >
+                    <List className="h-5 w-5 text-muted-foreground/60" />
+                    <span className="mt-1 text-xs font-medium text-muted-foreground">
                       {t("settings.noCustomHeaders")}
-                    </div>
-                  ) : (
-                    customHeaders.map((header, index) => {
-                      const issue = getCustomHeaderKeyIssue(header.key, headerValidationSubmitted);
-                      const issueTitle =
-                        issue === "reserved"
-                          ? t("settings.customHeaderReservedTitle")
-                          : issue === "invalid"
-                            ? t("settings.invalidCustomHeaderKey")
-                            : undefined;
-                      const valueVisible = visibleHeaderValues.has(index);
-
-                      return (
-                        <div
-                          key={index}
-                          className="grid grid-cols-[220px_minmax(0,1fr)_40px_40px] items-center border-b last:border-b-0 max-[720px]:mb-2 max-[720px]:grid-cols-[minmax(0,1fr)_40px_40px] max-[720px]:grid-rows-[auto_auto] max-[720px]:overflow-hidden max-[720px]:rounded-xl max-[720px]:border max-[720px]:bg-muted/20"
-                        >
-                          <Input
-                            ref={(element) => {
-                              headerKeyRefs.current[index] = element;
-                            }}
-                            value={header.key}
-                            className={cn(
-                              "h-10 rounded-none border-0 border-r bg-transparent px-3 font-mono text-xs shadow-none focus-visible:ring-1 focus-visible:ring-inset max-[720px]:col-span-3 max-[720px]:border-b max-[720px]:border-r-0 max-[720px]:bg-muted/40",
-                              issue &&
-                                "ring-1 ring-inset ring-destructive focus-visible:ring-destructive",
-                            )}
-                            placeholder={t("settings.customHeaderKeyPlaceholder")}
-                            aria-label={t("settings.customHeaderName")}
-                            aria-invalid={issue ? true : undefined}
-                            title={issueTitle}
-                            autoComplete="off"
-                            spellCheck={false}
-                            onChange={(event) =>
-                              updateCustomHeader(index, "key", event.currentTarget.value)
-                            }
-                          />
-                          <Input
-                            ref={(element) => {
-                              headerValueRefs.current[index] = element;
-                            }}
-                            type={valueVisible ? "text" : "password"}
-                            value={header.value}
-                            className="h-10 rounded-none border-0 bg-transparent px-3 font-mono text-xs shadow-none focus-visible:ring-1 focus-visible:ring-inset max-[720px]:col-start-1 max-[720px]:row-start-2"
-                            placeholder={t("settings.customHeaderValue")}
-                            aria-label={t("settings.customHeaderValue")}
-                            autoComplete="off"
-                            spellCheck={false}
-                            onChange={(event) =>
-                              updateCustomHeader(index, "value", event.currentTarget.value)
-                            }
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-10 w-10 rounded-none text-muted-foreground hover:text-foreground max-[720px]:row-start-2"
-                            onClick={() => toggleCustomHeaderValue(index)}
-                            title={
-                              valueVisible
-                                ? t("settings.hideCustomHeaderValue")
-                                : t("settings.showCustomHeaderValue")
-                            }
-                            aria-label={
-                              valueVisible
-                                ? t("settings.hideCustomHeaderValue")
-                                : t("settings.showCustomHeaderValue")
-                            }
-                          >
-                            {valueVisible ? (
-                              <EyeOff className="h-4 w-4" />
-                            ) : (
-                              <Eye className="h-4 w-4" />
-                            )}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-10 w-10 rounded-none text-muted-foreground hover:bg-destructive/10 hover:text-destructive max-[720px]:row-start-2"
-                            onClick={() => removeCustomHeader(index)}
-                            title={t("settings.removeCustomHeader")}
-                            aria-label={t("settings.removeCustomHeader")}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="mt-3 h-9 gap-1.5"
-                  onClick={() => addCustomHeader()}
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  {t("settings.addCustomHeader")}
-                </Button>
-
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {CUSTOM_HEADER_KEY_PRESETS.map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      className="min-h-9 rounded-full border border-dashed px-3 py-1.5 font-mono max-[720px]:min-h-10 max-[720px]:px-4 text-[11px] text-muted-foreground transition-colors hover:border-primary hover:text-primary"
-                      onClick={() => addCustomHeader(preset, "value")}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground/75">
+                      {t("settings.noCustomHeadersHint")}
+                    </span>
+                  </button>
+                ) : (
+                  <div className="mt-3 space-y-2">
+                    <div
+                      className="-m-0.5 max-h-[196px] space-y-2 overflow-y-auto p-0.5 max-[720px]:max-h-[360px]"
+                      onScroll={() => setHeaderSuggest(null)}
                     >
-                      + {preset}
-                    </button>
-                  ))}
-                </div>
+                      {customHeaders.map((header, index) => {
+                        const issue = getCustomHeaderKeyIssue(
+                          header.key,
+                          headerValidationSubmitted,
+                        );
+                        const issueTitle =
+                          issue === "reserved"
+                            ? t("settings.customHeaderReservedTitle")
+                            : issue === "invalid"
+                              ? t("settings.invalidCustomHeaderKey")
+                              : undefined;
+                        const valueVisible = visibleHeaderValues.has(index);
+                        const suggestOpen =
+                          headerSuggest?.index === index && headerSuggestItems.length > 0;
 
-                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-                  {t("settings.customHeaderReservedHint")}
-                </p>
+                        return (
+                          <div
+                            key={index}
+                            className={cn(
+                              "provider-panel-enter group relative flex items-stretch overflow-hidden rounded-lg border bg-card transition-all focus-within:border-primary/45 focus-within:ring-2 focus-within:ring-primary/10 hover:border-muted-foreground/30 max-[720px]:flex-wrap",
+                              issue &&
+                                "border-destructive/60 focus-within:border-destructive focus-within:ring-destructive/10",
+                            )}
+                          >
+                            <Input
+                              ref={(element) => {
+                                headerKeyRefs.current[index] = element;
+                              }}
+                              value={header.key}
+                              className={cn(
+                                "h-10 w-[210px] shrink-0 rounded-none border-0 border-r bg-muted/30 px-3 font-mono text-xs shadow-none focus-visible:ring-0 max-[720px]:w-full max-[720px]:border-b max-[720px]:border-r-0 max-[720px]:bg-muted/40",
+                                issue && "text-destructive",
+                              )}
+                              placeholder={t("settings.customHeaderKeyPlaceholder")}
+                              aria-label={t("settings.customHeaderName")}
+                              aria-invalid={issue ? true : undefined}
+                              role="combobox"
+                              aria-expanded={suggestOpen}
+                              aria-controls={suggestOpen ? "provider-header-suggest" : undefined}
+                              aria-autocomplete="list"
+                              title={issueTitle}
+                              autoComplete="off"
+                              spellCheck={false}
+                              onChange={(event) => {
+                                updateCustomHeader(index, "key", event.currentTarget.value);
+                                openHeaderSuggest(index);
+                              }}
+                              onFocus={() => openHeaderSuggest(index)}
+                              onBlur={() => setHeaderSuggest(null)}
+                              onKeyDown={(event) => {
+                                if (event.key === "ArrowDown") {
+                                  event.preventDefault();
+                                  if (suggestOpen) {
+                                    setHeaderSuggestActive(
+                                      (headerSuggestActiveIndex + 1) % headerSuggestItems.length,
+                                    );
+                                  } else {
+                                    openHeaderSuggest(index);
+                                  }
+                                  return;
+                                }
+                                if (event.key === "ArrowUp" && suggestOpen) {
+                                  event.preventDefault();
+                                  setHeaderSuggestActive(
+                                    (headerSuggestActiveIndex - 1 + headerSuggestItems.length) %
+                                      headerSuggestItems.length,
+                                  );
+                                  return;
+                                }
+                                if (event.key === "Escape" && headerSuggest) {
+                                  event.preventDefault();
+                                  setHeaderSuggest(null);
+                                  return;
+                                }
+                                if (event.key !== "Enter") return;
+                                event.preventDefault();
+                                if (suggestOpen) {
+                                  applyHeaderSuggestion(
+                                    headerSuggestItems[headerSuggestActiveIndex],
+                                  );
+                                  return;
+                                }
+                                focusCustomHeader(index, "value");
+                              }}
+                            />
+                            <div className="relative min-w-0 flex-1 max-[720px]:basis-full">
+                              <Input
+                                ref={(element) => {
+                                  headerValueRefs.current[index] = element;
+                                }}
+                                type={valueVisible ? "text" : "password"}
+                                value={header.value}
+                                className="h-10 w-full rounded-none border-0 bg-transparent pl-3 pr-[4.5rem] font-mono text-xs shadow-none focus-visible:ring-0"
+                                placeholder={t("settings.customHeaderValue")}
+                                aria-label={t("settings.customHeaderValue")}
+                                autoComplete="off"
+                                spellCheck={false}
+                                onChange={(event) =>
+                                  updateCustomHeader(index, "value", event.currentTarget.value)
+                                }
+                                onKeyDown={(event) => {
+                                  if (event.key !== "Enter") return;
+                                  event.preventDefault();
+                                  if (index === customHeaders.length - 1) addCustomHeader();
+                                  else focusCustomHeader(index + 1, "key");
+                                }}
+                              />
+                              <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 max-[720px]:opacity-100">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+                                  onClick={() => toggleCustomHeaderValue(index)}
+                                  title={
+                                    valueVisible
+                                      ? t("settings.hideCustomHeaderValue")
+                                      : t("settings.showCustomHeaderValue")
+                                  }
+                                  aria-label={
+                                    valueVisible
+                                      ? t("settings.hideCustomHeaderValue")
+                                      : t("settings.showCustomHeaderValue")
+                                  }
+                                >
+                                  {valueVisible ? (
+                                    <EyeOff className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <Eye className="h-3.5 w-3.5" />
+                                  )}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                  onClick={() => removeCustomHeader(index)}
+                                  title={t("settings.removeCustomHeader")}
+                                  aria-label={t("settings.removeCustomHeader")}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {headerIssueMessage ? (
+                  <p className="mt-2 text-xs leading-relaxed text-destructive" role="alert">
+                    {headerIssueMessage}
+                  </p>
+                ) : null}
+
+                {headerSuggest && headerSuggestItems.length > 0
+                  ? createPortal(
+                      <div
+                        id="provider-header-suggest"
+                        role="listbox"
+                        className="fixed z-[70] overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg"
+                        style={{
+                          left: headerSuggest.rect.left,
+                          top: headerSuggest.rect.top,
+                          width: headerSuggest.rect.width,
+                        }}
+                      >
+                        {headerSuggestItems.map((preset, itemIndex) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            role="option"
+                            aria-selected={itemIndex === headerSuggestActiveIndex}
+                            className={cn(
+                              "flex w-full items-center rounded-md px-2.5 py-2 text-left font-mono text-xs text-muted-foreground transition-colors",
+                              itemIndex === headerSuggestActiveIndex && "bg-accent text-foreground",
+                            )}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onMouseEnter={() => setHeaderSuggestActive(itemIndex)}
+                            onClick={() => applyHeaderSuggestion(preset)}
+                          >
+                            {preset}
+                          </button>
+                        ))}
+                      </div>,
+                      document.body,
+                    )
+                  : null}
               </section>
             )}
           </div>
