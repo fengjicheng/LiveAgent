@@ -73,9 +73,10 @@ impl AutomationScheduler {
     async fn run_loop(self: Arc<Self>) {
         {
             let store = Arc::clone(&self.store);
-            let recovered =
-                tauri::async_runtime::spawn_blocking(move || store.recover_interrupted_prompt_runs())
-                    .await;
+            let recovered = tauri::async_runtime::spawn_blocking(move || {
+                store.recover_interrupted_prompt_runs()
+            })
+            .await;
             match recovered {
                 Ok(Ok(count)) if count > 0 => {
                     eprintln!("automation: expired {count} prompt run(s) interrupted by restart");
@@ -294,12 +295,7 @@ impl AutomationScheduler {
         Ok(CronRunNowResponse { started_at })
     }
 
-    fn start_fire(
-        self: &Arc<Self>,
-        task: CronTask,
-        workdir: String,
-        trigger: RunTrigger,
-    ) -> bool {
+    fn start_fire(self: &Arc<Self>, task: CronTask, workdir: String, trigger: RunTrigger) -> bool {
         {
             let mut active = match self.active_runs.lock() {
                 Ok(guard) => guard,
@@ -317,12 +313,7 @@ impl AutomationScheduler {
         true
     }
 
-    async fn execute_fire(
-        self: Arc<Self>,
-        task: CronTask,
-        workdir: String,
-        trigger: RunTrigger,
-    ) {
+    async fn execute_fire(self: Arc<Self>, task: CronTask, workdir: String, trigger: RunTrigger) {
         let task_id = task.id.clone();
 
         if trigger == RunTrigger::Scheduled {
@@ -363,23 +354,20 @@ impl AutomationScheduler {
         // directory that no longer exists. Follow-global tasks keep the
         // legacy behavior (bash/prompt fail the run without disabling).
         let workdir = match task.workdir.as_deref().map(str::trim) {
-            Some(pin) if !pin.is_empty() => {
-                match resolve_workdir(Some(pin.to_string())) {
-                    Ok(resolved) => resolved.display().to_string(),
-                    Err(error) => {
-                        let message =
-                            format!("Cron task workspace is unavailable ({pin}): {error}");
-                        self.record_run_detached(failed_run(
-                            &task_id,
-                            message.clone(),
-                            trigger.counted(),
-                        ));
-                        self.disable_task_detached(&task_id, message);
-                        self.clear_active(&task_id);
-                        return;
-                    }
+            Some(pin) if !pin.is_empty() => match resolve_workdir(Some(pin.to_string())) {
+                Ok(resolved) => resolved.display().to_string(),
+                Err(error) => {
+                    let message = format!("Cron task workspace is unavailable ({pin}): {error}");
+                    self.record_run_detached(failed_run(
+                        &task_id,
+                        message.clone(),
+                        trigger.counted(),
+                    ));
+                    self.disable_task_detached(&task_id, message);
+                    self.clear_active(&task_id);
+                    return;
                 }
-            }
+            },
             _ => workdir,
         };
 
@@ -387,11 +375,10 @@ impl AutomationScheduler {
             let store = Arc::clone(&self.store);
             let queue_task = task.clone();
             let queue_workdir = workdir.clone();
-            let result =
-                tauri::async_runtime::spawn_blocking(move || {
-                    store.queue_prompt_run(&queue_task, &queue_workdir, trigger.counted())
-                })
-                .await;
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                store.queue_prompt_run(&queue_task, &queue_workdir, trigger.counted())
+            })
+            .await;
             match result {
                 Ok(Ok(PromptQueueOutcome::Queued)) => {}
                 Ok(Ok(PromptQueueOutcome::SkippedActiveRun)) => {
@@ -418,14 +405,14 @@ impl AutomationScheduler {
             run.counted = trigger.counted();
             run
         })
-            .await
-            .unwrap_or_else(|error| {
-                failed_run(
-                    &task_id,
-                    format!("Cron task execution join failed: {error}"),
-                    false,
-                )
-            });
+        .await
+        .unwrap_or_else(|error| {
+            failed_run(
+                &task_id,
+                format!("Cron task execution join failed: {error}"),
+                false,
+            )
+        });
         self.record_run_detached(run);
         self.clear_active(&task_id);
     }
@@ -505,9 +492,18 @@ fn execute_blocking(task: CronTask, workdir: String) -> CompletedRun {
 fn execute_bash(task: &CronTask, workdir: String) -> CompletedRun {
     let started_at = now_ms();
     let overall = Instant::now();
-    let script = task.script.as_deref().unwrap_or_default().trim().to_string();
+    let script = task
+        .script
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     if script.is_empty() {
-        return failed_run(&task.id, "No Bash script configured for this Cron task.".to_string(), true);
+        return failed_run(
+            &task.id,
+            "No Bash script configured for this Cron task.".to_string(),
+            true,
+        );
     }
     if workdir.trim().is_empty() {
         return failed_run(
@@ -549,7 +545,11 @@ fn execute_http(task: &CronTask) -> CompletedRun {
     let overall = Instant::now();
     let requests = task.requests.clone().unwrap_or_default();
     if requests.is_empty() {
-        return failed_run(&task.id, "No HTTP requests configured for this Cron task.".to_string(), true);
+        return failed_run(
+            &task.id,
+            "No HTTP requests configured for this Cron task.".to_string(),
+            true,
+        );
     }
     let client = match build_http_client(Some(task.timeout_seconds.saturating_mul(1_000))) {
         Ok(client) => client,
@@ -559,7 +559,11 @@ fn execute_http(task: &CronTask) -> CompletedRun {
     let mut sections = Vec::new();
     let mut success = true;
     for (index, request) in requests.into_iter().enumerate() {
-        let display = format!("{} {}", request.method.trim().to_uppercase(), request.url.trim());
+        let display = format!(
+            "{} {}",
+            request.method.trim().to_uppercase(),
+            request.url.trim()
+        );
         match run_single_http_request(&client, to_http_input(request)) {
             Ok(result) => sections.push(format_http_result(index + 1, &display, &result)),
             Err(error) => {

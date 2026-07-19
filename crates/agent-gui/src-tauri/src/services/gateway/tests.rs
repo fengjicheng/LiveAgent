@@ -1,13 +1,9 @@
-// build_endpoint / build_grpc_url 属 gRPC 回退路径的既有覆盖：v1 移除时一并删除。
-#[allow(deprecated)]
 use super::{
-    build_chat_event_envelope, build_chat_runtime_snapshot_envelope, build_endpoint,
-    build_gateway_runtime_status_envelope, build_grpc_url,
-    build_local_settings_update_event_payload, chat_event_is_terminal,
-    format_gateway_terminal_stream_rpc_error, gateway_connection_needs_restart,
-    gateway_connection_stale_after, gateway_reconnect_backoff, history_share_resolve_error_code,
-    is_chat_runtime_wake_request_id, merge_settings_sync_snapshot,
-    merge_settings_update_into_snapshot, proto, queue_terminal_stream_handshake_frame,
+    build_chat_event_envelope, build_chat_runtime_snapshot_envelope,
+    build_gateway_runtime_status_envelope, build_local_settings_update_event_payload,
+    chat_event_is_terminal, gateway_connection_needs_restart, gateway_connection_stale_after,
+    gateway_reconnect_backoff, history_share_resolve_error_code, is_chat_runtime_wake_request_id,
+    merge_settings_sync_snapshot, merge_settings_update_into_snapshot, proto,
     required_terminal_project_path_key, set_disconnected_status, GatewayChatRequestEvent,
     GatewayChatRuntimeSnapshot, GatewayController, GatewayStatusSnapshot, RemoteChatInboxRecord,
     GATEWAY_CHAT_LEASE_MS, GATEWAY_CHAT_RUNNING_LEASE_MS, GATEWAY_RECONNECT_MAX,
@@ -594,80 +590,6 @@ fn gateway_reconnect_backoff_is_fast_after_a_stable_session_and_bounded_on_failu
         gateway_reconnect_backoff(GATEWAY_RECONNECT_MAX, GATEWAY_RECONNECT_STABLE_AFTER);
     assert_eq!(stable_delay, GATEWAY_RECONNECT_MIN);
     assert_eq!(stable_next, GATEWAY_RECONNECT_MIN * 2);
-}
-
-#[test]
-// gRPC 回退路径的既有覆盖：v1 移除时与被测函数一并删除。
-#[allow(deprecated)]
-fn build_https_gateway_endpoint_initializes_tls_provider() {
-    build_endpoint("https://agent.cnweb.org:443", Duration::from_secs(30))
-        .expect("build https gateway endpoint");
-}
-
-#[test]
-// gRPC 回退路径的既有覆盖：v1 移除时与被测函数一并删除。
-#[allow(deprecated)]
-fn build_grpc_url_prefers_explicit_endpoint() {
-    let config = RemoteSettingsPayload {
-        enabled: true,
-        gateway_url: "https://gateway.example.com".to_string(),
-        grpc_port: 50051,
-        grpc_endpoint: "tcp.proxy.rlwy.net:12345".to_string(),
-        token: "dev-token".to_string(),
-        agent_id: "agent".to_string(),
-        auto_reconnect: true,
-        heartbeat_interval: 30,
-        enable_web_terminal: false,
-        enable_web_ssh_terminal: false,
-        enable_web_git: false,
-        enable_web_tunnels: false,
-    };
-
-    let grpc_url = build_grpc_url(&config).expect("build explicit gRPC endpoint");
-
-    assert_eq!(grpc_url, "http://tcp.proxy.rlwy.net:12345");
-}
-
-#[test]
-fn terminal_stream_handshake_frame_is_gateway_noop() {
-    let (sender, mut receiver) = tokio::sync::mpsc::channel::<proto::TerminalStreamFrame>(1);
-
-    queue_terminal_stream_handshake_frame(&sender).expect("queue terminal stream handshake");
-
-    let frame = receiver
-        .try_recv()
-        .expect("terminal stream handshake frame");
-    assert_eq!(frame.kind, "detach");
-    assert!(frame.stream_id.starts_with("desktop-handshake-"));
-    assert!(frame.session_id.is_empty());
-}
-
-#[test]
-fn terminal_stream_h2_error_points_to_grpc_endpoint() {
-    let config = RemoteSettingsPayload {
-        enabled: true,
-        gateway_url: "https://gateway.example.com".to_string(),
-        grpc_port: 443,
-        grpc_endpoint: String::new(),
-        token: "dev-token".to_string(),
-        agent_id: "agent".to_string(),
-        auto_reconnect: true,
-        heartbeat_interval: 30,
-        enable_web_terminal: true,
-        enable_web_ssh_terminal: true,
-        enable_web_git: false,
-        enable_web_tunnels: false,
-    };
-
-    let message = format_gateway_terminal_stream_rpc_error(
-        "receive",
-        &tonic::Status::internal("h2 protocol error: http2 error"),
-        &config,
-    );
-
-    assert!(message.contains("receive failed"));
-    assert!(message.contains("HTTP/2 bidi streams"));
-    assert!(message.contains("https://gateway.example.com"));
 }
 
 #[test]

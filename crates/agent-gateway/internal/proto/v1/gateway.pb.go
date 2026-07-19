@@ -11944,11 +11944,7 @@ const file_proto_v1_gateway_proto_rawDesc = "" +
 	"\x13TunnelWsMessageType\x12&\n" +
 	"\"TUNNEL_WS_MESSAGE_TYPE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bTUNNEL_WS_MESSAGE_TYPE_TEXT\x10\x01\x12!\n" +
-	"\x1dTUNNEL_WS_MESSAGE_TYPE_BINARY\x10\x022\xbc\x02\n" +
-	"\fAgentGateway\x12^\n" +
-	"\fAgentConnect\x12#.liveagent.gateway.v1.AgentEnvelope\x1a%.liveagent.gateway.v1.GatewayEnvelope(\x010\x01\x12p\n" +
-	"\x14AgentTerminalConnect\x12).liveagent.gateway.v1.TerminalStreamFrame\x1a).liveagent.gateway.v1.TerminalStreamFrame(\x010\x01\x12U\n" +
-	"\fAuthenticate\x12!.liveagent.gateway.v1.AuthRequest\x1a\".liveagent.gateway.v1.AuthResponse\x1a\x03\x88\x02\x01B@Z>github.com/liveagent/agent-gateway/internal/proto/v1;gatewayv1b\x06proto3"
+	"\x1dTUNNEL_WS_MESSAGE_TYPE_BINARY\x10\x02B@Z>github.com/liveagent/agent-gateway/internal/proto/v1;gatewayv1b\x06proto3"
 
 var (
 	file_proto_v1_gateway_proto_rawDescOnce sync.Once
@@ -12262,14 +12258,8 @@ var file_proto_v1_gateway_proto_depIdxs = []int32{
 	111, // 153: liveagent.gateway.v1.FsRootsResponse.roots:type_name -> liveagent.gateway.v1.FsRoot
 	115, // 154: liveagent.gateway.v1.FsListDirsResponse.entries:type_name -> liveagent.gateway.v1.FsDirEntry
 	120, // 155: liveagent.gateway.v1.FsListResponse.entries:type_name -> liveagent.gateway.v1.FsListEntry
-	6,   // 156: liveagent.gateway.v1.AgentGateway.AgentConnect:input_type -> liveagent.gateway.v1.AgentEnvelope
-	48,  // 157: liveagent.gateway.v1.AgentGateway.AgentTerminalConnect:input_type -> liveagent.gateway.v1.TerminalStreamFrame
-	3,   // 158: liveagent.gateway.v1.AgentGateway.Authenticate:input_type -> liveagent.gateway.v1.AuthRequest
-	5,   // 159: liveagent.gateway.v1.AgentGateway.AgentConnect:output_type -> liveagent.gateway.v1.GatewayEnvelope
-	48,  // 160: liveagent.gateway.v1.AgentGateway.AgentTerminalConnect:output_type -> liveagent.gateway.v1.TerminalStreamFrame
-	4,   // 161: liveagent.gateway.v1.AgentGateway.Authenticate:output_type -> liveagent.gateway.v1.AuthResponse
-	159, // [159:162] is the sub-list for method output_type
-	156, // [156:159] is the sub-list for method input_type
+	156, // [156:156] is the sub-list for method output_type
+	156, // [156:156] is the sub-list for method input_type
 	156, // [156:156] is the sub-list for extension type_name
 	156, // [156:156] is the sub-list for extension extendee
 	0,   // [0:156] is the sub-list for field type_name
@@ -12400,7 +12390,7 @@ func file_proto_v1_gateway_proto_init() {
 			NumEnums:      3,
 			NumMessages:   136,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   0,
 		},
 		GoTypes:           file_proto_v1_gateway_proto_goTypes,
 		DependencyIndexes: file_proto_v1_gateway_proto_depIdxs,

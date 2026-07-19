@@ -12,7 +12,6 @@ const DefaultGRPCMaxMessageBytes = 64 * 1024 * 1024
 
 type Config struct {
 	Token                    string
-	GRPCAddr                 string
 	HTTPAddr                 string
 	TLSCert                  string
 	TLSKey                   string
@@ -29,6 +28,11 @@ type Config struct {
 	GRPCMaxMessageBytes      int
 	RelayBufferSeconds       int
 
+	// GRPCAddr is accepted but unused.
+	//
+	// Deprecated: v1 gRPC 链路已随协议 v2 统一移除，网关不再监听 gRPC 端口；保留本 flag 仅为不破坏既有启动脚本，下个版本删除。
+	GRPCAddr string
+
 	// CommandQueueTimeout is accepted but unused.
 	//
 	// Deprecated: 离线命令队列（生产不可达路径）已随死代码清理移除；保留本 flag 仅为不破坏既有启动脚本，下个版本删除。
@@ -39,7 +43,7 @@ func Load() *Config {
 	cfg := &Config{}
 
 	flag.StringVar(&cfg.Token, "token", getenv("LIVEAGENT_GATEWAY_TOKEN", ""), "shared authentication token")
-	flag.StringVar(&cfg.GRPCAddr, "grpc-addr", getenv("LIVEAGENT_GATEWAY_GRPC_ADDR", ":50051"), "gRPC listen address")
+	flag.StringVar(&cfg.GRPCAddr, "grpc-addr", getenv("LIVEAGENT_GATEWAY_GRPC_ADDR", ""), "deprecated, no-op (v1 gRPC removed; kept for startup-script compatibility)")
 	flag.StringVar(&cfg.HTTPAddr, "http-addr", getenv("LIVEAGENT_GATEWAY_HTTP_ADDR", defaultHTTPAddr()), "HTTP listen address")
 	flag.StringVar(&cfg.TLSCert, "tls-cert", getenv("LIVEAGENT_GATEWAY_TLS_CERT", ""), "TLS certificate path")
 	flag.StringVar(&cfg.TLSKey, "tls-key", getenv("LIVEAGENT_GATEWAY_TLS_KEY", ""), "TLS private key path")

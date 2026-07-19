@@ -1,7 +1,7 @@
 package websocket_test
 
-// v2（WebSocket+Protobuf）二进制帧测试 harness，与 v1 JSON harness 并列：起真实 httptest
-// 服务器、以子协议拨号、按 proto 帧收发。v1 harness 在 v1 删除前保持不动。
+// v2（WebSocket+Protobuf）二进制帧测试 harness：起真实 httptest 服务器、以子协议拨号、
+// 按 proto 帧收发。
 
 import (
 	"net/http"
@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/liveagent/agent-gateway/internal/config"
+	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
 	gatewayv2 "github.com/liveagent/agent-gateway/internal/proto/v2"
 	"github.com/liveagent/agent-gateway/internal/protocol/pbws"
 	"github.com/liveagent/agent-gateway/internal/session"
@@ -152,4 +153,54 @@ func newV2BrowserTest(t *testing.T) (*session.Manager, *session.AgentSession, *w
 	conn, cleanup := dialV2(t, handler)
 	helloV2(t, conn, "ws-token")
 	return sm, agentSession, conn, cleanup
+}
+
+// readOutboundEnvelope 取出网关发往桌面端的下一条信封并 Ack。
+func readOutboundEnvelope(t *testing.T, agentSession *session.AgentSession) *gatewayv1.GatewayEnvelope {
+	t.Helper()
+	select {
+	case outbound := <-agentSession.Outbound():
+		outbound.Ack(nil)
+		return outbound.GatewayEnvelope
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for gateway request to reach agent")
+		return nil
+	}
+}
+
+// answerChatRuntimeProbe 以假桌面端身份应答 chat.prepare 的关联 Ping 探测。
+func answerChatRuntimeProbe(
+	t *testing.T,
+	sm *session.Manager,
+	agentSession *session.AgentSession,
+) string {
+	t.Helper()
+	envelope := readOutboundEnvelope(t, agentSession)
+	requestID := envelope.GetRequestId()
+	if !strings.HasPrefix(requestID, "chat-runtime-wake-") || envelope.GetPing() == nil {
+		t.Fatalf("chat runtime probe = %#v, want chat-runtime-wake-* Ping", envelope)
+	}
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: requestID,
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.AgentEnvelope_Pong{
+			Pong: &gatewayv1.PongResponse{Timestamp: envelope.GetPing().GetTimestamp()},
+		},
+	})
+	return requestID
+}
+
+// dispatchStarted 以假桌面端身份上报 run 的 started 控制事件。
+func dispatchStarted(sm *session.Manager, runID string, conversationID string) {
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: runID,
+		Payload: &gatewayv1.AgentEnvelope_ChatControl{
+			ChatControl: &gatewayv1.ChatControlEvent{
+				RequestId:      runID,
+				ConversationId: conversationID,
+				Type:           "started",
+				State:          "running",
+			},
+		},
+	})
 }

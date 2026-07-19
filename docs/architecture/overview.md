@@ -7,7 +7,7 @@
 | 桌面 GUI | `crates/agent-gui/src` | React、TypeScript、Vite、Tailwind | Chat shell、Settings、Skills Hub、MCP Hub、Memory UI、历史侧边栏、上传与流式渲染。 |
 | 桌面后端 | `crates/agent-gui/src-tauri/src` | Tauri 2、Rust、SQLite、tokio | 系统命令、文件/Shell/进程、MCP runtime、MemoryStore、CronManager、GatewayController、代理服务。 |
 | Agent 运行时 | `crates/agent-gui/src/lib/chat`、`crates/agent-gui/src/pages/chat`、`crates/agent-gui/src/lib/tools` | TypeScript、`@mariozechner/pi-ai` | 构造上下文、请求模型、执行工具、压缩上下文、持久化历史、发布 Gateway 事件。 |
-| Gateway | `crates/agent-gateway` | Go、net/http、WebSocket+Protobuf（v2；gRPC 已弃用） | 桌面 Agent 与浏览器 WebUI 的远程中继、认证、会话管理、恢复缓冲、静态 WebUI 和分享页。 |
+| Gateway | `crates/agent-gateway` | Go、net/http、WebSocket+Protobuf（v2） | 桌面 Agent 与浏览器 WebUI 的远程中继、认证、会话管理、恢复缓冲、静态 WebUI 和分享页。 |
 | WebUI | `crates/agent-gateway/web` | React、TypeScript、Vite、WebSocket | 远程浏览器端 Chat/Settings/Hub 壳层，通过 Gateway 操作本地 Agent。 |
 | 资料与策略 | `doc/`、`docs/` | Markdown、SQL | 历史设计、专项计划、当前架构索引。 |
 
@@ -15,9 +15,9 @@
 
 | 进程/运行环境 | 入口 | 和谁通信 | 权限边界 |
 |---|---|---|---|
-| Tauri WebView | `crates/agent-gui/src/main.tsx`、`src/App.tsx` | Tauri invoke、Gateway gRPC bridge、模型 API | 用户可见桌面界面，触发本地能力但不直接访问 Rust 内部状态。 |
-| Tauri Rust 进程 | `src-tauri/src/main.rs`、`src-tauri/src/lib.rs` | 前端 invoke、SQLite、OS、Gateway WebSocket v2（gRPC 回退）、MCP server | 本地高权限真相源，负责系统能力、持久化与远程桥接。 |
-| Gateway Go 进程 | `crates/agent-gateway/cmd/gateway/main.go` | Desktop/Browser WebSocket v2（Protobuf 帧）、HTTP；v1 gRPC 与 JSON WS 弃用兼容 | 网络中继层，不直接执行本地工具。 |
+| Tauri WebView | `crates/agent-gui/src/main.tsx`、`src/App.tsx` | Tauri invoke、Gateway bridge、模型 API | 用户可见桌面界面，触发本地能力但不直接访问 Rust 内部状态。 |
+| Tauri Rust 进程 | `src-tauri/src/main.rs`、`src-tauri/src/lib.rs` | 前端 invoke、SQLite、OS、Gateway WebSocket v2、MCP server | 本地高权限真相源，负责系统能力、持久化与远程桥接。 |
+| Gateway Go 进程 | `crates/agent-gateway/cmd/gateway/main.go` | Desktop/Browser WebSocket v2（Protobuf 帧）、HTTP | 网络中继层，不直接执行本地工具。 |
 | Browser WebUI | `crates/agent-gateway/web/src/main.tsx`、`web/src/App.tsx` | Gateway `/ws/v2`、`/api/*` | 远程 UI，仅持有 token、脱敏设置和本地浏览器缓存。 |
 
 ## 核心数据流
@@ -65,7 +65,6 @@ Browser WebUI
         ▼
 Go Gateway
   ├─ HTTP/WS: /ws/v2, /ws/v2/agent, /ws/v2/terminal, /api/status, /api/files/import, /api/public/history-shares/{token}
-  ├─ 弃用兼容: /ws, /ws/terminal, gRPC AgentGateway.*
   └─ session.Manager: agent session, streams, settings/history subscribers, bounded chat relay window
         │
         ▼

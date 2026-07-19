@@ -25,7 +25,6 @@ DESKTOP_RELEASE_TAURI_CONFIG_FLAGS ?= --config $(DESKTOP_RELEASE_TAURI_CONFIG) $
 
 DEV_GATEWAY_TOKEN ?= dev-token
 DEV_GATEWAY_HTTP_ADDR ?= :50052
-DEV_GATEWAY_GRPC_ADDR ?= :50051
 DEV_WEBUI_PROXY_API ?= http://localhost:50052
 GATEWAY_DOCKER_IMAGE ?= liveagent-gateway:local
 RELEASE_TAG ?=
@@ -108,7 +107,7 @@ check-github-release-tag:
 
 ## Gateway development
 dev-gateway:
-	go -C $(AGENT_GATEWAY_DIR) run ./cmd/gateway --token=$(DEV_GATEWAY_TOKEN) --http-addr=$(DEV_GATEWAY_HTTP_ADDR) --grpc-addr=$(DEV_GATEWAY_GRPC_ADDR)
+	go -C $(AGENT_GATEWAY_DIR) run ./cmd/gateway --token=$(DEV_GATEWAY_TOKEN) --http-addr=$(DEV_GATEWAY_HTTP_ADDR)
 
 dev-webui:
 	npm_config_proxy_api=$(DEV_WEBUI_PROXY_API) pnpm --dir $(AGENT_GATEWAY_WEB_DIR) dev
@@ -137,7 +136,7 @@ gateway-docker-build:
 	docker build -t $(GATEWAY_DOCKER_IMAGE) .
 
 gateway-docker-run:
-	docker run --rm -p 8080:8080 -p 50051:50051 -e LIVEAGENT_GATEWAY_TOKEN=$(DEV_GATEWAY_TOKEN) $(GATEWAY_DOCKER_IMAGE)
+	docker run --rm -p 8080:8080 -e LIVEAGENT_GATEWAY_TOKEN=$(DEV_GATEWAY_TOKEN) $(GATEWAY_DOCKER_IMAGE)
 
 gateway-docker-smoke: gateway-docker-build
 	@set -e; \

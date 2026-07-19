@@ -15,19 +15,11 @@ lint:
   # v1 契约早于 buf lint，历史命名不翻新（wire 兼容优先）；豁免为全量 lint 确认后的最小集，
   # 仅限 v1 文件——v2 及新增 proto 必须完整满足 STANDARD。
   ignore_only:
-    SERVICE_SUFFIX:
-      - proto/v1/gateway.proto
-    RPC_REQUEST_STANDARD_NAME:
-      - proto/v1/gateway.proto
-    RPC_RESPONSE_STANDARD_NAME:
-      - proto/v1/gateway.proto
-    RPC_REQUEST_RESPONSE_UNIQUE:
-      - proto/v1/gateway.proto
     ENUM_VALUE_PREFIX:
       - proto/v1/gateway.proto
     ENUM_ZERO_VALUE_SUFFIX:
       - proto/v1/gateway.proto
 breaking:
   use:
-    # WIRE_JSON：兼守二进制与 JSON 线格式兼容（v1 JSON 协议仍在服务期）。
+    # WIRE_JSON：兼守二进制与 JSON 线格式兼容（chat 事件与公开分享页仍走 JSON 载荷）。
     - WIRE_JSON

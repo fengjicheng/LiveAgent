@@ -1524,12 +1524,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.remoteDisable": "关闭远程访问",
     "settings.remoteGatewayConnection": "Gateway 连接",
     "settings.remoteGatewayUrl": "Gateway 地址",
-    "settings.remoteGatewayUrlHint": "云端 Gateway 的 HTTPS 地址，用于 WebUI 访问和 gRPC 连接",
-    "settings.remoteGrpcPort": "gRPC 端口",
-    "settings.remoteGrpcPortHint": "Gateway 上 gRPC 服务的监听端口，默认 50051",
-    "settings.remoteGrpcEndpoint": "gRPC Endpoint",
-    "settings.remoteGrpcEndpointHint":
-      "可选。Railway TCP Proxy 等场景可填写独立 gRPC 地址，留空则使用 Gateway 地址加 gRPC 端口。",
+    "settings.remoteGatewayUrlHint":
+      "云端 Gateway 的 HTTPS 地址，用于 WebUI 访问与桌面端 v2 WebSocket 连接",
     "settings.remoteAuth": "身份认证",
     "settings.remoteToken": "访问令牌",
     "settings.remoteTokenPlaceholder": "输入与 Gateway 配置一致的 Token",
@@ -3481,12 +3477,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.remoteGatewayConnection": "Gateway Connection",
     "settings.remoteGatewayUrl": "Gateway URL",
     "settings.remoteGatewayUrlHint":
-      "HTTPS address of the cloud Gateway for WebUI access and gRPC connection",
-    "settings.remoteGrpcPort": "gRPC Port",
-    "settings.remoteGrpcPortHint": "The gRPC service port on the Gateway, default 50051",
-    "settings.remoteGrpcEndpoint": "gRPC Endpoint",
-    "settings.remoteGrpcEndpointHint":
-      "Optional. Use a separate gRPC address for Railway TCP Proxy or similar hosts. Leave empty to use the Gateway URL plus gRPC port.",
+      "HTTPS address of the cloud Gateway for WebUI access and the desktop v2 WebSocket link",
     "settings.remoteAuth": "Authentication",
     "settings.remoteToken": "Access Token",
     "settings.remoteTokenPlaceholder": "Enter the token matching Gateway config",

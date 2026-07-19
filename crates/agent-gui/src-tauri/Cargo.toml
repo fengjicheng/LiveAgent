@@ -49,8 +49,6 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 leveldb-core = "0.1.0"
 chrono = "0.4.45"
 tokio-cron-scheduler = "0.15.1"
-tonic = { version = "0.14.6", features = ["transport", "tls-ring", "tls-webpki-roots"] }
-tonic-prost = "0.14.6"
 rustls = { version = "0.23.41", default-features = false, features = ["ring", "std"] }
 prost = "0.14.4"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

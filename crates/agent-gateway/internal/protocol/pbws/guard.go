@@ -61,11 +61,16 @@ func vetAgentRequest(sm *session.Manager, env *gatewayv1.GatewayEnvelope) error 
 		*gatewayv1.GatewayEnvelope_FsDelete,
 		*gatewayv1.GatewayEnvelope_FsReadEditableText,
 		*gatewayv1.GatewayEnvelope_FsReadWorkspaceImage,
-		*gatewayv1.GatewayEnvelope_GitRequest,
 		*gatewayv1.GatewayEnvelope_ChatQueue:
 		return nil
 
 	// ---- 带功能门控 / 限额的直通臂 ----
+	case *gatewayv1.GatewayEnvelope_GitRequest:
+		action := strings.TrimSpace(payload.GitRequest.GetAction())
+		if gitActionIsWrite(action) && !sm.WebGitEnabled() {
+			return errors.New("web git is disabled in desktop Remote settings")
+		}
+		return nil
 	case *gatewayv1.GatewayEnvelope_TerminalRequest:
 		req := payload.TerminalRequest
 		action := strings.TrimSpace(req.GetAction())
@@ -96,6 +101,17 @@ func vetAgentRequest(sm *session.Manager, env *gatewayv1.GatewayEnvelope) error 
 		// 含 chat_command（须走网关编排）、ping（探活由网关发起）、upload_readable_files
 		// （走 HTTP 上传）、history_share_resolve（公共分享端点专用）及网关内部推送臂。
 		return errors.New("unsupported agent_request payload")
+	}
+}
+
+// gitActionIsWrite 判定 git 直通请求是否为写操作：写操作受桌面端 Remote 设置
+// enable_web_git 门控，读操作（status/log/diff 等）始终放行。
+func gitActionIsWrite(action string) bool {
+	switch action {
+	case "init", "switch_branch", "create_branch", "stage", "stage_all", "unstage", "unstage_all", "discard", "discard_all", "add_to_gitignore", "commit", "fetch", "pull", "set_remote", "push", "delete_branch", "rename_branch", "stash_push", "stash_pop":
+		return true
+	default:
+		return false
 	}
 }
 

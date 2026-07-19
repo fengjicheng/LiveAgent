@@ -3,15 +3,12 @@ use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
 
 use futures_util::SinkExt as _;
-use reqwest::Url;
 use serde_json::Value;
 use tauri::Emitter;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tonic::metadata::MetadataValue;
-use tonic::transport::{ClientTlsConfig, Endpoint};
 
 use crate::commands::settings::RemoteSettingsPayload;
 use crate::runtime::terminal::TerminalEventPayload;
@@ -20,14 +17,7 @@ use crate::services::gateway_bridge;
 use super::gateway_proto::v2;
 use super::*;
 
-/// v2 链路一次连接尝试的失败分类（模块内部）。
-enum WsServeError {
-    /// 握手层失败（旧网关无 /ws/v2/agent）：允许同一次尝试内回退 gRPC。
-    Handshake(String),
-    /// 鉴权拒绝或链路已建立后出错：不回退，按普通连接错误上抛；下次重连仍先试 v2。
-    Fatal(String),
-}
-
+/// 后台任务句柄的 RAII 中止器。
 struct AbortTaskOnDrop(tauri::async_runtime::JoinHandle<()>);
 
 impl Drop for AbortTaskOnDrop {
@@ -105,72 +95,33 @@ impl GatewayController {
         }
     }
 
-    /// 连接尝试入口：先试 v2；握手层失败（旧网关无 /ws/v2/agent，典型 404/非 101）时同一次尝试内
-    /// 回退 v1 gRPC，鉴权被拒不回退直接上抛；每次重连都重新从 v2 试起。
-    /// 回退会话最多持续 [`GATEWAY_WS_UPGRADE_RETRY_INTERVAL`] 便主动断开重试 v2——防瞬时抖动
-    /// 导致长驻 v1、污染"v1 流量归零"信号（重连亚秒级且会话层幂等对账，中断代价可忽略）。
+    /// v2 主链路（v1 gRPC 回退已随 v1 协议移除）：hello 握手完成鉴权与会话登记后双向收发
+    /// 信封（双通道合并、状态迁移、对账、分发），外加传输层存活看门狗。任何失败（网关不可达、
+    /// 握手失败、鉴权被拒、链路中断）一律上抛错误消息，由外层 run 循环统一退避重连。
     pub(crate) async fn connect_and_serve(
         self: &Arc<Self>,
         config: RemoteSettingsPayload,
         config_rx: &mut watch::Receiver<RemoteSettingsPayload>,
     ) -> Result<(), String> {
-        match self.connect_and_serve_ws(config.clone(), config_rx).await {
-            Ok(()) => Ok(()),
-            Err(WsServeError::Fatal(error)) => Err(error),
-            Err(WsServeError::Handshake(error)) => {
-                eprintln!("gateway v2 handshake failed: {error}; falling back to v1 gRPC");
-                #[allow(deprecated)]
-                {
-                    tokio::select! {
-                        result = self.connect_and_serve_grpc(config, config_rx) => result,
-                        _ = tokio::time::sleep(GATEWAY_WS_UPGRADE_RETRY_INTERVAL) => {
-                            eprintln!(
-                                "gateway v1 fallback session reached upgrade-retry window; \
-                                 reconnecting to retry v2"
-                            );
-                            Ok(())
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// v2 主链路：hello 握手（等价 Authenticate）后按 gRPC AgentConnect 完全相同的语义收发信封
-    /// （双通道合并、状态迁移、对账、分发），外加取代 h2 keepalive 的存活看门狗。
-    async fn connect_and_serve_ws(
-        self: &Arc<Self>,
-        config: RemoteSettingsPayload,
-        config_rx: &mut watch::Receiver<RemoteSettingsPayload>,
-    ) -> Result<(), WsServeError> {
-        let ws_url = build_ws_url(&config.gateway_url, config.grpc_port, GATEWAY_WS_AGENT_PATH)
-            .map_err(WsServeError::Handshake)?;
+        let ws_url = build_ws_url(&config.gateway_url, config.grpc_port, GATEWAY_WS_AGENT_PATH)?;
         let hello = build_client_hello(
             &config.token,
             effective_agent_id(&config),
             crate::app_version().to_string(),
         );
 
-        let connect_result =
-            await_abortable_on_reconfigure(&config, config_rx, async move {
-                Ok(connect_agent_ws(&ws_url, hello).await)
-            })
-            .await
-            .map_err(WsServeError::Fatal)?;
+        let connect_result = await_abortable_on_reconfigure(&config, config_rx, async move {
+            Ok(connect_agent_ws(&ws_url, hello).await)
+        })
+        .await?;
         let (mut ws, server_hello) = match connect_result {
             None => return Ok(()),
-            Some(Ok(established)) => established,
-            Some(Err(WsHandshakeError::Handshake(error))) => {
-                return Err(WsServeError::Handshake(error))
-            }
-            Some(Err(WsHandshakeError::AuthRejected(error))) => {
-                return Err(WsServeError::Fatal(error))
-            }
+            Some(established) => established?,
         };
 
         let (outbound_tx, outbound_rx) = mpsc::channel::<proto::AgentEnvelope>(4096);
         self.set_outbound_sender(Some(outbound_tx));
-        // 控制小通道：Pong 不排在数据信封之后（与 gRPC 路径同策略，下方公平合并进出站流）。
+        // 控制小通道：Pong 不排在数据信封之后（下方公平合并进出站流）。
         let (outbound_control_tx, outbound_control_rx) =
             mpsc::channel::<proto::AgentEnvelope>(GATEWAY_OUTBOUND_CONTROL_QUEUE_DEPTH);
         self.set_outbound_control_sender(Some(outbound_control_tx));
@@ -285,139 +236,6 @@ impl GatewayController {
                             break Err(format!("gateway ws liveness ping failed: {error}"));
                         }
                         probe_deadline = Some(Instant::now() + GATEWAY_WS_PROBE_GRACE);
-                    }
-                }
-            };
-            receive_result
-        }
-        .await;
-
-        let _ = terminal_stop_tx.send(true);
-        terminal_task.abort();
-        self.set_terminal_stream_sender(None);
-        serve_result.map_err(WsServeError::Fatal)
-    }
-
-    /// v1 gRPC 主链路（Authenticate + AgentConnect），行为与迁移前逐字一致。
-    #[deprecated(note = "v1 gRPC 链路仅作旧网关回退，v1 移除时一并删除")]
-    #[allow(deprecated)] // 函数体即回退路径，成串调用同批弃用的 gRPC 辅助函数。
-    pub(crate) async fn connect_and_serve_grpc(
-        self: &Arc<Self>,
-        config: RemoteSettingsPayload,
-        config_rx: &mut watch::Receiver<RemoteSettingsPayload>,
-    ) -> Result<(), String> {
-        let grpc_url = build_grpc_url(&config)?;
-        // The heartbeat interval setting drives the h2 keepalive cadence; the
-        // lower bound stays above the gateway's keepalive enforcement MinTime.
-        let keepalive_interval = Duration::from_secs(config.heartbeat_interval.clamp(10, 60));
-        let endpoint = build_endpoint(&grpc_url, keepalive_interval)?;
-        let channel = endpoint.connect_lazy();
-
-        let mut client = proto::agent_gateway_client::AgentGatewayClient::new(channel)
-            .max_decoding_message_size(GATEWAY_GRPC_MAX_MESSAGE_BYTES)
-            .max_encoding_message_size(GATEWAY_GRPC_MAX_MESSAGE_BYTES);
-        let mut auth_request = tonic::Request::new(proto::AuthRequest {
-            token: config.token.clone(),
-            agent_id: effective_agent_id(&config),
-            agent_version: crate::app_version().to_string(),
-        });
-        insert_bearer_metadata(auth_request.metadata_mut(), &config.token)?;
-
-        let auth_call = client.authenticate(auth_request);
-        let auth_response = match await_abortable_on_reconfigure(&config, config_rx, async move {
-            tokio::time::timeout(Duration::from_secs(10), auth_call)
-                .await
-                .map_err(|_| "gateway authenticate timed out".to_string())?
-                .map_err(|e| format!("gateway authenticate failed: {e}"))
-                .map(|response| response.into_inner())
-        })
-        .await?
-        {
-            Some(response) => response,
-            None => return Ok(()),
-        };
-        if !auth_response.success {
-            return Err(if auth_response.message.trim().is_empty() {
-                "gateway authentication failed".to_string()
-            } else {
-                auth_response.message
-            });
-        }
-
-        let terminal_client = client.clone();
-
-        let (outbound_tx, outbound_rx) = mpsc::channel::<proto::AgentEnvelope>(4096);
-        self.set_outbound_sender(Some(outbound_tx));
-        // Control lane: Pong replies must not queue behind streamed data
-        // envelopes, or wake probes time out precisely when a reply is
-        // saturating the data queue. Merged fairly into the same stream below.
-        let (outbound_control_tx, outbound_control_rx) =
-            mpsc::channel::<proto::AgentEnvelope>(GATEWAY_OUTBOUND_CONTROL_QUEUE_DEPTH);
-        self.set_outbound_control_sender(Some(outbound_control_tx));
-        let (terminal_stop_tx, terminal_stop_rx) = watch::channel(false);
-        let terminal_task =
-            self.spawn_terminal_stream(terminal_client, config.clone(), terminal_stop_rx);
-
-        let serve_result = async {
-            let mut connect_request = tonic::Request::new(
-                ReceiverStream::new(outbound_control_rx).merge(ReceiverStream::new(outbound_rx)),
-            );
-            insert_bearer_metadata(connect_request.metadata_mut(), &config.token)?;
-
-            let connect_call = client.agent_connect(connect_request);
-            let response = match await_abortable_on_reconfigure(&config, config_rx, async move {
-                tokio::time::timeout(Duration::from_secs(10), connect_call)
-                    .await
-                    .map_err(|_| "open gateway stream timed out".to_string())?
-                    .map_err(|e| format!("open gateway stream failed: {e}"))
-            })
-            .await?
-            {
-                Some(response) => response,
-                None => return Ok(()),
-            };
-            let mut inbound = response.into_inner();
-
-            let connected_at = now_unix_seconds();
-            self.publish_status(|status| {
-                status.online = true;
-                status.enabled = true;
-                status.configured = true;
-                status.gateway_url = config.gateway_url.clone();
-                status.agent_id = effective_agent_id(&config);
-                status.session_id = Some(auth_response.session_id.clone());
-                status.connected_since = Some(connected_at);
-                status.last_heartbeat = Some(connected_at);
-                status.last_error = None;
-                status.protocol = Some("v1".to_string());
-            });
-
-            let _reconcile_task = AbortTaskOnDrop(self.spawn_post_connect_reconciliation());
-
-            // Dead links are detected by the transport-level HTTP/2 keepalive
-            // configured on the endpoint and surface as receive errors here.
-            let receive_result = loop {
-                tokio::select! {
-                    changed = config_rx.changed() => {
-                        if changed.is_err() {
-                            break Ok(());
-                        }
-                        let next = config_rx.borrow().clone();
-                        if next != config {
-                            break Ok(());
-                        }
-                    }
-                    message = inbound.message() => {
-                        match message {
-                            Err(err) => break Err(format!("gateway stream receive failed: {err}")),
-                            Ok(None) => break Err("gateway stream closed".to_string()),
-                            Ok(Some(envelope)) => {
-                                self.touch_heartbeat();
-                                if let Err(error) = self.handle_gateway_envelope(envelope).await {
-                                    break Err(error);
-                                }
-                            }
-                        }
                     }
                 }
             };
@@ -700,98 +518,11 @@ pub(crate) fn build_error_response_envelope(
     }
 }
 
-#[deprecated(note = "v1 gRPC 链路仅作旧网关回退，v1 移除时一并删除")]
-pub(crate) fn build_grpc_url(config: &RemoteSettingsPayload) -> Result<String, String> {
-    let grpc_endpoint = config.grpc_endpoint.trim();
-    if !grpc_endpoint.is_empty() {
-        let with_scheme =
-            if grpc_endpoint.starts_with("http://") || grpc_endpoint.starts_with("https://") {
-                grpc_endpoint.to_string()
-            } else {
-                format!("http://{grpc_endpoint}")
-            };
-        let mut url =
-            Url::parse(&with_scheme).map_err(|e| format!("invalid gateway gRPC endpoint: {e}"))?;
-        if url.scheme() != "http" && url.scheme() != "https" {
-            return Err("gateway gRPC endpoint must start with http:// or https://".to_string());
-        }
-        url.set_path("");
-        url.set_query(None);
-        url.set_fragment(None);
-        return Ok(url.to_string().trim_end_matches('/').to_string());
-    }
-
-    let trimmed = config.gateway_url.trim();
-    if trimmed.is_empty() {
-        return Err("gateway URL is empty".to_string());
-    }
-
-    let mut url = Url::parse(trimmed).map_err(|e| format!("invalid gateway URL: {e}"))?;
-    if url.scheme() != "http" && url.scheme() != "https" {
-        return Err("gateway URL must start with http:// or https://".to_string());
-    }
-    url.set_port(Some(config.grpc_port))
-        .map_err(|_| "failed to apply gRPC port to gateway URL".to_string())?;
-    url.set_path("");
-    url.set_query(None);
-    url.set_fragment(None);
-    Ok(url.to_string().trim_end_matches('/').to_string())
-}
-
-pub(crate) fn is_h2_protocol_error(message: &str) -> bool {
-    let normalized = message.to_ascii_lowercase();
-    normalized.contains("h2 protocol error") || normalized.contains("http2 error")
-}
-
-#[deprecated(note = "v1 gRPC 链路仅作旧网关回退，v1 移除时一并删除")]
-pub(crate) fn build_endpoint(
-    grpc_url: &str,
-    keepalive_interval: Duration,
-) -> Result<Endpoint, String> {
-    // HTTP/2 keepalive owns dead-link detection: PING frames bypass stream
-    // flow control, so congestion or streaming never delays them.
-    let endpoint = Endpoint::from_shared(grpc_url.to_string())
-        .map_err(|e| format!("invalid gateway endpoint: {e}"))?
-        .connect_timeout(Duration::from_secs(10))
-        .tcp_keepalive(Some(Duration::from_secs(30)))
-        .http2_keep_alive_interval(keepalive_interval)
-        .keep_alive_timeout(Duration::from_secs(15))
-        .keep_alive_while_idle(true);
-
-    if grpc_url.starts_with("https://") {
-        ensure_rustls_crypto_provider();
-        let host = Url::parse(grpc_url)
-            .ok()
-            .and_then(|url| url.host_str().map(ToString::to_string))
-            .ok_or_else(|| "failed to extract TLS host from gateway URL".to_string())?;
-        endpoint
-            .tls_config(
-                ClientTlsConfig::new()
-                    .with_enabled_roots()
-                    .domain_name(host),
-            )
-            .map_err(|e| format!("configure gateway TLS failed: {e}"))
-    } else {
-        Ok(endpoint)
-    }
-}
-
 pub(crate) fn ensure_rustls_crypto_provider() {
     static INSTALL_DEFAULT_PROVIDER: Once = Once::new();
     INSTALL_DEFAULT_PROVIDER.call_once(|| {
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
-}
-
-#[deprecated(note = "v1 gRPC 链路仅作旧网关回退，v1 移除时一并删除")]
-pub(crate) fn insert_bearer_metadata(
-    metadata: &mut tonic::metadata::MetadataMap,
-    token: &str,
-) -> Result<(), String> {
-    let value = MetadataValue::try_from(format!("Bearer {}", token.trim()))
-        .map_err(|e| format!("invalid gateway authorization metadata: {e}"))?;
-    metadata.insert("authorization", value);
-    Ok(())
 }
 
 pub(crate) fn is_remote_configured(config: &RemoteSettingsPayload) -> bool {

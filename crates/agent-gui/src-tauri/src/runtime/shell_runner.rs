@@ -510,7 +510,10 @@ where
         for (key, value) in &system_proxy_envs {
             c.env(key, value);
         }
-        c.envs(envs.iter().map(|(key, value)| (key.as_str(), value.as_str())));
+        c.envs(
+            envs.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        );
         if candidate.augment_macos_path {
             maybe_augment_macos_path(&mut c);
         }

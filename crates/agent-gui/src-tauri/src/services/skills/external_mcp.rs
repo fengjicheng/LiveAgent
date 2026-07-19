@@ -18,11 +18,7 @@ const TRANSPORT_HTTP: &str = "http";
 const TRANSPORT_SSE: &str = "sse";
 
 pub(crate) fn scan_external_mcp_servers() -> Vec<SystemExternalMcpToolScan> {
-    vec![
-        scan_claude_code(),
-        scan_codex(),
-        scan_claude_desktop(),
-    ]
+    vec![scan_claude_code(), scan_codex(), scan_claude_desktop()]
 }
 
 fn scan_claude_code() -> SystemExternalMcpToolScan {
@@ -65,7 +61,13 @@ fn scan_claude_code() -> SystemExternalMcpToolScan {
         }
     }
 
-    finish_scan("claude-code", scanned_paths, "~/.claude.json", servers, errors)
+    finish_scan(
+        "claude-code",
+        scanned_paths,
+        "~/.claude.json",
+        servers,
+        errors,
+    )
 }
 
 fn scan_codex() -> SystemExternalMcpToolScan {
@@ -82,7 +84,13 @@ fn scan_codex() -> SystemExternalMcpToolScan {
         }
     }
 
-    finish_scan("codex", scanned_paths, "~/.codex/config.toml", servers, errors)
+    finish_scan(
+        "codex",
+        scanned_paths,
+        "~/.codex/config.toml",
+        servers,
+        errors,
+    )
 }
 
 fn scan_claude_desktop() -> SystemExternalMcpToolScan {
@@ -114,7 +122,13 @@ fn scan_claude_desktop() -> SystemExternalMcpToolScan {
         }
     }
 
-    finish_scan("claude-desktop", scanned_paths, &display_path, servers, errors)
+    finish_scan(
+        "claude-desktop",
+        scanned_paths,
+        &display_path,
+        servers,
+        errors,
+    )
 }
 
 fn claude_desktop_config_path() -> Option<PathBuf> {
@@ -419,7 +433,10 @@ url = "https://mcp.example.com"
 
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
         assert_eq!(servers.len(), 2);
-        let commander = servers.iter().find(|s| s.id == "desktop-commander").unwrap();
+        let commander = servers
+            .iter()
+            .find(|s| s.id == "desktop-commander")
+            .unwrap();
         assert_eq!(commander.transport, "stdio");
         assert_eq!(commander.command, "cmd");
         assert_eq!(commander.timeout_ms, Some(20_000));
@@ -444,7 +461,13 @@ url = "https://mcp.example.com"
         collect_json_server_map(Some(&user), "user", &mut servers, &mut errors);
         collect_json_server_map(Some(&project), "E:/proj", &mut servers, &mut errors);
 
-        let scan = finish_scan("claude-code", vec!["~/.claude.json".into()], "", servers, errors);
+        let scan = finish_scan(
+            "claude-code",
+            vec!["~/.claude.json".into()],
+            "",
+            servers,
+            errors,
+        );
         assert_eq!(scan.servers.len(), 2);
         let a = scan.servers.iter().find(|s| s.id == "a").unwrap();
         assert_eq!(a.command, "user-a");
