@@ -119,7 +119,8 @@ function isLocalDraftConversationId(id: string) {
 }
 
 import { HistoryShareModal } from "@/components/chat/HistoryShareModal";
-import { GatewayTranscript } from "@/components/GatewayTranscript";
+import { GatewayTranscript, type GatewayTranscriptNavHandle } from "@/components/GatewayTranscript";
+import { buildFloorEntries } from "@/lib/chat-floor-nav/floorModel";
 import { useScrollFollow } from "@/lib/chat-scroll/useScrollFollow";
 import { parseHistoryShareToken } from "@/lib/historyShare";
 import {
@@ -136,6 +137,7 @@ import {
   normalizeRunningConversationItems,
 } from "@/lib/sidebar/webSidebarBackend";
 import { findWorkspaceProject, mergeWorkspaceProjectsWithHistory } from "@/lib/workspaceProjects";
+import { FloorNavRail } from "@/pages/chat/transcript/FloorNavRail";
 import { LoginPage } from "@/pages/LoginPage";
 import { SettingsSyncLoading } from "@/pages/SettingsSyncLoading";
 import { SharedHistoryPage } from "@/pages/SharedHistoryPage";
@@ -309,6 +311,17 @@ export default function GatewayApp() {
     listenerRoot: transcriptScrollAreaRoot,
     trackKeys: true,
   });
+  // 楼层导航：当前楼层由转写区上报，跳转经 navRef 直达虚拟列表；粘底跟随
+  // 激活时程序化滚动会被立即拽回底部——跳转前先按「跳入历史」语义解除跟随。
+  const transcriptNavRef = useRef<GatewayTranscriptNavHandle | null>(null);
+  const [activeFloorKey, setActiveFloorKey] = useState<string | null>(null);
+  const handleFloorJump = useCallback(
+    (rowKey: string) => {
+      transcriptFollow.breakFollow();
+      transcriptNavRef.current?.scrollToRowKey(rowKey);
+    },
+    [transcriptFollow],
+  );
   const composerRef = useRef<MentionComposerHandle | null>(null);
   const composerDraftCacheRef = useRef<Map<string, MentionComposerDraft>>(new Map());
   const composerDraftOwnerRef = useRef("");
@@ -3789,6 +3802,7 @@ export default function GatewayApp() {
   }, [selectedHistoryId, sidebarConversationsById]);
   const transcriptRows = displayedTranscript.rows;
   const transcriptLiveStartIndex = displayedTranscript.liveStartIndex;
+  const transcriptFloors = useMemo(() => buildFloorEntries(transcriptRows), [transcriptRows]);
   // Row count gates everything visual (empty state, error banner, loading
   // screen): entryCount can be non-zero while nothing renders (meta-only
   // entries), and hiding an error behind an invisible entry would strand it.
@@ -4184,6 +4198,8 @@ export default function GatewayApp() {
                           liveStartIndex={transcriptLiveStartIndex}
                           activeTurnKey={displayedTranscript.activeTurnKey}
                           isViewportFollowing={transcriptFollow.isFollowing}
+                          navRef={transcriptNavRef}
+                          onAnchorUserRowChange={setActiveFloorKey}
                           error={transcriptError}
                           toolStatus={transcriptToolStatus}
                           toolStatusIsCompaction={transcriptToolStatusIsCompaction}
@@ -4210,6 +4226,16 @@ export default function GatewayApp() {
                           suggestionsDisabled={isSuggestionTyping}
                         />
                       </ScrollArea>
+                      {displayedTranscriptRowCount > 0 && !conversationOpenState.showOverlay ? (
+                        <FloorNavRail
+                          conversationId={displayedConversationId}
+                          floors={transcriptFloors}
+                          activeRowKey={activeFloorKey}
+                          bottomOffset="calc(var(--gateway-chat-composer-overlay-height, 176px) + 12px)"
+                          scrollViewport={transcriptViewport}
+                          onJump={handleFloorJump}
+                        />
+                      ) : null}
                       {conversationOpenState.showOverlay ? (
                         <HistorySwitchLoadingOverlay locale={settings.locale} />
                       ) : null}

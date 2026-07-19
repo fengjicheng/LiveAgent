@@ -276,7 +276,8 @@ export const ChatTranscript = memo(function ChatTranscript(props: ChatTranscript
           conversationId={conversationId}
           floors={floors}
           activeRowKey={activeFloorKey}
-          bottomReservePx={transcriptBottomReservePx}
+          bottomOffset={`${Math.ceil(transcriptBottomReservePx) + 8}px`}
+          scrollViewport={scrollViewport}
           onJump={handleFloorJump}
         />
       ) : null}

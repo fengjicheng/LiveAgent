@@ -1,6 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   type Dispatch,
+  type MutableRefObject,
   memo,
   type SetStateAction,
   useCallback,
@@ -85,6 +86,10 @@ type GatewayTranscriptProps = {
   // Whether the scroll-follow engine is attached to the bottom; gates the
   // virtualizer's resize-compensation carve-out for live-row growth.
   isViewportFollowing?: () => boolean;
+  // Imperative jump handle for the floor navigation rail.
+  navRef?: MutableRefObject<GatewayTranscriptNavHandle | null>;
+  // Reports the user row at the viewport's top edge (the "current floor").
+  onAnchorUserRowChange?: (rowKey: string | null) => void;
   error?: string | null;
   toolStatus?: string | null;
   toolStatusIsCompaction?: boolean;
@@ -124,6 +129,13 @@ type GatewayTranscriptProps = {
 function rowRenderMode(row: Extract<TranscriptRow, { kind: "assistant" }>) {
   return row.origin === "stream" ? ("streaming" as const) : ("static" as const);
 }
+
+export type GatewayTranscriptNavHandle = {
+  // Aligns the row to the viewport top and keeps re-aligning for a few
+  // frames while dynamic measurements land (convergent, cancelled by user
+  // scroll input).
+  scrollToRowKey: (rowKey: string) => void;
+};
 
 const TRANSCRIPT_ROW_ESTIMATED_HEIGHT = 260;
 const TRANSCRIPT_ROW_GAP = 18;
@@ -1150,6 +1162,8 @@ const GatewayTranscriptListRegion = memo(function GatewayTranscriptListRegion(pr
   activeTurnKey?: string | null;
   scrollViewport: HTMLDivElement | null;
   isViewportFollowing?: () => boolean;
+  navRef?: MutableRefObject<GatewayTranscriptNavHandle | null>;
+  onAnchorUserRowChange?: (rowKey: string | null) => void;
   hasMoreHistory?: boolean;
   isLoadingMoreHistory?: boolean;
   onLoadFullHistory?: () => void;
@@ -1179,6 +1193,8 @@ const GatewayTranscriptListRegion = memo(function GatewayTranscriptListRegion(pr
     activeTurnKey,
     scrollViewport,
     isViewportFollowing,
+    navRef,
+    onAnchorUserRowChange,
     hasMoreHistory,
     isLoadingMoreHistory,
     onLoadFullHistory,
@@ -1339,6 +1355,126 @@ const GatewayTranscriptListRegion = memo(function GatewayTranscriptListRegion(pr
       getLiveStartIndex: () => forceMountStartRef.current,
       isFollowing: () => isViewportFollowing?.() ?? false,
     });
+
+  // 楼层跳转：scrollToIndex(align:"start") 后连续几帧重对齐——目标行远处的
+  // 估高行在滚动后被真实测量，落点会漂移；对准同一 index 是收敛操作，不会
+  // 震荡。收敛期间用户的滚轮/触摸/按键立即取消收敛；新跳转替换旧收敛。
+  const virtualItemsRef = useRef(virtualItems);
+  virtualItemsRef.current = virtualItems;
+  const cancelJumpSettleRef = useRef<() => void>(() => {});
+  useLayoutEffect(() => {
+    if (!navRef) return;
+    const handle: GatewayTranscriptNavHandle = {
+      scrollToRowKey: (rowKey) => {
+        cancelJumpSettleRef.current();
+        const alignToRow = () => {
+          const index = virtualItemsRef.current.findIndex((item) => item.key === rowKey);
+          if (index < 0) return false;
+          transcriptVirtualizer.scrollToIndex(index, { align: "start" });
+          return true;
+        };
+        if (!alignToRow()) return;
+        let rafId: number | null = null;
+        const stopSettle = () => {
+          if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+          }
+          scrollViewport?.removeEventListener("wheel", stopSettle);
+          scrollViewport?.removeEventListener("touchstart", stopSettle);
+          scrollViewport?.removeEventListener("keydown", stopSettle);
+          if (cancelJumpSettleRef.current === stopSettle) {
+            cancelJumpSettleRef.current = () => {};
+          }
+        };
+        cancelJumpSettleRef.current = stopSettle;
+        scrollViewport?.addEventListener("wheel", stopSettle, { passive: true });
+        scrollViewport?.addEventListener("touchstart", stopSettle, { passive: true });
+        scrollViewport?.addEventListener("keydown", stopSettle);
+        let remainingFrames = 6;
+        const settle = () => {
+          rafId = null;
+          if (!alignToRow()) {
+            stopSettle();
+            return;
+          }
+          remainingFrames -= 1;
+          if (remainingFrames > 0) {
+            rafId = requestAnimationFrame(settle);
+          } else {
+            stopSettle();
+          }
+        };
+        rafId = requestAnimationFrame(settle);
+      },
+    };
+    navRef.current = handle;
+    return () => {
+      cancelJumpSettleRef.current();
+      if (navRef.current === handle) {
+        navRef.current = null;
+      }
+    };
+  }, [navRef, transcriptVirtualizer, scrollViewport]);
+
+  // 楼层导航当前楼层：以「视口顶缘（+8px 容差）」所落在的用户消息为准——与
+  // 跳转的 align:"start" 落位一致，跳转后高亮的必然是刚点的楼层；视口贴近
+  // 内容底部时直接取最后一层（否则短对话拼满一屏时底部楼层永远无法成为当前
+  // 层）。贴底判定用 scrollHeight（与 scrollTop/clientHeight 同一坐标系，
+  // 含底部保留区），避免与 getTotalSize 的列表局部坐标错位。
+  const lastAnchorRef = useRef<string | null>(null);
+  const onAnchorUserRowChangeRef = useRef(onAnchorUserRowChange);
+  onAnchorUserRowChangeRef.current = onAnchorUserRowChange;
+  const reportAnchorRef = useRef(() => {});
+  reportAnchorRef.current = () => {
+    const callback = onAnchorUserRowChangeRef.current;
+    if (!callback || !scrollViewport) return;
+    const itemList = virtualItemsRef.current;
+    let anchorKey: string | null = null;
+    if (itemList.length > 0) {
+      const scrollTop = scrollViewport.scrollTop;
+      const viewportHeight = scrollViewport.clientHeight;
+      const nearBottom = scrollTop + viewportHeight >= scrollViewport.scrollHeight - 32;
+      let anchorIndex = -1;
+      if (nearBottom) {
+        anchorIndex = itemList.length - 1;
+      } else {
+        const anchorLine = scrollTop + 8;
+        const items = transcriptVirtualizer.getVirtualItems();
+        for (const item of items) {
+          if (item.start > anchorLine) break;
+          anchorIndex = item.index;
+        }
+        if (anchorIndex === -1) anchorIndex = items[0]?.index ?? -1;
+      }
+      for (let i = Math.min(anchorIndex, itemList.length - 1); i >= 0; i--) {
+        const item = itemList[i];
+        if (item?.kind === "row" && item.row.kind === "user") {
+          anchorKey = item.row.key;
+          break;
+        }
+      }
+    }
+    if (anchorKey !== lastAnchorRef.current) {
+      lastAnchorRef.current = anchorKey;
+      callback(anchorKey);
+    }
+  };
+
+  useEffect(() => {
+    if (!scrollViewport) return;
+    const handler = () => reportAnchorRef.current();
+    handler();
+    scrollViewport.addEventListener("scroll", handler, { passive: true });
+    return () => scrollViewport.removeEventListener("scroll", handler);
+  }, [scrollViewport]);
+
+  // 行集合变化（消息追加、流式落定）后兜底重算一次；依赖 virtualItems 而不是
+  // 每次渲染都跑，避免「上报 → 父级重渲染 → 再上报」的空转循环。
+  useEffect(() => {
+    virtualItemsRef.current = virtualItems;
+    reportAnchorRef.current();
+  }, [virtualItems]);
 
   // First paint of a conversation lands at the bottom before the user sees
   // anything: scrollToEnd re-targets as dynamic measurements land. The region
@@ -1569,6 +1705,8 @@ export function GatewayTranscript({
   liveStartIndex = -1,
   activeTurnKey = null,
   isViewportFollowing,
+  navRef,
+  onAnchorUserRowChange,
   error,
   toolStatus,
   toolStatusIsCompaction = false,
@@ -1652,6 +1790,8 @@ export function GatewayTranscript({
           activeTurnKey={activeTurnKey}
           scrollViewport={transcriptScrollViewport}
           isViewportFollowing={isViewportFollowing}
+          navRef={navRef}
+          onAnchorUserRowChange={onAnchorUserRowChange}
           hasMoreHistory={hasMoreHistory}
           isLoadingMoreHistory={isLoadingMoreHistory}
           onLoadFullHistory={onLoadFullHistory}
