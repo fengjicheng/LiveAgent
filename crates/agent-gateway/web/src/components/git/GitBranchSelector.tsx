@@ -551,6 +551,9 @@ export function GitBranchSelector(props: {
   const [draftBranch, setDraftBranch] = useState("");
   const [filter, setFilter] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  // Controlled so picking a repository can close only the submenu while the
+  // root menu stays open for a manual branch pick on the new repository.
+  const [repoMenuOpen, setRepoMenuOpen] = useState(false);
   const [remoteAction, setRemoteAction] = useState<GitRemoteActionKind>("");
   const [branchAction, setBranchAction] = useState<GitBranchActionState | null>(null);
   const [actionDraft, setActionDraft] = useState("");
@@ -759,6 +762,7 @@ export function GitBranchSelector(props: {
       if (!open) {
         resetCreateBranch();
         setFilter("");
+        setRepoMenuOpen(false);
       }
     },
     [resetCreateBranch],
@@ -1192,7 +1196,7 @@ export function GitBranchSelector(props: {
           </div>
           {repositories.length > 1 ? (
             <div className="shrink-0 border-b border-border/60 p-1">
-              <DropdownMenuSub>
+              <DropdownMenuSub open={repoMenuOpen} onOpenChange={setRepoMenuOpen}>
                 <DropdownMenuSubTrigger
                   clickToggle
                   className="w-full gap-2 text-xs"
@@ -1217,14 +1221,28 @@ export function GitBranchSelector(props: {
                     const value = repo.isWorkspaceRoot ? "" : repo.root;
                     const isCurrent = value === selectedRepoRoot;
                     return (
-                      <DropdownMenuItem
+                      // Plain button (not a menu item): picking a repository
+                      // must close only the submenu and keep the root menu
+                      // open so the branch is still picked manually on the
+                      // newly selected repository.
+                      <button
                         key={repo.root}
+                        type="button"
                         disabled={mutating}
-                        onSelect={() => {
+                        className={cn(
+                          "flex w-full cursor-default select-none items-center gap-2 rounded-xs px-2 py-1.5 text-left text-xs outline-hidden transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50",
+                          isCurrent && "text-muted-foreground",
+                        )}
+                        title={repo.root}
+                        onClick={(event) => {
+                          // Swallow the menu selection triggers so the root
+                          // menu stays open (see the footer create-branch
+                          // button for the same pattern).
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setRepoMenuOpen(false);
                           if (!isCurrent) selectRepository(value);
                         }}
-                        className={cn("gap-2 text-xs", isCurrent && "text-muted-foreground")}
-                        title={repo.root}
                       >
                         {isCurrent ? (
                           <Check className="h-3.5 w-3.5 shrink-0" />
@@ -1234,7 +1252,7 @@ export function GitBranchSelector(props: {
                         <span className="min-w-0 flex-1 truncate">
                           {gitDiscoveredRepositoryLabel(repo)}
                         </span>
-                      </DropdownMenuItem>
+                      </button>
                     );
                   })}
                 </DropdownMenuSubContent>

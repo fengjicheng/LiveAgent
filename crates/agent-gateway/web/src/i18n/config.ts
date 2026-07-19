@@ -482,6 +482,11 @@ export const translations: Record<Locale, Record<string, string>> = {
     "projectTools.gitReview.operationFailed": "Git 操作失败。",
     "projectTools.gitReview.noRepository": "未找到 Git 仓库",
     "projectTools.gitReview.repositoryPicker": "选择要审查的仓库",
+    "projectTools.gitReview.switchBranch": "切换分支",
+    "projectTools.gitReview.switchBranchConflictTitle": "无法切换分支",
+    "projectTools.gitReview.switchBranchConflictDescription":
+      "本地未提交的更改会被切换覆盖。可以先暂存更改，再切换到 {branch}。",
+    "projectTools.gitReview.stashAndSwitch": "暂存并切换",
     "projectTools.gitReview.refresh": "刷新",
     "projectTools.gitReview.fetch": "获取",
     "projectTools.gitReview.pull": "拉取",
@@ -2312,6 +2317,11 @@ export const translations: Record<Locale, Record<string, string>> = {
     "projectTools.gitReview.operationFailed": "Git operation failed.",
     "projectTools.gitReview.noRepository": "No Git repository",
     "projectTools.gitReview.repositoryPicker": "Select repository to review",
+    "projectTools.gitReview.switchBranch": "Switch branch",
+    "projectTools.gitReview.switchBranchConflictTitle": "Cannot switch branch",
+    "projectTools.gitReview.switchBranchConflictDescription":
+      "Your uncommitted local changes would be overwritten by the switch. Stash them first, then switch to {branch}.",
+    "projectTools.gitReview.stashAndSwitch": "Stash & switch",
     "projectTools.gitReview.refresh": "Refresh",
     "projectTools.gitReview.fetch": "Fetch",
     "projectTools.gitReview.pull": "Pull",

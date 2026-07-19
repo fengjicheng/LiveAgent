@@ -34,6 +34,7 @@ import {
   basename,
   compactGitOperationMessage,
   EMPTY_GIT_HISTORY_GRAPH_STATE,
+  type GitBranchSwitchConflictState,
   type GitHistoryGraphState,
   type GitOperationNotice,
   type GitOperationNoticeAction,
@@ -45,6 +46,7 @@ import {
   gitHistoryGraphStateFromResponse,
   gitHistorySignature,
   gitRepositoryStateSignature,
+  isCheckoutOverwriteError,
   isMissingRemoteSetupError,
   isRemoteSetupAction,
   operationFailureTitleKey,
@@ -969,6 +971,98 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
     ],
   );
 
+  const [branchSwitchConflict, setBranchSwitchConflict] =
+    useState<GitBranchSwitchConflictState | null>(null);
+
+  const dismissBranchSwitchConflict = useCallback(() => {
+    if (busyRef.current) return;
+    setBranchSwitchConflict(null);
+  }, []);
+
+  // Dedicated switch flow (not runOperation): a checkout aborted because it
+  // would clobber uncommitted changes surfaces as an actionable stash-and-
+  // switch prompt instead of a raw git error.
+  const switchBranch = useCallback(
+    async (branch: string, kind?: string) => {
+      const operationName = "switch_branch";
+      if (!gitClient || !cwd.trim() || !canWrite || !beginGitOperation(operationName)) return false;
+      setError("");
+      try {
+        const result = await gitClient.switchBranch(cwd, branch, kind);
+        assertGitOperationResult(result, t("projectTools.gitReview.operationFailed"));
+        await refresh();
+        if (reviewModeRef.current === "history") {
+          await loadHistory();
+        }
+        return true;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (isCheckoutOverwriteError(message)) {
+          setBranchSwitchConflict({ branch, kind: kind ?? "" });
+        } else {
+          setError(message);
+        }
+        return false;
+      } finally {
+        finishGitOperation(operationName);
+        flushPendingBusyInvalidation();
+      }
+    },
+    [
+      beginGitOperation,
+      canWrite,
+      cwd,
+      finishGitOperation,
+      flushPendingBusyInvalidation,
+      gitClient,
+      loadHistory,
+      refresh,
+      t,
+    ],
+  );
+
+  const stashAndSwitchBranch = useCallback(async () => {
+    const conflict = branchSwitchConflict;
+    const operationName = "switch_branch";
+    if (!conflict || !gitClient || !cwd.trim() || !canWrite || !beginGitOperation(operationName))
+      return false;
+    setError("");
+    try {
+      const stashed = await gitClient.stashPush(cwd);
+      assertGitOperationResult(stashed, t("projectTools.gitReview.operationFailed"));
+      const switched = await gitClient.switchBranch(
+        cwd,
+        conflict.branch,
+        conflict.kind || undefined,
+      );
+      assertGitOperationResult(switched, t("projectTools.gitReview.operationFailed"));
+      setBranchSwitchConflict(null);
+      await refresh();
+      if (reviewModeRef.current === "history") {
+        await loadHistory();
+      }
+      return true;
+    } catch (err) {
+      setBranchSwitchConflict(null);
+      setError(err instanceof Error ? err.message : String(err));
+      return false;
+    } finally {
+      finishGitOperation(operationName);
+      flushPendingBusyInvalidation();
+    }
+  }, [
+    beginGitOperation,
+    branchSwitchConflict,
+    canWrite,
+    cwd,
+    finishGitOperation,
+    flushPendingBusyInvalidation,
+    gitClient,
+    loadHistory,
+    refresh,
+    t,
+  ]);
+
   const closeRemoteSetup = useCallback(() => {
     if (busyRef.current) return;
     setRemoteSetupOpen(false);
@@ -1150,6 +1244,7 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
   return {
     branchDiff,
     branchError,
+    branchSwitchConflict,
     busy,
     canWrite,
     closeRemoteSetup,
@@ -1160,6 +1255,7 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
     diffLoading,
     disabledMessage,
     discoverRepositories,
+    dismissBranchSwitchConflict,
     dismissOperationNotice,
     error,
     expandedCommitShas,
@@ -1202,7 +1298,9 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
     setHistoryError,
     setRemoteSetupUrl,
     setReviewMode,
+    stashAndSwitchBranch,
     state,
+    switchBranch,
     workspaceCwd,
     worktreeDiff,
   };
