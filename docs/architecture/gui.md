@@ -79,10 +79,10 @@
 | 机制 | 当前实现 |
 |---|---|
 | 稳定 WebView listener | `useGatewayBridgeListeners` 用 ref 保存 worker id 和最新回调，effect 只在组件挂载/卸载时注册或销毁；普通 React render 不再重建 listener、制造接收空窗或重复上报 `suspended`。 |
-| 原生往返唤醒 | Rust 收到 `chat-runtime-wake-` 前缀的关联 Ping 后 emit `gateway:chat-runtime-wake`；所有 Pong（唤醒与心跳）经专用出站控制通道（64 深，与数据队列 merge 进同一信封流（v2 WebSocket；旧网关回退 gRPC））`try_send` 返回，token 流打满数据队列时探测仍可被应答，且绝不阻塞 inbound receive loop。 |
+| 原生往返唤醒 | Rust 收到 `chat-runtime-wake-` 前缀的关联 Ping 后 emit `gateway:chat-runtime-wake`；所有 Pong（唤醒与心跳）经专用出站控制通道（64 深，与数据队列 merge 进同一信封流（v2 WebSocket））`try_send` 返回，token 流打满数据队列时探测仍可被应答，且绝不阻塞 inbound receive loop。 |
 | 生命周期 nudge | `online`、`focus`、`pageshow`、`visibilitychange`、WebView `resume` 与 Tauri `RunEvent::Resumed` 会唤醒 runtime；`online`/focus 类事件经 `gateway_nudge_connection` 走 offline/stale-heartbeat 健康检查后才重建连接（不强制），仅 `RunEvent::Resumed` 保留强制重连。 |
-| 快速重连 | 信封流自动重连从 250ms 指数退避到 5s（每次重连先试 v2 `/ws/v2/agent`，握手失败回退 gRPC），稳定连接 30s 后重置；stale 判断使用 heartbeat interval 加 20s（最多 60s）。 |
-| inbound 优先 | `AgentConnect` 建立后立即进入 inbound receive loop。Runtime status 先恢复，settings、terminal、tunnel、process 与 run ledger 延迟 200ms 后在可中止后台任务中低优先级 replay，并在批次间 yield。 |
+| 快速重连 | 信封流自动重连从 250ms 指数退避到 5s（v2 `/ws/v2/agent`），稳定连接 30s 后重置；stale 判断使用 heartbeat interval 加 20s（最多 60s）。 |
+| inbound 优先 | 信封流（`/ws/v2/agent`）建立后立即进入 inbound receive loop。Runtime status 先恢复，settings、terminal、tunnel、process 与 run ledger 延迟 200ms 后在可中止后台任务中低优先级 replay，并在批次间 yield。 |
 | 启动空窗消除 | WebView 在 Tauri listener 异步注册完成前就先 heartbeat + drain 一次；native wake、request-ready 与 Gateway online 事件都会继续触发 drain。 |
 
 ## 本地持久化模型

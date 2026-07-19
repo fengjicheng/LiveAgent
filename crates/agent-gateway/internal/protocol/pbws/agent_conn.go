@@ -15,8 +15,8 @@ import (
 	"github.com/liveagent/agent-gateway/internal/session"
 )
 
-// AgentHandler 返回 /ws/v2/agent 的 HTTP 处理器，替代 v1 gRPC Authenticate+AgentConnect：
-// hello 一并完成鉴权与会话登记，之后的双向信封流语义与 grpc.go 逐一对应。
+// AgentHandler 返回 /ws/v2/agent 的 HTTP 处理器（承接 v1 gRPC Authenticate+AgentConnect 职能）：
+// hello 一并完成鉴权与会话登记，之后进入双向信封流。
 func (s *Server) AgentHandler() http.Handler {
 	upgrader := s.upgrader()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -187,7 +187,7 @@ func (s *Server) writeAgentEnvelope(conn *websocket.Conn, env *gatewayv1.Gateway
 	return conn.WriteMessage(websocket.BinaryMessage, data) == nil
 }
 
-// agentHeartbeatLoop 与 grpc.go 的 heartbeatLoop 语义一致：周期发应用层 Ping（走专用心跳通道）、
+// agentHeartbeatLoop：周期发应用层 Ping（走专用心跳通道）、
 // 驱逐心跳过期会话；额外补发 WS 控制帧 ping，由 tokio-tungstenite 自动 pong 承担传输层保活。
 func (s *Server) agentHeartbeatLoop(ctx context.Context, conn *websocket.Conn, sess *session.AgentSession) {
 	period := 30 * time.Second

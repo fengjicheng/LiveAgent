@@ -3,7 +3,6 @@ use std::time::Instant;
 
 use futures_util::SinkExt as _;
 use tokio::sync::{mpsc, watch};
-use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
@@ -23,7 +22,7 @@ use super::*;
 
 impl GatewayController {
     /// v2 终端数据面（/ws/v2/terminal，角色 AGENT）：PTY/注册表侧播种口与 gRPC 版完全一致；
-    /// 仅当主链路运行在 v2 上时由 connect_and_serve_ws 生成本任务，传输选择随主链路贯通。
+    /// 由 connect_and_serve 在主链路建立后生成本任务，与主链路同生命周期。
     pub(crate) fn spawn_terminal_stream_ws(
         self: &Arc<Self>,
         config: RemoteSettingsPayload,
@@ -90,7 +89,11 @@ impl GatewayController {
         config: RemoteSettingsPayload,
         mut stop_rx: watch::Receiver<bool>,
     ) -> Result<(), String> {
-        let ws_url = build_ws_url(&config.gateway_url, config.grpc_port, GATEWAY_WS_TERMINAL_PATH)?;
+        let ws_url = build_ws_url(
+            &config.gateway_url,
+            config.grpc_port,
+            GATEWAY_WS_TERMINAL_PATH,
+        )?;
         let hello = build_client_hello(
             &config.token,
             effective_agent_id(&config),
@@ -158,135 +161,6 @@ impl GatewayController {
                             Some(Ok(WsMessage::Close(_))) => return Ok(()),
                             // Ping/Pong 由 tungstenite 自动处理。
                             Some(Ok(_)) => {}
-                        }
-                    }
-                }
-            }
-        }
-        .await;
-
-        self.clear_terminal_stream_sender_if_current(&terminal_tx);
-        result
-    }
-
-    /// v1 gRPC 终端流入口，行为与迁移前逐字一致。
-    #[deprecated(note = "v1 gRPC 链路仅作旧网关回退，v1 移除时一并删除")]
-    #[allow(deprecated)] // 函数体即回退路径，成串调用同批弃用的 gRPC 辅助函数。
-    pub(crate) fn spawn_terminal_stream(
-        self: &Arc<Self>,
-        client: proto::agent_gateway_client::AgentGatewayClient<tonic::transport::Channel>,
-        config: RemoteSettingsPayload,
-        stop_rx: watch::Receiver<bool>,
-    ) -> tauri::async_runtime::JoinHandle<()> {
-        let controller = Arc::clone(self);
-        tauri::async_runtime::spawn(async move {
-            controller
-                .run_terminal_stream(client, config, stop_rx)
-                .await;
-        })
-    }
-
-    #[deprecated(note = "v1 gRPC 链路仅作旧网关回退，v1 移除时一并删除")]
-    #[allow(deprecated)] // 函数体即回退路径，成串调用同批弃用的 gRPC 辅助函数。
-    pub(crate) async fn run_terminal_stream(
-        self: Arc<Self>,
-        client: proto::agent_gateway_client::AgentGatewayClient<tonic::transport::Channel>,
-        config: RemoteSettingsPayload,
-        mut stop_rx: watch::Receiver<bool>,
-    ) {
-        let mut reconnect_delay = GATEWAY_TERMINAL_STREAM_RECONNECT_MIN;
-
-        loop {
-            if *stop_rx.borrow() {
-                break;
-            }
-
-            let attempt_started = Instant::now();
-            let result = Arc::clone(&self)
-                .run_terminal_stream_once(client.clone(), config.clone(), stop_rx.clone())
-                .await;
-            if *stop_rx.borrow() {
-                break;
-            }
-            self.set_terminal_stream_sender(None);
-
-            if attempt_started.elapsed() >= GATEWAY_TERMINAL_STREAM_STABLE_AFTER {
-                reconnect_delay = GATEWAY_TERMINAL_STREAM_RECONNECT_MIN;
-            }
-            match result {
-                Ok(()) => eprintln!("gateway terminal stream closed; reconnecting"),
-                Err(error) => eprintln!("gateway terminal stream stopped: {error}; reconnecting"),
-            }
-
-            let delay = reconnect_delay;
-            reconnect_delay =
-                std::cmp::min(reconnect_delay * 2, GATEWAY_TERMINAL_STREAM_RECONNECT_MAX);
-            tokio::select! {
-                changed = stop_rx.changed() => {
-                    if changed.is_err() || *stop_rx.borrow() {
-                        break;
-                    }
-                }
-                _ = tokio::time::sleep(delay) => {}
-            }
-        }
-
-        self.set_terminal_stream_sender(None);
-    }
-
-    #[deprecated(note = "v1 gRPC 链路仅作旧网关回退，v1 移除时一并删除")]
-    #[allow(deprecated)] // 函数体即回退路径，成串调用同批弃用的 gRPC 辅助函数。
-    pub(crate) async fn run_terminal_stream_once(
-        self: Arc<Self>,
-        mut client: proto::agent_gateway_client::AgentGatewayClient<tonic::transport::Channel>,
-        config: RemoteSettingsPayload,
-        mut stop_rx: watch::Receiver<bool>,
-    ) -> Result<(), String> {
-        let (terminal_tx, terminal_rx) = mpsc::channel::<proto::TerminalStreamFrame>(4096);
-
-        let result = async {
-            queue_terminal_stream_handshake_frame(&terminal_tx)?;
-            let mut request = tonic::Request::new(ReceiverStream::new(terminal_rx));
-            insert_bearer_metadata(request.metadata_mut(), &config.token)?;
-            let response = tokio::select! {
-                changed = stop_rx.changed() => {
-                    if changed.is_err() || *stop_rx.borrow() {
-                        return Ok(());
-                    }
-                    return Ok(());
-                }
-                response = client.agent_terminal_connect(request) => {
-                    response.map_err(|error| {
-                        format_gateway_terminal_stream_rpc_error("open", &error, &config)
-                    })?
-                }
-            };
-            self.set_terminal_stream_sender(Some(terminal_tx.clone()));
-            let mut inbound = response.into_inner();
-            let mut keepalive = tokio::time::interval(GATEWAY_TERMINAL_STREAM_KEEPALIVE_INTERVAL);
-            keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            keepalive.tick().await;
-            loop {
-                tokio::select! {
-                    changed = stop_rx.changed() => {
-                        if changed.is_err() || *stop_rx.borrow() {
-                            return Ok(());
-                        }
-                    }
-                    _ = keepalive.tick() => {
-                        queue_terminal_stream_keepalive_frame(&terminal_tx).await?;
-                    }
-                    message = inbound.message() => {
-                        match message {
-                            Ok(Some(frame)) => {
-                                if let Err(error) = self.handle_terminal_stream_frame(frame).await {
-                                    eprintln!("handle gateway terminal stream frame failed: {error}");
-                                }
-                            }
-                            Ok(None) => return Ok(()),
-                            Err(error) => {
-                                return Err(format_gateway_terminal_stream_rpc_error("receive", &error, &config))
-                            }
                         }
                     }
                 }
@@ -960,54 +834,4 @@ pub(crate) fn build_terminal_event_envelope(payload: TerminalEventPayload) -> pr
             },
         )),
     }
-}
-
-pub(crate) fn queue_terminal_stream_handshake_frame(
-    sender: &mpsc::Sender<proto::TerminalStreamFrame>,
-) -> Result<(), String> {
-    // Some HTTP/2 proxies do not fully establish a bidi stream until the client
-    // sends its first DATA frame. `detach` is a gateway no-op and is not forwarded
-    // to browser terminal subscribers.
-    sender
-        .try_send(terminal_stream_noop_frame("desktop-handshake"))
-        .map_err(|error| format!("queue gateway terminal stream handshake failed: {error}"))
-}
-
-pub(crate) async fn queue_terminal_stream_keepalive_frame(
-    sender: &mpsc::Sender<proto::TerminalStreamFrame>,
-) -> Result<(), String> {
-    sender
-        .send(terminal_stream_noop_frame("desktop-keepalive"))
-        .await
-        .map_err(|error| format!("queue gateway terminal stream keepalive failed: {error}"))
-}
-
-pub(crate) fn terminal_stream_noop_frame(prefix: &str) -> proto::TerminalStreamFrame {
-    proto::TerminalStreamFrame {
-        kind: "detach".to_string(),
-        stream_id: format!("{}-{}", prefix.trim(), Uuid::new_v4()),
-        ..Default::default()
-    }
-}
-
-pub(crate) fn format_gateway_terminal_stream_rpc_error(
-    phase: &str,
-    error: &tonic::Status,
-    config: &RemoteSettingsPayload,
-) -> String {
-    let message = error.to_string();
-    if !is_h2_protocol_error(&message) {
-        return format!("gateway terminal stream {phase} failed: {message}");
-    }
-
-    let endpoint = {
-        // gRPC 回退路径专用的错误提示。
-        #[allow(deprecated)]
-        build_grpc_url(config).unwrap_or_else(|_| "invalid endpoint".to_string())
-    };
-    format!(
-        "gateway terminal stream {phase} failed: {message}. \
-         The gateway terminal stream requires a gRPC endpoint that supports HTTP/2 bidi streams; \
-         check Remote gRPC Endpoint / gRPC port. Current endpoint: {endpoint}"
-    )
 }

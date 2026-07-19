@@ -138,10 +138,7 @@ fn cron_apply_reorder_requires_full_permutation() {
     let response = store
         .cron_apply(apply_input(
             base,
-            vec![
-                create_bash_task_op("a", "A"),
-                create_bash_task_op("b", "B"),
-            ],
+            vec![create_bash_task_op("a", "A"), create_bash_task_op("b", "B")],
         ))
         .expect("seed");
 
@@ -214,7 +211,9 @@ fn prompt_run_lifecycle_queue_claim_complete() {
     let (store, task) = store_with_task(create_prompt_task_op("p1"));
 
     assert!(matches!(
-        store.queue_prompt_run(&task, "", true).expect("queue prompt run"),
+        store
+            .queue_prompt_run(&task, "", true)
+            .expect("queue prompt run"),
         super::store::PromptQueueOutcome::Queued
     ));
 
@@ -224,7 +223,9 @@ fn prompt_run_lifecycle_queue_claim_complete() {
 
     // Second fire while pending is skipped.
     assert!(matches!(
-        store.queue_prompt_run(&task, "", true).expect("second queue"),
+        store
+            .queue_prompt_run(&task, "", true)
+            .expect("second queue"),
         super::store::PromptQueueOutcome::SkippedActiveRun
     ));
 
@@ -402,9 +403,7 @@ fn released_prompt_run_returns_to_pending() {
 fn recover_marks_interrupted_runs_expired() {
     let (store, task) = store_with_task(create_prompt_task_op("p1"));
     store.queue_prompt_run(&task, "", true).expect("queue");
-    let recovered = store
-        .recover_interrupted_prompt_runs()
-        .expect("recover");
+    let recovered = store.recover_interrupted_prompt_runs().expect("recover");
     assert_eq!(recovered, 1);
 
     let runs = store.list_runs("p1", 10).expect("list runs");
@@ -488,8 +487,14 @@ fn masked_headers_round_trip_keeps_stored_secret() {
 
     let task = &masked.cron.tasks[0];
     let headers = task.requests.as_ref().unwrap()[0].headers.as_ref().unwrap();
-    assert_eq!(headers.get("Authorization").map(String::as_str), Some("Bearer secret-token"));
-    assert_eq!(task.requests.as_ref().unwrap()[0].url, "https://example.com/hook-v2");
+    assert_eq!(
+        headers.get("Authorization").map(String::as_str),
+        Some("Bearer secret-token")
+    );
+    assert_eq!(
+        task.requests.as_ref().unwrap()[0].url,
+        "https://example.com/hook-v2"
+    );
 }
 
 #[test]
@@ -838,7 +843,9 @@ fn queue_prompt_run_lease_uses_task_timeout() {
     let task = response.cron.tasks[0].clone();
 
     assert!(matches!(
-        store.queue_prompt_run(&task, "", true).expect("queue prompt run"),
+        store
+            .queue_prompt_run(&task, "", true)
+            .expect("queue prompt run"),
         super::store::PromptQueueOutcome::Queued
     ));
     let claims = store.claim_prompt_runs().expect("claim");

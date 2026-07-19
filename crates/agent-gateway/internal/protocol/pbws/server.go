@@ -1,5 +1,5 @@
 // Package pbws 实现 v2 统一线协议（WebSocket+Protobuf）服务端的三条链路（见 proto/v2/gateway_ws.proto）：
-// /ws/v2 浏览器直通、/ws/v2/agent 桌面端（替代 v1 gRPC）、/ws/v2/terminal 终端数据面。
+// /ws/v2 浏览器直通、/ws/v2/agent 桌面端信封流、/ws/v2/terminal 终端数据面。
 // 本包只做帧编解码、鉴权握手、直通白名单与事件扇出；会话状态复用 session，
 // 传输运行时复用 wscore，跨协议域逻辑复用 shared 与 chatcmd。
 package pbws
@@ -47,7 +47,7 @@ func (s *Server) upgrader() websocket.Upgrader {
 	}
 }
 
-// readLimit 与 v1 保持一致：复用 gRPC 消息大小上限。
+// readLimit 复用 GRPCMaxMessageBytes 配置（历史命名保留，语义为消息大小上限）。
 func (s *Server) readLimit() int64 {
 	if s.cfg != nil && s.cfg.GRPCMaxMessageBytes > 0 {
 		return int64(s.cfg.GRPCMaxMessageBytes)

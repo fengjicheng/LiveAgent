@@ -1460,12 +1460,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.remoteDisable": "关闭远程访问",
     "settings.remoteGatewayConnection": "Gateway 连接",
     "settings.remoteGatewayUrl": "Gateway 地址",
-    "settings.remoteGatewayUrlHint": "云端 Gateway 的 HTTPS 地址，用于 WebUI 访问和 gRPC 连接",
-    "settings.remoteGrpcPort": "gRPC 端口",
-    "settings.remoteGrpcPortHint": "Gateway 上 gRPC 服务的监听端口，默认 50051",
-    "settings.remoteGrpcEndpoint": "gRPC Endpoint",
-    "settings.remoteGrpcEndpointHint":
-      "可选。Railway TCP Proxy 等场景可填写独立 gRPC 地址，留空则使用 Gateway 地址加 gRPC 端口。",
+    "settings.remoteGatewayUrlHint":
+      "云端 Gateway 的 HTTPS 地址，用于 WebUI 访问与桌面端 v2 WebSocket 连接",
     "settings.remoteAuth": "身份认证",
     "settings.remoteToken": "访问令牌",
     "settings.remoteTokenPlaceholder": "输入与 Gateway 配置一致的 Token",
@@ -1493,7 +1489,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.remoteHeartbeatHint":
       "与 Gateway 连接的保活心跳间隔（生效范围 10-60 秒），用于维持连接和检测在线状态",
     "settings.remoteInfoBanner":
-      "启用后，本地 LiveAgent 将通过 gRPC 双向流连接云端 Gateway。你可以在浏览器中通过 WebUI 远程发送 Chat 消息、管理 Cron 任务和查看历史记录。所有工具执行仍在本地完成，远程端仅转发指令和结果。",
+      "启用后，本地 LiveAgent 将通过 WebSocket（v2 协议）连接云端 Gateway。你可以在浏览器中通过 WebUI 远程发送 Chat 消息、管理 Cron 任务和查看历史记录。所有工具执行仍在本地完成，远程端仅转发指令和结果。",
 
     /* ── MCP Hub ── */
     "mcpHub.title": "MCP Servers",
@@ -3329,12 +3325,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.remoteGatewayConnection": "Gateway Connection",
     "settings.remoteGatewayUrl": "Gateway URL",
     "settings.remoteGatewayUrlHint":
-      "HTTPS address of the cloud Gateway for WebUI access and gRPC connection",
-    "settings.remoteGrpcPort": "gRPC Port",
-    "settings.remoteGrpcPortHint": "The gRPC service port on the Gateway, default 50051",
-    "settings.remoteGrpcEndpoint": "gRPC Endpoint",
-    "settings.remoteGrpcEndpointHint":
-      "Optional. Use a separate gRPC address for Railway TCP Proxy or similar hosts. Leave empty to use the Gateway URL plus gRPC port.",
+      "HTTPS address of the cloud Gateway for WebUI access and the desktop v2 WebSocket link",
     "settings.remoteAuth": "Authentication",
     "settings.remoteToken": "Access Token",
     "settings.remoteTokenPlaceholder": "Enter the token matching Gateway config",
@@ -3364,7 +3355,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.remoteHeartbeatHint":
       "Keepalive heartbeat interval for the Gateway connection (effective range 10-60 seconds), used to maintain the connection and detect online status",
     "settings.remoteInfoBanner":
-      "When enabled, the local LiveAgent connects to the cloud Gateway via gRPC bidirectional streaming. You can remotely send Chat messages, manage Cron tasks, and view history through the WebUI in your browser. All tool execution remains local — the remote end only relays commands and results.",
+      "When enabled, the local LiveAgent connects to the cloud Gateway over WebSocket (protocol v2). You can remotely send Chat messages, manage Cron tasks, and view history through the WebUI in your browser. All tool execution remains local — the remote end only relays commands and results.",
 
     /* ── MCP Hub ── */
     "mcpHub.title": "MCP Servers",

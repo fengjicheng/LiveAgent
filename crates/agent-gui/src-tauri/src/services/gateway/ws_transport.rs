@@ -1,5 +1,6 @@
-//! v2 线协议（WebSocket+Protobuf）客户端传输层：URL 推导、子协议建连、hello 握手、prost 帧编解码，
-//! 并把握手失败分为「握手层失败（可回退 v1 gRPC）」与「鉴权拒绝（不得回退）」。刻意不依赖 tauri，
+//! v2 线协议（WebSocket+Protobuf）客户端传输层：URL 推导、子协议建连、hello 握手、prost 帧编解码。
+//! 一切失败（建连、握手、鉴权被拒）以错误消息上抛，由连接层统一退避重连——v1 时代
+//! 按"可否回退 gRPC"区分错误类别的机制已随 v1 删除。刻意不依赖 tauri，
 //! 便于纯 tokio 测试；业务信封收发主循环由 connection.rs / terminal.rs 驱动。
 
 use std::time::Duration;
@@ -22,9 +23,9 @@ use super::gateway_proto::v2;
 pub(crate) const GATEWAY_WS_SUBPROTOCOL: &str = "liveagent.v2.pb";
 /// v2 协议版本号（`ClientHello.protocol_version`）。
 pub(crate) const GATEWAY_WS_PROTOCOL_VERSION: u32 = 2;
-/// 桌面端主链路路径（替代 v1 gRPC Authenticate + AgentConnect）。
+/// 桌面端主链路路径（承接 v1 gRPC Authenticate + AgentConnect 的职能，v1 已移除）。
 pub(crate) const GATEWAY_WS_AGENT_PATH: &str = "/ws/v2/agent";
-/// 终端数据面路径（替代 v1 gRPC AgentTerminalConnect）。
+/// 终端数据面路径（承接 v1 gRPC AgentTerminalConnect 的职能，v1 已移除）。
 pub(crate) const GATEWAY_WS_TERMINAL_PATH: &str = "/ws/v2/terminal";
 /// 鉴权失败时服务端的自定义关闭码（Go 侧 `closeCodeUnauthorized`）。
 pub(crate) const GATEWAY_WS_CLOSE_CODE_UNAUTHORIZED: u16 = 4401;
@@ -33,27 +34,8 @@ pub(crate) const GATEWAY_WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10
 
 pub(crate) type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
-/// v2 握手阶段的错误分类：决定同一次连接尝试内是否允许回退 v1 gRPC。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum WsHandshakeError {
-    /// 握手层失败（TCP/TLS/404/非 101/子协议不符/hello 超时等）：视为旧网关无 /ws/v2，可回退 gRPC。
-    Handshake(String),
-    /// 鉴权被拒（ServerHello ok=false 或 4401 关闭码）：不得回退，与 v1 Authenticate 失败同等对待。
-    AuthRejected(String),
-}
-
-impl std::fmt::Display for WsHandshakeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WsHandshakeError::Handshake(message) => write!(f, "{message}"),
-            WsHandshakeError::AuthRejected(message) => write!(f, "{message}"),
-        }
-    }
-}
-
 /// 从网关基址推导 v2 WS URL：http→ws、https→wss，保留路径前缀（反代子路径），丢弃查询串与片段。
-/// 端口取设置里的 `grpc_port`（v1 命名遗留，实义网关端口）无条件覆盖基址端口，与界面预览拼法
-/// 一致；v2 与 gRPC 回退因此指向同一端口。
+/// 端口取设置里的 `grpc_port`（v1 命名遗留，实义网关端口）无条件覆盖基址端口，与界面预览拼法一致。
 pub(crate) fn build_ws_url(
     gateway_url: &str,
     gateway_port: u16,
@@ -109,39 +91,35 @@ pub(crate) fn decode_ws_frame<M: ProstMessage + Default>(data: &[u8]) -> Result<
     M::decode(data).map_err(|error| format!("decode gateway v2 frame failed: {error}"))
 }
 
-/// ServerHello 校验：ok=false 一律按鉴权拒绝处理（服务端随即以 4401 关闭）。
-pub(crate) fn vet_server_hello(
-    hello: v2::ServerHello,
-) -> Result<v2::ServerHello, WsHandshakeError> {
+/// ServerHello 校验：ok=false 即鉴权被拒（服务端随即以 4401 关闭），透传服务端消息。
+pub(crate) fn vet_server_hello(hello: v2::ServerHello) -> Result<v2::ServerHello, String> {
     if hello.ok {
         return Ok(hello);
     }
     let message = hello.message.trim();
-    Err(WsHandshakeError::AuthRejected(if message.is_empty() {
+    Err(if message.is_empty() {
         "gateway authentication failed".to_string()
     } else {
         message.to_string()
-    }))
+    })
 }
 
-/// hello 应答前收到关闭帧的分类：4401 为鉴权拒绝，其余按握手层失败处理。
-pub(crate) fn classify_pre_hello_close(frame: Option<&CloseFrame>) -> WsHandshakeError {
+/// hello 应答前收到关闭帧的错误消息：4401 透传鉴权拒绝原因，其余带上关闭码。
+pub(crate) fn pre_hello_close_error(frame: Option<&CloseFrame>) -> String {
     match frame {
         Some(frame) if u16::from(frame.code) == GATEWAY_WS_CLOSE_CODE_UNAUTHORIZED => {
             let reason = frame.reason.trim();
-            WsHandshakeError::AuthRejected(if reason.is_empty() {
+            if reason.is_empty() {
                 "gateway authentication failed".to_string()
             } else {
                 reason.to_string()
-            })
+            }
         }
-        Some(frame) => WsHandshakeError::Handshake(format!(
+        Some(frame) => format!(
             "gateway v2 connection closed before hello (code {})",
             u16::from(frame.code)
-        )),
-        None => {
-            WsHandshakeError::Handshake("gateway v2 connection closed before hello".to_string())
-        }
+        ),
+        None => "gateway v2 connection closed before hello".to_string(),
     }
 }
 
@@ -149,7 +127,7 @@ pub(crate) fn classify_pre_hello_close(frame: Option<&CloseFrame>) -> WsHandshak
 pub(crate) async fn connect_agent_ws(
     url: &str,
     hello: v2::ClientHello,
-) -> Result<(WsStream, v2::ServerHello), WsHandshakeError> {
+) -> Result<(WsStream, v2::ServerHello), String> {
     let frame = encode_ws_frame(&v2::AgentClientFrame {
         payload: Some(v2::agent_client_frame::Payload::Hello(hello)),
     });
@@ -160,7 +138,7 @@ pub(crate) async fn connect_agent_ws(
 pub(crate) async fn connect_terminal_ws(
     url: &str,
     hello: v2::ClientHello,
-) -> Result<(WsStream, v2::ServerHello), WsHandshakeError> {
+) -> Result<(WsStream, v2::ServerHello), String> {
     let frame = encode_ws_frame(&v2::TerminalClientFrame {
         payload: Some(v2::terminal_client_frame::Payload::Hello(hello)),
     });
@@ -188,45 +166,46 @@ async fn connect_and_hello(
     url: &str,
     hello_frame: Message,
     decode_hello: fn(&[u8]) -> Result<Option<v2::ServerHello>, String>,
-) -> Result<(WsStream, v2::ServerHello), WsHandshakeError> {
+) -> Result<(WsStream, v2::ServerHello), String> {
     let handshake = async {
         let mut stream = connect_ws(url).await?;
-        stream.send(hello_frame).await.map_err(|error| {
-            WsHandshakeError::Handshake(format!("send gateway v2 hello failed: {error}"))
-        })?;
+        stream
+            .send(hello_frame)
+            .await
+            .map_err(|error| format!("send gateway v2 hello failed: {error}"))?;
         let hello = await_server_hello(&mut stream, decode_hello).await?;
         Ok((stream, hello))
     };
     tokio::time::timeout(GATEWAY_WS_HANDSHAKE_TIMEOUT, handshake)
         .await
-        .map_err(|_| WsHandshakeError::Handshake("gateway v2 handshake timed out".to_string()))?
+        .map_err(|_| "gateway v2 handshake timed out".to_string())?
 }
 
 /// 以 v2 子协议发起 WS 升级并校验服务端回显（旧网关兜底路由可能接受升级却不认识 v2 帧）。
-async fn connect_ws(url: &str) -> Result<WsStream, WsHandshakeError> {
+async fn connect_ws(url: &str) -> Result<WsStream, String> {
     if url.starts_with("wss://") {
-        // rustls 连接器复用进程级默认 crypto provider，与 tonic TLS 共用同一次 ring 安装。
+        // rustls 连接器复用进程级默认 crypto provider（ensure_rustls_crypto_provider 负责唯一一次 ring 安装）。
         ensure_rustls_crypto_provider();
     }
-    let mut request = url.into_client_request().map_err(|error| {
-        WsHandshakeError::Handshake(format!("build gateway v2 request failed: {error}"))
-    })?;
+    let mut request = url
+        .into_client_request()
+        .map_err(|error| format!("build gateway v2 request failed: {error}"))?;
     request.headers_mut().insert(
         SEC_WEBSOCKET_PROTOCOL,
         HeaderValue::from_static(GATEWAY_WS_SUBPROTOCOL),
     );
-    let (stream, response) = connect_async(request).await.map_err(|error| {
-        WsHandshakeError::Handshake(format!("gateway v2 connect failed: {error}"))
-    })?;
+    let (stream, response) = connect_async(request)
+        .await
+        .map_err(|error| format!("gateway v2 connect failed: {error}"))?;
     let echoed = response
         .headers()
         .get(SEC_WEBSOCKET_PROTOCOL)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
     if echoed != GATEWAY_WS_SUBPROTOCOL {
-        return Err(WsHandshakeError::Handshake(format!(
+        return Err(format!(
             "gateway v2 subprotocol mismatch: expected {GATEWAY_WS_SUBPROTOCOL:?}, got {echoed:?}"
-        )));
+        ));
     }
     Ok(stream)
 }
@@ -235,24 +214,18 @@ async fn connect_ws(url: &str) -> Result<WsStream, WsHandshakeError> {
 async fn await_server_hello(
     stream: &mut WsStream,
     decode_hello: fn(&[u8]) -> Result<Option<v2::ServerHello>, String>,
-) -> Result<v2::ServerHello, WsHandshakeError> {
+) -> Result<v2::ServerHello, String> {
     loop {
         match stream.next().await {
-            None => return Err(classify_pre_hello_close(None)),
-            Some(Err(error)) => {
-                return Err(WsHandshakeError::Handshake(format!(
-                    "gateway v2 hello receive failed: {error}"
-                )))
-            }
+            None => return Err(pre_hello_close_error(None)),
+            Some(Err(error)) => return Err(format!("gateway v2 hello receive failed: {error}")),
             Some(Ok(Message::Binary(data))) => {
-                return match decode_hello(&data).map_err(WsHandshakeError::Handshake)? {
+                return match decode_hello(&data)? {
                     Some(hello) => vet_server_hello(hello),
-                    None => Err(WsHandshakeError::Handshake(
-                        "gateway v2 sent a non-hello first frame".to_string(),
-                    )),
+                    None => Err("gateway v2 sent a non-hello first frame".to_string()),
                 };
             }
-            Some(Ok(Message::Close(frame))) => return Err(classify_pre_hello_close(frame.as_ref())),
+            Some(Ok(Message::Close(frame))) => return Err(pre_hello_close_error(frame.as_ref())),
             // WS 控制帧（Ping/Pong）不参与握手语义。
             Some(Ok(_)) => continue,
         }
@@ -272,8 +245,12 @@ mod tests {
     fn build_ws_url_maps_http_to_ws() {
         // 端口框（gateway_port）与界面预览一致：无条件覆盖基址端口。
         assert_eq!(
-            build_ws_url("http://gateway.example.com:8080", 8080, GATEWAY_WS_AGENT_PATH)
-                .expect("build ws url"),
+            build_ws_url(
+                "http://gateway.example.com:8080",
+                8080,
+                GATEWAY_WS_AGENT_PATH
+            )
+            .expect("build ws url"),
             "ws://gateway.example.com:8080/ws/v2/agent"
         );
     }
@@ -292,8 +269,12 @@ mod tests {
     fn build_ws_url_overrides_explicit_base_port() {
         // 界面预览的语义：端口框优先于基址里写的端口。
         assert_eq!(
-            build_ws_url("http://gateway.example.com:9999", 50052, GATEWAY_WS_AGENT_PATH)
-                .expect("build ws url overriding base port"),
+            build_ws_url(
+                "http://gateway.example.com:9999",
+                50052,
+                GATEWAY_WS_AGENT_PATH
+            )
+            .expect("build ws url overriding base port"),
             "ws://gateway.example.com:50052/ws/v2/agent"
         );
     }
@@ -344,39 +325,32 @@ mod tests {
                 message: " unauthorized ".to_string(),
                 ..Default::default()
             }),
-            Err(WsHandshakeError::AuthRejected("unauthorized".to_string()))
+            Err("unauthorized".to_string())
         );
         assert_eq!(
             vet_server_hello(v2::ServerHello::default()),
-            Err(WsHandshakeError::AuthRejected(
-                "gateway authentication failed".to_string()
-            ))
+            Err("gateway authentication failed".to_string())
         );
     }
 
     #[test]
-    fn classify_pre_hello_close_distinguishes_unauthorized() {
+    fn pre_hello_close_error_surfaces_unauthorized_reason() {
+        // 4401 透传服务端拒绝原因；其余关闭码/无关闭帧给出带上下文的握手失败消息。
         let unauthorized = CloseFrame {
             code: CloseCode::from(GATEWAY_WS_CLOSE_CODE_UNAUTHORIZED),
             reason: "unauthorized".into(),
         };
-        assert_eq!(
-            classify_pre_hello_close(Some(&unauthorized)),
-            WsHandshakeError::AuthRejected("unauthorized".to_string())
-        );
+        assert_eq!(pre_hello_close_error(Some(&unauthorized)), "unauthorized");
 
         let normal = CloseFrame {
             code: CloseCode::Normal,
             reason: "".into(),
         };
-        assert!(matches!(
-            classify_pre_hello_close(Some(&normal)),
-            WsHandshakeError::Handshake(_)
-        ));
-        assert!(matches!(
-            classify_pre_hello_close(None),
-            WsHandshakeError::Handshake(_)
-        ));
+        assert!(pre_hello_close_error(Some(&normal)).contains("closed before hello (code"));
+        assert_eq!(
+            pre_hello_close_error(None),
+            "gateway v2 connection closed before hello"
+        );
     }
 
     fn echo_subprotocol(
@@ -391,9 +365,7 @@ mod tests {
         Ok(response)
     }
 
-    async fn read_binary(
-        ws: &mut WebSocketStream<TcpStream>,
-    ) -> Vec<u8> {
+    async fn read_binary(ws: &mut WebSocketStream<TcpStream>) -> Vec<u8> {
         loop {
             match ws.next().await.expect("ws frame").expect("ws message") {
                 Message::Binary(data) => return data.to_vec(),
@@ -449,9 +421,9 @@ mod tests {
                     proto::GatewayEnvelope {
                         request_id: envelope.request_id,
                         timestamp: 1,
-                        payload: Some(proto::gateway_envelope::Payload::Ping(
-                            proto::PingRequest { timestamp: 1 },
-                        )),
+                        payload: Some(proto::gateway_envelope::Payload::Ping(proto::PingRequest {
+                            timestamp: 1,
+                        })),
                     },
                 )),
             }))
@@ -483,7 +455,12 @@ mod tests {
         .expect("send envelope");
 
         let reply = loop {
-            match ws.next().await.expect("reply frame").expect("reply message") {
+            match ws
+                .next()
+                .await
+                .expect("reply frame")
+                .expect("reply message")
+            {
                 Message::Binary(data) => {
                     break decode_ws_frame::<v2::AgentServerFrame>(&data).expect("decode reply")
                 }
@@ -499,7 +476,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_handshake_rejection_is_not_a_handshake_failure() {
+    async fn agent_handshake_rejection_surfaces_server_message() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind local listener");
@@ -527,10 +504,7 @@ mod tests {
             build_client_hello("bad-token", "agent-1".to_string(), "0.0.0".to_string()),
         )
         .await;
-        assert_eq!(
-            result.err(),
-            Some(WsHandshakeError::AuthRejected("unauthorized".to_string()))
-        );
+        assert_eq!(result.err(), Some("unauthorized".to_string()));
 
         server.await.expect("server task");
     }
@@ -545,7 +519,9 @@ mod tests {
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("accept tcp");
             // 不回显子协议：模拟旧网关上恰好接受任意升级的兜底路由。
-            let _ws = tokio_tungstenite::accept_async(stream).await.expect("accept ws");
+            let _ws = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("accept ws");
         });
 
         let result = connect_agent_ws(
@@ -554,10 +530,10 @@ mod tests {
         )
         .await;
         match result.err() {
-            Some(WsHandshakeError::Handshake(message)) => {
+            Some(message) => {
                 assert!(message.contains("subprotocol"), "unexpected: {message}");
             }
-            other => panic!("expected handshake failure, got {other:?}"),
+            None => panic!("expected handshake failure"),
         }
 
         server.await.expect("server task");

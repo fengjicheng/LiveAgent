@@ -32,13 +32,18 @@ fn main() {
         .join("..")
         .join("agent-gateway");
     let proto_v1 = gateway_root.join("proto").join("v1").join("gateway.proto");
-    let proto_v2 = gateway_root.join("proto").join("v2").join("gateway_ws.proto");
+    let proto_v2 = gateway_root
+        .join("proto")
+        .join("v2")
+        .join("gateway_ws.proto");
 
     println!("cargo:rerun-if-changed={}", proto_v1.display());
     println!("cargo:rerun-if-changed={}", proto_v2.display());
 
     tonic_prost_build::configure()
         .build_server(false)
+        // v1 gRPC 服务已随 v1 协议移除，proto 只含消息；桌面端仅消费消息类型。
+        .build_client(false)
         .compile_protos(&[proto_v1, proto_v2], &[gateway_root])
         .expect("compile gateway protos");
 
