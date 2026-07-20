@@ -1056,44 +1056,53 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
     bulkAnchorRef.current = null;
   }, []);
 
-  const enterBulkMode = useCallback((initialName?: string) => {
-    setBulkMode(true);
-    setPreviewInstalledSkill(null);
-    if (initialName && !isAlwaysEnabledSkillName(initialName)) {
+  const enterBulkMode = useCallback(
+    (initialName?: string) => {
+      setBulkMode(true);
+      setPreviewInstalledSkill(null);
+      if (initialName && !isAlwaysEnabledSkillName(initialName)) {
+        clearBulkUndoTimer();
+        setBulkUndo(null);
+        setBulkSelection(new Set([initialName]));
+        bulkAnchorRef.current = initialName;
+      }
+    },
+    [clearBulkUndoTimer],
+  );
+
+  const toggleBulkSelectionName = useCallback(
+    (name: string) => {
+      if (isAlwaysEnabledSkillName(name)) return;
       clearBulkUndoTimer();
       setBulkUndo(null);
-      setBulkSelection(new Set([initialName]));
-      bulkAnchorRef.current = initialName;
-    }
-  }, [clearBulkUndoTimer]);
+      setBulkSelection((prev) => {
+        const next = new Set(prev);
+        if (next.has(name)) next.delete(name);
+        else next.add(name);
+        return next;
+      });
+      bulkAnchorRef.current = name;
+    },
+    [clearBulkUndoTimer],
+  );
 
-  const toggleBulkSelectionName = useCallback((name: string) => {
-    if (isAlwaysEnabledSkillName(name)) return;
-    clearBulkUndoTimer();
-    setBulkUndo(null);
-    setBulkSelection((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-    bulkAnchorRef.current = name;
-  }, [clearBulkUndoTimer]);
-
-  const setBulkSelectionRange = useCallback((names: readonly string[], select: boolean) => {
-    const selectable = names.filter((name) => !isAlwaysEnabledSkillName(name));
-    if (selectable.length === 0) return;
-    clearBulkUndoTimer();
-    setBulkUndo(null);
-    setBulkSelection((prev) => {
-      const next = new Set(prev);
-      for (const name of selectable) {
-        if (select) next.add(name);
-        else next.delete(name);
-      }
-      return next;
-    });
-  }, [clearBulkUndoTimer]);
+  const setBulkSelectionRange = useCallback(
+    (names: readonly string[], select: boolean) => {
+      const selectable = names.filter((name) => !isAlwaysEnabledSkillName(name));
+      if (selectable.length === 0) return;
+      clearBulkUndoTimer();
+      setBulkUndo(null);
+      setBulkSelection((prev) => {
+        const next = new Set(prev);
+        for (const name of selectable) {
+          if (select) next.add(name);
+          else next.delete(name);
+        }
+        return next;
+      });
+    },
+    [clearBulkUndoTimer],
+  );
 
   function handleBulkInstalledCardClick(name: string, orderedNames: string[], shiftKey: boolean) {
     if (isAlwaysEnabledSkillName(name)) return;
