@@ -1,6 +1,14 @@
 import type { CacheRetention, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { CustomProvider, ProviderId, ReasoningLevel } from "../../settings";
-import { mergeCustomHeaders as mergeCustomHeadersBase } from "../customHeaders";
+import { createUuid } from "../../shared/id";
+import {
+  ANTHROPIC_DEFAULT_REQUEST_HEADERS,
+  CODEX_CONVERSATION_ID_HEADER,
+  CODEX_DEFAULT_USER_AGENT,
+  CODEX_SESSION_ID_HEADER,
+  isAnthropicOAuthApiKey,
+  mergeCustomHeaders as mergeCustomHeadersBase,
+} from "../customHeaders";
 import { normalizeSessionId } from "./common";
 
 export { isValidCustomHeaderKey } from "../customHeaders";
@@ -18,11 +26,33 @@ export function buildGeminiAuthHeaders(apiKey: string): Record<string, string> {
   };
 }
 
-export function buildProviderAuthHeaders(
+function buildProviderAuthHeaders(providerId: ProviderId, apiKey: string): Record<string, string> {
+  return providerId === "gemini" ? buildGeminiAuthHeaders(apiKey) : buildDualAuthHeaders(apiKey);
+}
+
+export function buildProviderRequestHeaders(
   providerId: ProviderId,
   apiKey: string,
+  sessionId?: string,
 ): Record<string, string> {
-  return providerId === "gemini" ? buildGeminiAuthHeaders(apiKey) : buildDualAuthHeaders(apiKey);
+  const authHeaders = buildProviderAuthHeaders(providerId, apiKey);
+  if (providerId === "claude_code") {
+    if (isAnthropicOAuthApiKey(apiKey)) return {};
+    return {
+      ...authHeaders,
+      ...ANTHROPIC_DEFAULT_REQUEST_HEADERS,
+    };
+  }
+  if (providerId === "codex") {
+    const requestSessionId = normalizeSessionId(sessionId) ?? createUuid();
+    return {
+      ...authHeaders,
+      "User-Agent": CODEX_DEFAULT_USER_AGENT,
+      [CODEX_SESSION_ID_HEADER]: requestSessionId,
+      [CODEX_CONVERSATION_ID_HEADER]: requestSessionId,
+    };
+  }
+  return authHeaders;
 }
 
 export function mergeCustomHeaders(

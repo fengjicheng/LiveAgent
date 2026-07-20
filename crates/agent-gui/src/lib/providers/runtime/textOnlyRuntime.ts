@@ -22,7 +22,7 @@ import { createStreamingTextReconciler } from "./messageUtils";
 import { createModelFromConfig } from "./modelFactory";
 import { finalizeProviderStreamOptions } from "./payloadPipeline";
 import {
-  buildProviderAuthHeaders,
+  buildProviderRequestHeaders,
   buildProviderRequestMetadata,
   mergeCustomHeaders,
   resolveProviderCacheRetention,
@@ -139,7 +139,7 @@ export async function streamAssistantMessage(params: {
     params.providerId,
     params.runtime.baseUrl.trim(),
     mergeCustomHeaders(
-      buildProviderAuthHeaders(params.providerId, params.runtime.apiKey),
+      buildProviderRequestHeaders(params.providerId, params.runtime.apiKey, params.sessionId),
       params.runtime.customHeaders,
     ),
     { useSystemProxy: params.runtime.useSystemProxy === true },
@@ -332,7 +332,7 @@ export async function completeAssistantMessage(params: {
     params.providerId,
     params.runtime.baseUrl.trim(),
     mergeCustomHeaders(
-      buildProviderAuthHeaders(params.providerId, params.runtime.apiKey),
+      buildProviderRequestHeaders(params.providerId, params.runtime.apiKey, params.sessionId),
       params.runtime.customHeaders,
     ),
     { useSystemProxy: params.runtime.useSystemProxy === true },

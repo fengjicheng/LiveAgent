@@ -5,6 +5,7 @@ import { createTsModuleLoader } from "../helpers/load-ts-module.mjs";
 const loader = createTsModuleLoader();
 const providers = loader.loadModule("src/lib/providers/llm.ts");
 const proxy = loader.loadModule("src/lib/providers/proxy.ts");
+const customHeaderHelpers = loader.loadModule("src/lib/providers/customHeaders.ts");
 const providerUtils = loader.loadModule("src/pages/settings/providerUtils.ts");
 
 function createMockAssistantStream() {
@@ -67,7 +68,7 @@ test("llm facade preserves provider runtime exports", () => {
     "attachProviderNativeWebSearch",
     "buildDualAuthHeaders",
     "buildGeminiAuthHeaders",
-    "buildProviderAuthHeaders",
+    "buildProviderRequestHeaders",
     "buildProviderRequestMetadata",
     "isValidCustomHeaderKey",
     "mergeCustomHeaders",
@@ -137,13 +138,43 @@ test("provider request helpers normalize auth, metadata, errors, and model value
   assert.deepEqual(providers.buildGeminiAuthHeaders("secret"), {
     "x-goog-api-key": "secret",
   });
-  assert.deepEqual(providers.buildProviderAuthHeaders("gemini", "secret"), {
-    "x-goog-api-key": "secret",
-  });
-  assert.deepEqual(providers.buildProviderAuthHeaders("codex", "secret"), {
+  assert.deepEqual(
+    providers.buildProviderRequestHeaders("claude_code", "secret", "conversation-1"),
+    {
+      Authorization: "Bearer secret",
+      "x-api-key": "secret",
+      "x-app": "cli",
+      "User-Agent": "claude-cli/2.1.71 (external, cli)",
+      "Content-Type": "application/json",
+      "X-Stainless-OS": "MacOS",
+      "X-Stainless-Arch": "arm64",
+      "X-Stainless-Lang": "js",
+      "anthropic-version": "2023-06-01",
+      "X-Stainless-Runtime": "node",
+      "X-Stainless-Timeout": "600",
+      "x-stainless-retry-count": "0",
+      "X-Stainless-Package-Version": "0.74.0",
+      "X-Stainless-Runtime-Version": "v22.19.0",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+  );
+  assert.deepEqual(
+    providers.buildProviderRequestHeaders("claude_code", "sk-ant-oat01-test", "conversation-1"),
+    {},
+  );
+  assert.deepEqual(providers.buildProviderRequestHeaders("codex", "secret", "conversation-1"), {
     Authorization: "Bearer secret",
     "x-api-key": "secret",
+    "User-Agent": "codex_cli_rs/0.72.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal",
+    session_id: "conversation-1",
+    conversation_id: "conversation-1",
   });
+  assert.deepEqual(providers.buildProviderRequestHeaders("gemini", "secret", "conversation-1"), {
+    "x-goog-api-key": "secret",
+  });
+  const generatedCodexHeaders = providers.buildProviderRequestHeaders("codex", "secret");
+  assert.match(generatedCodexHeaders.session_id, /^[0-9a-f-]{36}$/i);
+  assert.equal(generatedCodexHeaders.conversation_id, generatedCodexHeaders.session_id);
   assert.equal(providers.toSimpleStreamReasoning("off"), undefined);
   assert.equal(providers.toSimpleStreamReasoning("high"), "high");
   assert.equal(providers.toSimpleStreamReasoning("max"), "max");
@@ -197,6 +228,36 @@ test("provider request helpers normalize auth, metadata, errors, and model value
   assert.equal(
     providers.normalizeErrorMessage('prefix {"error":{"message":"nested failure"}}'),
     "nested failure",
+  );
+});
+
+test("provider-specific custom header suggestions include standard model headers", () => {
+  const anthropicPresets = customHeaderHelpers.getCustomHeaderKeyPresets("claude_code");
+  assert.ok(anthropicPresets.includes("User-Agent"));
+  assert.ok(anthropicPresets.includes("Content-Type"));
+  assert.ok(anthropicPresets.includes("anthropic-version"));
+  assert.ok(anthropicPresets.includes("X-Stainless-Runtime-Version"));
+  assert.ok(anthropicPresets.includes("anthropic-dangerous-direct-browser-access"));
+  assert.ok(!anthropicPresets.includes("anthropic-beta"));
+  assert.ok(!anthropicPresets.includes("session_id"));
+
+  const codexPresets = customHeaderHelpers.getCustomHeaderKeyPresets("codex");
+  assert.ok(codexPresets.includes("User-Agent"));
+  assert.ok(codexPresets.includes("session_id"));
+  assert.ok(codexPresets.includes("conversation_id"));
+  assert.ok(!codexPresets.includes("anthropic-version"));
+});
+
+test("local proxy preserves explicit user-agent and content-type values for the upstream hop", () => {
+  assert.deepEqual(
+    proxy.buildUpstreamHeaderOverrideHeaders({
+      "user-agent": "custom-agent/1.0",
+      "CONTENT-TYPE": "application/custom+json",
+    }),
+    {
+      "x-liveagent-upstream-user-agent": "custom-agent/1.0",
+      "x-liveagent-upstream-content-type": "application/custom+json",
+    },
   );
 });
 
@@ -1174,11 +1235,12 @@ test("custom provider headers merge without mutating the base headers", () => {
   assert.deepEqual(base, { Accept: "application/json", "X-Tenant": "old" });
 });
 
-test("custom provider headers cannot override reserved headers case-insensitively", () => {
+test("custom provider headers override model defaults but not credential or protocol headers", () => {
   const base = {
     Authorization: "Bearer real",
     "x-api-key": "real-api-key",
     "x-goog-api-key": "real-google-key",
+    "anthropic-beta": "context-1m-2025-08-07",
     "anthropic-version": "2023-06-01",
     "Content-Type": "application/json",
     Host: "api.example.com",
@@ -1189,12 +1251,22 @@ test("custom provider headers cannot override reserved headers case-insensitivel
       { key: "authorization", value: "Bearer attacker" },
       { key: "X-API-KEY", value: "attacker" },
       { key: "X-GOOG-API-KEY", value: "attacker" },
+      { key: "Anthropic-Beta", value: "custom-beta" },
       { key: "Anthropic-Version", value: "attacker" },
       { key: "content-type", value: "text/plain" },
       { key: "host", value: "attacker.example" },
       { key: "content-length", value: "0" },
     ]),
-    base,
+    {
+      Authorization: "Bearer real",
+      "x-api-key": "real-api-key",
+      "x-goog-api-key": "real-google-key",
+      "anthropic-beta": "context-1m-2025-08-07",
+      "Anthropic-Version": "attacker",
+      "content-type": "text/plain",
+      Host: "api.example.com",
+      "Content-Length": "42",
+    },
   );
 });
 
@@ -1210,6 +1282,7 @@ test("custom provider headers filter invalid HTTP token keys", () => {
     { "X.Valid-Header_1": "kept" },
   );
   assert.equal(providers.isValidCustomHeaderKey("anthropic-beta"), true);
+  assert.equal(customHeaderHelpers.isReservedCustomHeaderKey("Anthropic-Beta"), true);
   assert.equal(providers.isValidCustomHeaderKey("X-Request-ID"), true);
   assert.equal(providers.isValidCustomHeaderKey("Bad Header"), false);
 });
@@ -1219,4 +1292,3 @@ test("custom provider headers accept undefined and empty arrays", () => {
   assert.deepEqual(providers.mergeCustomHeaders(base, undefined), base);
   assert.deepEqual(providers.mergeCustomHeaders(base, []), base);
 });
-

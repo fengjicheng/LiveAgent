@@ -37,8 +37,10 @@ const TRAILER: &str = "trailer";
 const TRANSFER_ENCODING: &str = "transfer-encoding";
 const UPGRADE: &str = "upgrade";
 const UPSTREAM_ORIGIN_HEADER: &str = "x-liveagent-upstream-origin";
+const UPSTREAM_USER_AGENT_HEADER: &str = "x-liveagent-upstream-user-agent";
+const UPSTREAM_CONTENT_TYPE_HEADER: &str = "x-liveagent-upstream-content-type";
 const USE_SYSTEM_PROXY_HEADER: &str = "x-liveagent-use-system-proxy";
-const DEFAULT_ALLOW_HEADERS: &str = "authorization,content-type,x-api-key,x-goog-api-key,anthropic-version,x-liveagent-upstream-origin,x-liveagent-proxy-token,x-liveagent-use-system-proxy";
+const DEFAULT_ALLOW_HEADERS: &str = "authorization,content-type,x-api-key,x-goog-api-key,anthropic-version,x-liveagent-upstream-origin,x-liveagent-upstream-user-agent,x-liveagent-upstream-content-type,x-liveagent-proxy-token,x-liveagent-use-system-proxy";
 const ALLOW_METHODS_VALUE: &str = "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD";
 const VARY_VALUE: &str = "Origin, Access-Control-Request-Method, Access-Control-Request-Headers";
 const IMAGE_PROXY_MAX_BYTES: usize = 25 * 1024 * 1024;
@@ -373,12 +375,9 @@ async fn handle_proxy(
     } else {
         state.client.clone()
     };
-    let mut request = client.request(method, target_url);
-    for (name, value) in &headers {
-        if should_forward_request_header(name) {
-            request = request.header(name, value);
-        }
-    }
+    let mut request = client
+        .request(method, target_url)
+        .headers(build_upstream_request_headers(&headers));
     if !body_bytes.is_empty() {
         request = request.body(body_bytes);
     }
@@ -540,6 +539,22 @@ fn should_forward_request_header(name: &HeaderName) -> bool {
             | ACCESS_CONTROL_REQUEST_HEADERS
     ) && !lowered.starts_with(ACCESS_CONTROL_PREFIX)
         && !lowered.starts_with(PROXY_PREFIX)
+}
+
+fn build_upstream_request_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut upstream_headers = HeaderMap::new();
+    for (name, value) in headers {
+        if should_forward_request_header(name) {
+            upstream_headers.append(name, value.clone());
+        }
+    }
+    if let Some(value) = headers.get(UPSTREAM_USER_AGENT_HEADER) {
+        upstream_headers.insert(HeaderName::from_static("user-agent"), value.clone());
+    }
+    if let Some(value) = headers.get(UPSTREAM_CONTENT_TYPE_HEADER) {
+        upstream_headers.insert(HeaderName::from_static(CONTENT_TYPE), value.clone());
+    }
+    upstream_headers
 }
 
 fn should_forward_response_header(name: &HeaderName) -> bool {
@@ -714,5 +729,43 @@ mod tests {
         assert!(should_forward_request_header(&HeaderName::from_static(
             "anthropic-version"
         )));
+    }
+
+    #[test]
+    fn applies_explicit_upstream_header_overrides_last() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("user-agent"),
+            HeaderValue::from_static("WebView/1.0"),
+        );
+        headers.insert(
+            HeaderName::from_static(CONTENT_TYPE),
+            HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            HeaderName::from_static(UPSTREAM_USER_AGENT_HEADER),
+            HeaderValue::from_static("codex_cli_rs/0.72.0"),
+        );
+        headers.insert(
+            HeaderName::from_static(UPSTREAM_CONTENT_TYPE_HEADER),
+            HeaderValue::from_static("application/custom+json"),
+        );
+
+        let upstream_headers = build_upstream_request_headers(&headers);
+
+        assert_eq!(
+            upstream_headers
+                .get("user-agent")
+                .and_then(|value| value.to_str().ok()),
+            Some("codex_cli_rs/0.72.0")
+        );
+        assert_eq!(
+            upstream_headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/custom+json")
+        );
+        assert!(!upstream_headers.contains_key(UPSTREAM_USER_AGENT_HEADER));
+        assert!(!upstream_headers.contains_key(UPSTREAM_CONTENT_TYPE_HEADER));
     }
 }

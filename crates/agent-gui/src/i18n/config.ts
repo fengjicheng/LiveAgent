@@ -1277,7 +1277,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.addCustomHeader": "添加请求头",
     "settings.removeCustomHeader": "删除请求头",
     "settings.invalidCustomHeaderKey":
-      "请求头名称无效。仅支持合法 HTTP Header 名称，例如 anthropic-beta、X-Request-ID。",
+      "请求头名称无效。仅支持合法 HTTP Header 名称，例如 X-Environment、X-Request-ID。",
     "settings.close": "关闭",
     "settings.hideApiKey": "隐藏 API Key",
     "settings.showApiKey": "显示 API Key",
@@ -3253,7 +3253,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.addCustomHeader": "Add header",
     "settings.removeCustomHeader": "Remove header",
     "settings.invalidCustomHeaderKey":
-      "Invalid HTTP header name. Examples: anthropic-beta, X-Request-ID.",
+      "Invalid HTTP header name. Examples: X-Environment, X-Request-ID.",
     "settings.close": "Close",
     "settings.hideApiKey": "Hide API Key",
     "settings.showApiKey": "Show API Key",

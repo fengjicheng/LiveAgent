@@ -248,7 +248,7 @@ const llmMock = {
       "x-api-key": apiKey,
     };
   },
-  buildProviderAuthHeaders(_providerId, apiKey) {
+  buildProviderRequestHeaders(_providerId, apiKey, _sessionId) {
     return {
       Authorization: `Bearer ${apiKey}`,
       "x-api-key": apiKey,

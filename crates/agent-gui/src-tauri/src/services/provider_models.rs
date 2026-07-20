@@ -373,6 +373,31 @@ mod tests {
         .is_err());
     }
 
+    #[test]
+    fn provider_model_headers_exclude_inference_identity() {
+        for provider_type in ["claude_code", "codex", "gemini"] {
+            for official in [false, true] {
+                let headers = build_provider_models_headers(provider_type, "key", official);
+                let names = headers
+                    .iter()
+                    .map(|(name, _)| name.to_ascii_lowercase())
+                    .collect::<Vec<_>>();
+
+                assert!(!names.iter().any(|name| name.starts_with("x-stainless-")));
+                for forbidden in [
+                    "x-app",
+                    "user-agent",
+                    "anthropic-beta",
+                    "anthropic-dangerous-direct-browser-access",
+                    "session_id",
+                    "conversation_id",
+                ] {
+                    assert!(!names.iter().any(|name| name == forbidden));
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn provider_models_request_uses_explicit_proxy_client() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind proxy listener");

@@ -27,7 +27,7 @@ export {
 export {
   buildDualAuthHeaders,
   buildGeminiAuthHeaders,
-  buildProviderAuthHeaders,
+  buildProviderRequestHeaders,
   buildProviderRequestMetadata,
   isValidCustomHeaderKey,
   mergeCustomHeaders,

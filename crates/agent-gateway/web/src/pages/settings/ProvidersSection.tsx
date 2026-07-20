@@ -31,6 +31,7 @@ import {
 import { useLocale } from "../../i18n";
 import { buildModelOptions } from "../../lib/chat/chatPageHelpers";
 import {
+  getCustomHeaderKeyPresets,
   isReservedCustomHeaderKey,
   isValidCustomHeaderKey,
 } from "../../lib/providers/customHeaders";
@@ -77,14 +78,6 @@ type ModelEditDraft = {
 };
 const PROVIDER_TABS: ProviderId[] = ["claude_code", "codex", "gemini"];
 const TITLE_MODEL_FOLLOW_CURRENT_VALUE = "__conversation_title_follow_current__";
-const CUSTOM_HEADER_KEY_PRESETS = [
-  "anthropic-beta",
-  "X-Request-ID",
-  "X-User-ID",
-  "X-Environment",
-  "HTTP-Referer",
-  "X-Title",
-] as const;
 const MODEL_CAPABILITIES: ModelCapability[] = ["reasoning", "vision", "tools"];
 const PROVIDER_LABELS: Record<ProviderId, string> = {
   claude_code: "Anthropic",
@@ -456,7 +449,7 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
   );
   const headerSuggestItems = headerSuggest
     ? headerSuggestQuery
-      ? CUSTOM_HEADER_KEY_PRESETS.filter((preset) => {
+      ? getCustomHeaderKeyPresets(providerType).filter((preset) => {
           const lower = preset.toLowerCase();
           if (headerSuggestUsed.has(lower)) return false;
           return lower.includes(headerSuggestQuery) && lower !== headerSuggestQuery;

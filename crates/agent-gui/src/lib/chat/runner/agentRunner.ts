@@ -17,7 +17,7 @@ import {
   withHostedSearchProbeHeader,
 } from "../../providers/hostedSearchEvents";
 import {
-  buildProviderAuthHeaders,
+  buildProviderRequestHeaders,
   buildProviderRequestMetadata,
   createModelFromConfig,
   createStreamingTextReconciler,
@@ -708,7 +708,7 @@ export async function runAssistantWithTools(params: {
       params.providerId,
       params.runtime.baseUrl.trim(),
       mergeCustomHeaders(
-        buildProviderAuthHeaders(params.providerId, params.runtime.apiKey),
+        buildProviderRequestHeaders(params.providerId, params.runtime.apiKey, params.sessionId),
         params.runtime.customHeaders,
       ),
       { useSystemProxy: params.runtime.useSystemProxy === true },

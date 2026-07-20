@@ -1,9 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type { ProviderId } from "../settings";
+import { readHeaderValue } from "./customHeaders";
 
 export const LIVEAGENT_PROXY_TOKEN_HEADER = "x-liveagent-proxy-token";
 export const LIVEAGENT_UPSTREAM_ORIGIN_HEADER = "x-liveagent-upstream-origin";
+export const LIVEAGENT_UPSTREAM_USER_AGENT_HEADER = "x-liveagent-upstream-user-agent";
+export const LIVEAGENT_UPSTREAM_CONTENT_TYPE_HEADER = "x-liveagent-upstream-content-type";
 // 布尔标记头：声明该请求经系统代理出网。代理地址/凭据只存于桌面 Rust 侧，
 // 由本地反代按此头选择带代理的 client（x-liveagent-* 头不会转发给上游）。
 export const LIVEAGENT_USE_SYSTEM_PROXY_HEADER = "x-liveagent-use-system-proxy";
@@ -17,6 +20,17 @@ export type PreparedProxyRequest = {
   baseUrl: string;
   headers: Record<string, string>;
 };
+
+export function buildUpstreamHeaderOverrideHeaders(
+  headers: Record<string, string>,
+): Record<string, string> {
+  const userAgent = readHeaderValue(headers, "user-agent");
+  const contentType = readHeaderValue(headers, "content-type");
+  return {
+    ...(userAgent !== undefined ? { [LIVEAGENT_UPSTREAM_USER_AGENT_HEADER]: userAgent } : {}),
+    ...(contentType !== undefined ? { [LIVEAGENT_UPSTREAM_CONTENT_TYPE_HEADER]: contentType } : {}),
+  };
+}
 
 let proxyServerInfoPromise: Promise<ProxyServerInfo> | null = null;
 
@@ -182,6 +196,7 @@ export async function prepareProxyRequest(
     baseUrl,
     headers: {
       ...headers,
+      ...buildUpstreamHeaderOverrideHeaders(headers),
       [LIVEAGENT_UPSTREAM_ORIGIN_HEADER]: upstreamOrigin,
       [LIVEAGENT_PROXY_TOKEN_HEADER]: proxyServerInfo.token,
       ...(options?.useSystemProxy ? { [LIVEAGENT_USE_SYSTEM_PROXY_HEADER]: "1" } : {}),

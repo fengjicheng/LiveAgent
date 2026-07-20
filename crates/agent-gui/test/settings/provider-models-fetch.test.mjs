@@ -114,6 +114,20 @@ test("buildProviderModelsAttempts orders default before official with provider h
   assert.equal(codex[0].headers["x-api-key"], "test-key");
   assert.equal(codex[1].headers["x-api-key"], undefined);
   assert.equal(codex[1].headers.Authorization, "Bearer test-key");
+
+  const inferenceOnlyHeaders = [
+    "x-app",
+    "user-agent",
+    "anthropic-beta",
+    "anthropic-dangerous-direct-browser-access",
+    "session_id",
+    "conversation_id",
+  ];
+  for (const attempt of [...gemini, ...claude, ...codex]) {
+    const headerNames = Object.keys(attempt.headers).map((name) => name.toLowerCase());
+    assert.ok(!headerNames.some((name) => name.startsWith("x-stainless-")));
+    for (const name of inferenceOnlyHeaders) assert.ok(!headerNames.includes(name), name);
+  }
 });
 
 test("provider model fetch identity changes when system proxy routing changes", () => {
