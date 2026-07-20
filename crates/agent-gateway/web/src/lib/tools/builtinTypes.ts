@@ -244,6 +244,8 @@ export type EditResultDetails = {
   fileId?: string;
   replacements: number;
   replaceAll: boolean;
+  /** Matching pass that located old_string: exact | line-endings | trailing-whitespace | indentation. */
+  matchStrategy?: string;
   expectedReplacements?: number;
   mtimeMs: number;
   contentHash: string;
