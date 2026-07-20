@@ -1140,6 +1140,67 @@ function insertNodeAtCursor(root: HTMLElement, node: HTMLElement) {
   }
 }
 
+/** Measure the caret rect without corrupting the selection.
+ *
+ *  Range.getClientRects() covers most caret positions but is empty at line
+ *  boundaries (e.g. right after a Shift+Enter line break). The old fallback
+ *  used Range.insertNode() at the caret, which splits the underlying text
+ *  node; the caret then ended up inside the degenerate empty text node left
+ *  by the split, and WebKit stops painting a caret there entirely — the
+ *  cursor visibly vanished after every Shift+Enter. Instead, insert the
+ *  probe at the nearest node boundary (never splitting text nodes) and put
+ *  the selection back exactly where it was afterwards. */
+function measureComposerCaretRect(range: Range): DOMRect | null {
+  const rects = range.getClientRects();
+  if (rects.length > 0) {
+    return rects[0];
+  }
+
+  const { startContainer, startOffset } = range;
+  let parent: Node | null;
+  let before: Node | null;
+  if (startContainer.nodeType === Node.TEXT_NODE) {
+    const textNode = startContainer as Text;
+    parent = textNode.parentNode;
+    if (startOffset <= 0) {
+      before = textNode;
+    } else if (startOffset >= textNode.length) {
+      before = textNode.nextSibling;
+    } else {
+      // Mid-text carets always produce client rects; never risk a split.
+      return null;
+    }
+  } else {
+    parent = startContainer;
+    before = startContainer.childNodes[startOffset] ?? null;
+  }
+  if (!parent) {
+    return null;
+  }
+
+  const marker = document.createElement("span");
+  marker.textContent = "\u200B";
+  marker.style.display = "inline-block";
+  marker.style.width = "0";
+  marker.style.height = "1em";
+  marker.style.overflow = "hidden";
+  parent.insertBefore(marker, before);
+  const markerRect = marker.getBoundingClientRect();
+  marker.remove();
+
+  // Even a non-splitting insert/remove can drop or shift a WebKit selection;
+  // restore the caret to the exact position that was measured.
+  const sel = window.getSelection();
+  if (sel) {
+    try {
+      sel.collapse(startContainer, startOffset);
+    } catch {
+      // The container vanished mid-frame; leave the selection untouched.
+    }
+  }
+  return markerRect;
+}
+
 function scrollSelectionIntoComposerView(root: HTMLElement) {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) {
@@ -1152,29 +1213,21 @@ function scrollSelectionIntoComposerView(root: HTMLElement) {
     return;
   }
 
-  const marker = document.createElement("span");
-  marker.textContent = "\u200B";
-  marker.style.display = "inline-block";
-  marker.style.width = "0";
-  marker.style.height = "1em";
-  marker.style.overflow = "hidden";
+  const caretRect = measureComposerCaretRect(range);
+  if (!caretRect) {
+    return;
+  }
 
-  const markerRange = range.cloneRange();
-  markerRange.insertNode(marker);
-
-  const markerRect = marker.getBoundingClientRect();
   const rootRect = root.getBoundingClientRect();
   const margin = 4;
-  const bottomOverflow = markerRect.bottom - (rootRect.bottom - margin);
-  const topOverflow = rootRect.top + margin - markerRect.top;
+  const bottomOverflow = caretRect.bottom - (rootRect.bottom - margin);
+  const topOverflow = rootRect.top + margin - caretRect.top;
 
   if (bottomOverflow > 0) {
     root.scrollTop += bottomOverflow;
   } else if (topOverflow > 0) {
     root.scrollTop -= topOverflow;
   }
-
-  marker.remove();
 }
 
 function scheduleComposerSelectionScroll(root: HTMLElement | null) {

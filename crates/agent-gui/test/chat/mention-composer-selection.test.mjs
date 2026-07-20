@@ -62,3 +62,27 @@ test("right-dock context menus preserve composer selection on both frontends", (
     }
   }
 });
+
+test("composer caret measurement never splits text nodes and restores the selection", () => {
+  const bodies = sourceRoots.map((root) =>
+    extractFunction(source(root, "chat/MentionComposer.tsx"), "measureComposerCaretRect"),
+  );
+  // Both frontends must keep the hardened implementation byte-identical.
+  assert.equal(bodies[0], bodies[1]);
+  const body = bodies[0];
+  // Range.insertNode() splits the text node under a line-boundary caret; the
+  // caret then lands inside the degenerate empty text node left by the split
+  // and WebKit stops painting it — the cursor vanished after Shift+Enter.
+  // The probe must be inserted at a node boundary instead, and the selection
+  // must be restored to the measured position afterwards.
+  assert.doesNotMatch(body, /insertNode\(/);
+  assert.match(body, /parent\.insertBefore\(marker, before\)/);
+  assert.match(body, /sel\.collapse\(startContainer, startOffset\)/);
+
+  const scrollBodies = sourceRoots.map((root) =>
+    extractFunction(source(root, "chat/MentionComposer.tsx"), "scrollSelectionIntoComposerView"),
+  );
+  assert.equal(scrollBodies[0], scrollBodies[1]);
+  assert.match(scrollBodies[0], /measureComposerCaretRect\(range\)/);
+  assert.doesNotMatch(scrollBodies[0], /cloneRange\(\)/);
+});
