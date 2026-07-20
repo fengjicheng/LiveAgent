@@ -124,7 +124,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.runtime.reasoning": "思考程度",
     "chat.emptyRound": "（无回复）",
     "chat.inputHint": "输入消息，@ 引用文件，提示词可队列发送...",
-    "chat.inputHintWithSkills": "输入消息，@ 引用文件，$ 引用Skills，提示词可队列发送...",
+    "chat.inputHintWithSkills": "输入消息，@ 引用文件，/ 引用Skills，提示词可队列发送...",
     "chat.compactingContext": "正在压缩上下文",
     "chat.compactingContextWait": "正在压缩上下文，请稍候...",
     "chat.editMessage": "编辑消息",
@@ -1972,7 +1972,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.emptyRound": "(No reply)",
     "chat.inputHint": "Type a message, @ to reference files, prompts can be queued...",
     "chat.inputHintWithSkills":
-      "Type a message, @ to reference files, $ to reference Skills, prompts can be queued...",
+      "Type a message, @ to reference files, / to reference Skills, prompts can be queued...",
     "chat.compactingContext": "Compressing context",
     "chat.compactingContextWait": "Compressing context, please wait...",
     "chat.editMessage": "Edit Message",

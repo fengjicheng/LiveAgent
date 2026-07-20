@@ -107,7 +107,7 @@ type MentionSuggestion =
   | { type: "file"; entry: MentionFileEntry }
   | { type: "skill"; skill: MentionComposerSkill };
 
-/** Where the @/$ trigger lives inside a text node */
+/** Where the @ or / trigger lives inside a text node */
 interface MentionContext {
   trigger: "file" | "skill";
   query: string;
@@ -242,7 +242,7 @@ const GITHUB_ICON_SVG =
 /* ------------------------------------------------------------------ */
 
 function formatSkillMentionToken(skill: Pick<MentionComposerSkillMention, "name">) {
-  return `$${skill.name}`;
+  return `/${skill.name}`;
 }
 
 function formatCommitMentionToken(
@@ -848,7 +848,7 @@ function selectionTextPosition(root: HTMLElement): { textNode: Text; offset: num
   return null;
 }
 
-/** Detect an in-progress @file or $skill mention at the cursor position. */
+/** Detect an in-progress @file or /skill mention at the cursor position. */
 function detectMention(root: HTMLElement, skillsEnabled: boolean): MentionContext | null {
   const position = selectionTextPosition(root);
   if (!position) return null;
@@ -865,7 +865,9 @@ function detectMention(root: HTMLElement, skillsEnabled: boolean): MentionContex
       trigger = "file";
       break;
     }
-    if (before[i] === "$" && skillsEnabled) {
+    // "/" only triggers a skill mention at a word boundary; slashes inside an
+    // @file query (e.g. "@docs/foo") must keep scanning back toward the "@".
+    if (before[i] === "/" && skillsEnabled && (i === 0 || isMentionBoundaryChar(before[i - 1]))) {
       triggerIdx = i;
       trigger = "skill";
       break;
@@ -873,6 +875,11 @@ function detectMention(root: HTMLElement, skillsEnabled: boolean): MentionContex
     if (isMentionBoundaryChar(before[i])) break;
   }
   if (triggerIdx < 0 || !trigger) return null;
+
+  // Typing a filesystem path ("/usr/bin") reaches a second "/", which can
+  // never appear in a skill name — drop the skill context instead of keeping
+  // an unmatchable popup query around.
+  if (trigger === "skill" && before.slice(triggerIdx + 1).includes("/")) return null;
 
   // Trigger must be preceded by whitespace or be the very first character.
   if (triggerIdx > 0) {
