@@ -52,8 +52,12 @@ export const AssistantBubble = memo(function AssistantBubble(props: {
     }
     return null;
   }, [rounds]);
-  // 回复末尾的已编辑文件卡：聚合整条回复所有 round 的 Write/Edit/Delete。
-  const changedFiles = useMemo(() => collectChangedFiles(rounds), [rounds]);
+  // 回复末尾的已编辑文件卡：聚合整条回复所有 round 的 Write/Edit/Delete，
+  // 只在回复结束（行落定）后出现，流式过程中不渲染。
+  const changedFiles = useMemo(
+    () => (isLive ? null : collectChangedFiles(rounds)),
+    [isLive, rounds],
+  );
 
   return (
     <div className="flex w-full max-w-full items-start gap-3">

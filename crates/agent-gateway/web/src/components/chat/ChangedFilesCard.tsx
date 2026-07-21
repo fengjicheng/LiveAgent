@@ -1,14 +1,16 @@
 // Reply-footer changed-files card: lists every file the assistant reply
 // wrote/edited/deleted with per-file +N/-N stats, and wires the three
 // file-reference actions (open editor / reveal in file tree / view diff).
-// Actions arrive through context so transcript row props stay memo-stable;
-// without a provider (shared read-only views) the card renders as plain data.
-import { createContext, memo, useContext, useMemo, useState } from "react";
+// Rendered only after the reply settles (never mid-stream). Actions arrive
+// through context so transcript row props stay memo-stable; without a
+// provider (shared read-only views) the card renders as plain data.
+import { createContext, memo, useContext, useMemo } from "react";
 import { useLocale } from "../../i18n";
 import type { ChangedFileEntry, ChangedFilesSummary } from "../../lib/chat/changedFiles";
 import { cn } from "../../lib/shared/utils";
-import { ChevronRight, FilePenLine, FolderTree, GitCommitHorizontal, Trash2 } from "../icons";
+import { FilePenLine, FolderTree, GitCommitHorizontal } from "../icons";
 import { FileChangeBadge } from "./FileChangeBadge";
+import { getFileTypeIcon } from "./fileTypeIcons";
 
 export type ChangedFilesActions = {
   onOpenFile?: (path: string) => void;
@@ -40,7 +42,7 @@ const ChangedFileRow = memo(function ChangedFileRow({ file }: { file: ChangedFil
   const actions = useChangedFilesActions();
   const { dir, base } = splitPath(file.path);
   const canOpen = Boolean(actions?.onOpenFile) && !file.deleted;
-  const RowIcon = file.deleted ? Trash2 : FilePenLine;
+  const FileTypeIcon = getFileTypeIcon(file.path, "file");
 
   const pathLabel = (
     <span className="flex min-w-0 flex-1 items-baseline font-mono text-[calc(11.5px*var(--zone-font-scale,1))] leading-[1.6]">
@@ -58,11 +60,8 @@ const ChangedFileRow = memo(function ChangedFileRow({ file }: { file: ChangedFil
 
   return (
     <div className="group/changed-file flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-foreground/[0.04]">
-      <RowIcon
-        className={cn(
-          "h-3.5 w-3.5 shrink-0",
-          file.deleted ? "text-muted-foreground/60" : "text-foreground/60",
-        )}
+      <FileTypeIcon
+        className={cn("h-3.5 w-3.5 shrink-0", file.deleted && "opacity-50 saturate-0")}
       />
       {canOpen ? (
         <button
@@ -116,7 +115,6 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
 }) {
   const { t } = useLocale();
   const actions = useChangedFilesActions();
-  const [collapsed, setCollapsed] = useState(false);
   const title = useMemo(() => {
     const key =
       summary.files.length === 1 ? "chat.changedFiles.titleOne" : "chat.changedFiles.title";
@@ -125,42 +123,33 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
 
   return (
     <div className="changed-files-card overflow-hidden rounded-xl border border-border/45 bg-background/60 backdrop-blur-sm dark:border-white/[0.07] dark:bg-white/[0.03]">
-      <div className="flex items-center gap-1.5 px-2 py-1.5">
-        <button
-          type="button"
-          onClick={() => setCollapsed((current) => !current)}
-          title={collapsed ? t("chat.changedFiles.expand") : t("chat.changedFiles.collapse")}
-          aria-expanded={!collapsed}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left focus-visible:outline-none"
-        >
-          <ChevronRight
-            className={cn(
-              "h-3.5 w-3.5 shrink-0 text-muted-foreground/70 transition-transform",
-              !collapsed && "rotate-90",
-            )}
-          />
-          <span className="truncate text-[calc(12px*var(--zone-font-scale,1))] font-medium text-foreground/85">
+      <div className="flex items-center gap-2.5 px-2.5 py-2">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/45 bg-background/75 text-foreground/70 shadow-[0_1px_0_rgba(255,255,255,0.5)_inset] dark:border-white/[0.08] dark:bg-white/[0.05] dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
+          <FilePenLine className="h-4 w-4" />
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="truncate text-[calc(12px*var(--zone-font-scale,1))] font-medium leading-tight text-foreground/85">
             {title}
           </span>
           <FileChangeBadge added={summary.totalAdded} removed={summary.totalRemoved} />
-        </button>
+        </div>
         {actions?.onOpenDiff ? (
           <button
             type="button"
             onClick={() => actions.onOpenDiff?.(null)}
-            className="shrink-0 rounded-lg border border-border/50 bg-background/70 px-2.5 py-1 text-[calc(11px*var(--zone-font-scale,1))] font-medium leading-none text-foreground/80 transition-colors hover:bg-foreground/[0.06] hover:text-foreground focus-visible:outline-none"
+            className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[calc(11px*var(--zone-font-scale,1))] font-medium leading-none text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground focus-visible:bg-foreground/[0.06] focus-visible:outline-none"
           >
+            <GitCommitHorizontal className="h-3.5 w-3.5" />
             {t("chat.changedFiles.review")}
           </button>
         ) : null}
       </div>
-      {collapsed ? null : (
-        <div className="flex flex-col gap-0.5 border-t border-border/35 px-1 py-1 dark:border-white/[0.05]">
-          {summary.files.map((file) => (
-            <ChangedFileRow key={file.lastToolCallId || file.path} file={file} />
-          ))}
-        </div>
-      )}
+      {/* 鏈€澶氶湶鍑?5 琛岋紝鏇村鏂囦欢璧板唴閮ㄦ粴鍔ㄦ潯銆?*/}
+      <div className="flex max-h-[calc(150px*var(--zone-font-scale,1))] flex-col gap-0.5 overflow-y-auto border-t border-border/35 px-1 py-1 dark:border-white/[0.05]">
+        {summary.files.map((file) => (
+          <ChangedFileRow key={file.lastToolCallId || file.path} file={file} />
+        ))}
+      </div>
     </div>
   );
 });

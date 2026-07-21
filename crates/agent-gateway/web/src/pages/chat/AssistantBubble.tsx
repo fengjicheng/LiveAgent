@@ -59,11 +59,11 @@ export const AssistantBubble = memo(function AssistantBubble(props: {
     }
     return null;
   }, [rounds]);
-  // 回复末尾的已编辑文件卡：聚合整条回复所有 round 的 Write/Edit/Delete。
-  // 脱敏视图（分享页隐藏工具内容）不渲染文件清单。
+  // 回复末尾的已编辑文件卡：聚合整条回复所有 round 的 Write/Edit/Delete，
+  // 只在回复结束（流停止）后出现；脱敏视图（分享页隐藏工具内容）不渲染。
   const changedFiles = useMemo(
-    () => (redactToolContent ? null : collectChangedFiles(rounds)),
-    [redactToolContent, rounds],
+    () => (isStreaming || redactToolContent ? null : collectChangedFiles(rounds)),
+    [isStreaming, redactToolContent, rounds],
   );
 
   return (
