@@ -96,9 +96,9 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "settings.groupGeneral",
     items: [
       { id: "system", icon: <Settings2 className="h-3.5 w-3.5" /> },
-      { id: "shortcuts", icon: <Keyboard className="h-3.5 w-3.5" /> },
       { id: "providers", icon: <Cpu className="h-3.5 w-3.5" /> },
       { id: "agents", icon: <BookOpen className="h-3.5 w-3.5" /> },
+      { id: "shortcuts", icon: <Keyboard className="h-3.5 w-3.5" /> },
     ],
   },
   {
