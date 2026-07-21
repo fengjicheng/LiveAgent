@@ -66,11 +66,15 @@ function ToolCallItem({
     isTodo && Boolean(result && !result.isError) && todoItems.length > 0 && !hasIncompleteTodo;
   const isAskUser = !isRedactedToolContent && item.toolCall.name === ASK_USER_QUESTION_TOOL_NAME;
   const askDetails = isAskUser ? parseAskUserQuestionResultDetails(result?.details) : null;
-  const askQuestions = isAskUser
-    ? askDetails && askDetails.questions.length > 0
-      ? askDetails.questions
-      : sanitizeAskUserQuestionItems(item.toolCall.arguments?.questions)
-    : [];
+  // 参数生成完毕（桌面端仅在 onToolCall 后才发 tool_call 事件）才渲染卡片；
+  // 对历史/降级数据再以 isRunning/result 兜底，绝不展示半截问题。
+  const askSettled = isAskUser && (Boolean(isRunning) || Boolean(result));
+  const askQuestions =
+    isAskUser && askSettled
+      ? askDetails && askDetails.questions.length > 0
+        ? askDetails.questions
+        : sanitizeAskUserQuestionItems(item.toolCall.arguments?.questions)
+      : [];
   // 提问卡运行期强制展开等待作答；应答落定后自动收起（同 Todo 完成收起）。
   const shouldKeepAskOpen = !readOnly && isAskUser && (Boolean(isRunning) || !result);
   const shouldCloseAnsweredAsk = isAskUser && Boolean(result);
