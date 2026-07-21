@@ -4759,6 +4759,33 @@ export function ChatPage(props: ChatPageProps) {
     });
   }, [activeWorkspaceProjectPath, isAgentMode, openController]);
 
+  // 全局快捷键「新建对话」：Rust 端呼出窗口后发事件，这里开新会话。
+  const handleNewConversationRef = useRef(handleNewConversation);
+  handleNewConversationRef.current = handleNewConversation;
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    listen("global-shortcut:new-chat", () => {
+      handleNewConversationRef.current();
+    })
+      .then((nextUnlisten) => {
+        if (cancelled) {
+          nextUnlisten();
+          return;
+        }
+        unlisten = nextUnlisten;
+      })
+      .catch(() => {
+        // 非 Tauri 环境忽略。
+      });
+    return () => {
+      cancelled = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
+
   const handleSelectConversation = useCallback(
     (id: string) => {
       const targetConversationId = id.trim();

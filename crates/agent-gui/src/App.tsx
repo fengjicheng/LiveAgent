@@ -30,6 +30,7 @@ import {
   buildGatewaySettingsSyncPayload,
   type GatewaySettingsSyncPayload,
 } from "./lib/settings/sync";
+import { applyStoredGlobalShortcuts } from "./lib/shortcuts/globalShortcuts";
 import { ChatPage } from "./pages/ChatPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import type { SectionId } from "./pages/settings/types";
@@ -176,6 +177,11 @@ export default function App() {
       // Ignore non-Tauri and older desktop shells.
     });
   }, [settingsReady, settings.closeWindowBehavior]);
+
+  // 启动时恢复本机保存的全局快捷键（桌面端专属，非 Tauri 环境内部自动忽略）。
+  useEffect(() => {
+    void applyStoredGlobalShortcuts().catch(() => {});
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -324,6 +330,37 @@ export default function App() {
 
   const closeSettings = useCallback(() => {
     setOverlay("leaving");
+  }, []);
+
+  // 全局快捷键「新建对话」触发时，若设置覆盖层开着则先收起，露出对话页。
+  const closeSettingsRef = useRef(closeSettings);
+  closeSettingsRef.current = closeSettings;
+  const settingsOpenRef = useRef(settingsOpen);
+  settingsOpenRef.current = settingsOpen;
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    listen("global-shortcut:new-chat", () => {
+      if (settingsOpenRef.current) {
+        closeSettingsRef.current();
+      }
+    })
+      .then((nextUnlisten) => {
+        if (cancelled) {
+          nextUnlisten();
+          return;
+        }
+        unlisten = nextUnlisten;
+      })
+      .catch(() => {
+        // 非 Tauri 环境忽略。
+      });
+    return () => {
+      cancelled = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
   }, []);
 
   const handleTransitionEnd = useCallback(() => {

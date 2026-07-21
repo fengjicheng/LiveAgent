@@ -1,7 +1,8 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, State};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 use crate::runtime::terminal::TerminalSessionRegistry;
 
@@ -9,6 +10,86 @@ pub type CloseWindowBehaviorState = AtomicU8;
 
 pub const CLOSE_WINDOW_BEHAVIOR_MINIMIZE: u8 = 0;
 pub const CLOSE_WINDOW_BEHAVIOR_EXIT: u8 = 1;
+
+/// 已注册全局快捷键 -> 动作 的映射，供插件回调反查动作。
+#[derive(Default)]
+pub struct GlobalShortcutRegistry {
+    entries: Mutex<Vec<(Shortcut, String)>>,
+}
+
+/// 主窗口置顶状态（快捷键切换用；独立 newtype 避免与其他 AtomicBool 状态类型冲突）。
+#[derive(Default)]
+pub struct WindowPinState(pub AtomicBool);
+
+impl GlobalShortcutRegistry {
+    pub fn lookup_action(&self, shortcut: &Shortcut) -> Option<String> {
+        let entries = self.entries.lock().ok()?;
+        entries
+            .iter()
+            .find(|(registered, _)| registered == shortcut)
+            .map(|(_, action)| action.clone())
+    }
+
+    fn replace(&self, next: Vec<(Shortcut, String)>) {
+        if let Ok(mut entries) = self.entries.lock() {
+            *entries = next;
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalShortcutBinding {
+    pub action: String,
+    pub accelerator: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalShortcutFailure {
+    pub action: String,
+    pub accelerator: String,
+    pub error: String,
+}
+
+#[tauri::command]
+pub fn app_set_global_shortcuts(
+    app: AppHandle,
+    bindings: Vec<GlobalShortcutBinding>,
+    registry: State<'_, Arc<GlobalShortcutRegistry>>,
+) -> Result<Vec<GlobalShortcutFailure>, String> {
+    let manager = app.global_shortcut();
+    manager
+        .unregister_all()
+        .map_err(|error| format!("failed to unregister global shortcuts: {error}"))?;
+
+    let mut entries: Vec<(Shortcut, String)> = Vec::new();
+    let mut failures: Vec<GlobalShortcutFailure> = Vec::new();
+    for binding in bindings {
+        let action = binding.action.trim().to_string();
+        let accelerator = binding.accelerator.trim().to_string();
+        if action.is_empty() || accelerator.is_empty() {
+            continue;
+        }
+        match accelerator.parse::<Shortcut>() {
+            Ok(shortcut) => match manager.register(shortcut) {
+                Ok(()) => entries.push((shortcut, action)),
+                Err(error) => failures.push(GlobalShortcutFailure {
+                    action,
+                    accelerator,
+                    error: error.to_string(),
+                }),
+            },
+            Err(error) => failures.push(GlobalShortcutFailure {
+                action,
+                accelerator,
+                error: error.to_string(),
+            }),
+        }
+    }
+    registry.replace(entries);
+    Ok(failures)
+}
 
 pub fn parse_close_window_behavior(value: &str) -> u8 {
     if value.trim().eq_ignore_ascii_case("exit") {

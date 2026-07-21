@@ -131,6 +131,7 @@ macro_rules! app_invoke_handler {
             commands::update::app_restart,
             commands::app::app_runtime_platform,
             commands::app::app_set_close_window_behavior,
+            commands::app::app_set_global_shortcuts,
             commands::app::app_confirmed_exit,
             commands::app::app_macos_traffic_light_metrics,
             // Hooks
@@ -269,6 +270,67 @@ fn show_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     }
 
     Ok(())
+}
+
+fn toggle_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let visible = window.is_visible().unwrap_or(false);
+        let focused = window.is_focused().unwrap_or(false);
+        if visible && focused {
+            let _ = window.hide();
+        } else if let Err(error) = show_main_window(app) {
+            eprintln!("failed to show LiveAgent window from global shortcut: {error}");
+        }
+    }
+}
+
+fn toggle_main_window_pin(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let pin_state = app.state::<Arc<commands::app::WindowPinState>>();
+        let next = !pin_state.0.load(Ordering::SeqCst);
+        match window.set_always_on_top(next) {
+            Ok(()) => {
+                pin_state.0.store(next, Ordering::SeqCst);
+                if next {
+                    if let Err(error) = show_main_window(app) {
+                        eprintln!("failed to show LiveAgent window when pinning: {error}");
+                    }
+                }
+                let _ = app.emit("global-shortcut:pin-changed", next);
+            }
+            Err(error) => eprintln!("failed to toggle LiveAgent window pin: {error}"),
+        }
+    }
+}
+
+fn handle_global_shortcut(
+    app: &tauri::AppHandle,
+    shortcut: &tauri_plugin_global_shortcut::Shortcut,
+) {
+    let action = app
+        .state::<Arc<commands::app::GlobalShortcutRegistry>>()
+        .lookup_action(shortcut);
+    let Some(action) = action else {
+        return;
+    };
+    match action.as_str() {
+        "summon" => {
+            if let Err(error) = show_main_window(app) {
+                eprintln!("failed to show LiveAgent window from global shortcut: {error}");
+            }
+        }
+        "toggle" => toggle_main_window(app),
+        "newChat" => {
+            if let Err(error) = show_main_window(app) {
+                eprintln!("failed to show LiveAgent window from global shortcut: {error}");
+            }
+            if let Err(error) = app.emit("global-shortcut:new-chat", ()) {
+                eprintln!("failed to emit new-chat global shortcut event: {error}");
+            }
+        }
+        "pin" => toggle_main_window_pin(app),
+        _ => {}
+    }
 }
 
 fn request_app_exit(
@@ -424,6 +486,17 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_mcp_bridge::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        handle_global_shortcut(app, shortcut);
+                    }
+                })
+                .build(),
+        )
+        .manage(Arc::new(commands::app::GlobalShortcutRegistry::default()))
+        .manage(Arc::new(commands::app::WindowPinState::default()))
         .manage(Arc::new(commands::mcp::McpRuntimeManager::default()))
         .manage(Arc::clone(&memory_store))
         .manage(Arc::clone(&power_activity))
