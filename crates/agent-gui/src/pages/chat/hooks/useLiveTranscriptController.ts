@@ -373,7 +373,10 @@ export function useLiveTranscriptController(params: UseLiveTranscriptControllerP
   );
 
   const updateRetryAttempts = useCallback(
-    (retryAttempts: RetryAttemptRecord[], targetStore: LiveTranscriptStore = liveTranscriptStore) => {
+    (
+      retryAttempts: RetryAttemptRecord[],
+      targetStore: LiveTranscriptStore = liveTranscriptStore,
+    ) => {
       const artifacts = resolveLiveTranscriptArtifacts(targetStore);
       if (!artifacts) {
         targetStore.setRetryAttempts(retryAttempts);
