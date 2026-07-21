@@ -226,9 +226,6 @@ export const ChatHeader = memo(function ChatHeader(props: {
                           </label>
                         </div>
                       </div>
-                      <div className="px-1 pt-1 text-[10.5px] text-muted-foreground/70">
-                        {t("chat.executionModeHint")}
-                      </div>
                     </div>
                   );
                 })()}

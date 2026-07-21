@@ -43,3 +43,13 @@ test("popover interactions preserve mode changes and close after model selection
     assert.match(source, /onSelectModel\(parsed\);\s+setIsModelPickerOpen\(false\);/);
   }
 });
+
+test("model pickers search models and providers", () => {
+  for (const source of headerSources) {
+    assert.match(source, /initialFocus=\{searchInputRef\}/);
+    assert.match(source, /placeholder=\{t\("chat\.searchModel"\)\}/);
+    assert.match(source, /\w+\.model\.toLowerCase\(\)\.includes\(normalizedSearch\)/);
+    assert.match(source, /\w+\.providerName\.toLowerCase\(\)\.includes\(normalizedSearch\)/);
+    assert.match(source, /t\("chat\.noModelFound"\)/);
+  }
+});

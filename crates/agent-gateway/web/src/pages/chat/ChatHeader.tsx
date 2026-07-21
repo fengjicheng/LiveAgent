@@ -1,5 +1,5 @@
 import { Popover } from "@base-ui/react";
-import { memo, type ReactNode, useEffect, useId, useMemo, useState } from "react";
+import { memo, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
@@ -9,6 +9,7 @@ import {
   Moon,
   OpenaiChatgptIcon,
   PanelLeft,
+  Search,
   Settings,
   Sun,
 } from "../../components/icons";
@@ -83,20 +84,25 @@ export const ChatHeader = memo(function ChatHeader(props: {
         ? t("tooltip.switchToDark")
         : t("tooltip.switchToAuto");
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
+  const [modelSearch, setModelSearch] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const executionModeRadioName = useId();
 
   useEffect(() => {
     if (isModelPickerOpen) {
+      setModelSearch("");
       setExpandedGroups({});
     }
   }, [isModelPickerOpen]);
 
+  const normalizedSearch = modelSearch.trim().toLowerCase();
   const groups = useMemo(() => groupModelOptionsByProvider(modelOptions), [modelOptions]);
   const selectedOption = modelOptions.find((option) => option.value === selectedValue);
   const selectedGroupId = selectedOption?.providerId;
-  // 默认全部折叠，仅当前选中模型所在分组展开
-  const isGroupExpanded = (id: string) => expandedGroups[id] ?? id === selectedGroupId;
+  // 默认全部折叠，仅当前选中模型所在分组展开；搜索时强制展开所有匹配分组
+  const isGroupExpanded = (id: string) =>
+    normalizedSearch.length > 0 || (expandedGroups[id] ?? id === selectedGroupId);
   const toggleGroup = (id: string) =>
     setExpandedGroups((prev) => ({
       ...prev,
@@ -153,6 +159,7 @@ export const ChatHeader = memo(function ChatHeader(props: {
               className="z-50"
             >
               <Popover.Popup
+                initialFocus={searchInputRef}
                 aria-label={t("chat.selectModel")}
                 className="model-selector-dropdown w-[min(18rem,calc(100vw-1rem))] overflow-hidden rounded-xl border bg-popover p-0 text-xs text-popover-foreground shadow-md outline-none"
               >
@@ -208,16 +215,47 @@ export const ChatHeader = memo(function ChatHeader(props: {
                           </label>
                         </div>
                       </div>
-                      <div className="px-1 pt-1 text-[10.5px] text-muted-foreground/70">
-                        {t("chat.executionModeHint")}
-                      </div>
                     </div>
                   );
                 })()}
-                <div className="max-h-[min(24rem,var(--available-height,24rem))] overflow-y-auto overscroll-contain px-1 pb-1 [scrollbar-gutter:stable]">
+                <div className="px-2 py-1.5">
+                  <div className="flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/40 px-2 py-1">
+                    <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+                    <input
+                      ref={searchInputRef}
+                      value={modelSearch}
+                      onChange={(event) => setModelSearch(event.target.value)}
+                      placeholder={t("chat.searchModel")}
+                      className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground/60"
+                      onKeyDown={(event) => event.stopPropagation()}
+                    />
+                  </div>
+                </div>
+                <div className="max-h-[min(20rem,var(--available-height,20rem))] overflow-y-auto overscroll-contain px-1 pb-1 [scrollbar-gutter:stable]">
                   {(() => {
                     let animationIndex = 0;
-                    return groups.map((group, groupIndex) => {
+                    const filteredGroups = normalizedSearch
+                      ? groups
+                          .map((group) => ({
+                            ...group,
+                            opts: group.opts.filter(
+                              (option) =>
+                                option.model.toLowerCase().includes(normalizedSearch) ||
+                                option.providerName.toLowerCase().includes(normalizedSearch),
+                            ),
+                          }))
+                          .filter((group) => group.opts.length > 0)
+                      : groups;
+
+                    if (filteredGroups.length === 0) {
+                      return (
+                        <div className="px-2 py-6 text-center text-xs text-muted-foreground">
+                          {t("chat.noModelFound")}
+                        </div>
+                      );
+                    }
+
+                    return filteredGroups.map((group, groupIndex) => {
                       const expanded = isGroupExpanded(group.id);
                       return (
                         <div key={group.id} className="flex flex-col gap-0.5">
