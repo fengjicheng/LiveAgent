@@ -391,19 +391,23 @@ fn detect_uploaded_bytes_kind(
 }
 
 fn sanitize_uploaded_file_name(input: &str) -> String {
+    // 文件名只需是安全的单段路径组件：保留中文等非 ASCII 字符，仅替换
+    // 路径分隔符、Windows 保留符号与控制字符。曾经的 ASCII 白名单会把
+    // 全中文文件名磨成纯扩展名（"报告.pdf" → "pdf"）。
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
-            out.push(ch);
-        } else {
+        if ch.is_control() || matches!(ch, '/' | '\\' | '<' | '>' | ':' | '"' | '|' | '?' | '*') {
             out.push('_');
+        } else {
+            out.push(ch);
         }
     }
-    let trimmed = out.trim_matches('_').trim_matches('.').to_string();
+    // 结尾空格/点在 Windows 上非法，隐藏文件前缀点一并修剪。
+    let trimmed = out.trim_matches(|ch: char| ch == '.' || ch.is_whitespace());
     let candidate = if trimmed.is_empty() {
         "file".to_string()
     } else {
-        trimmed
+        trimmed.to_string()
     };
     avoid_windows_reserved_file_name(candidate)
 }
@@ -1435,14 +1439,27 @@ mod tests {
 
     #[test]
     fn sanitize_uploaded_file_name_avoids_windows_reserved_names() {
-        assert_eq!(
-            sanitize_uploaded_file_name("safe name.txt"),
-            "safe_name.txt"
-        );
+        assert_eq!(sanitize_uploaded_file_name("safe name.txt"), "safe name.txt");
         assert_eq!(sanitize_uploaded_file_name("CON.txt"), "CON_file.txt");
         assert_eq!(sanitize_uploaded_file_name("aux"), "aux_file");
         assert_eq!(sanitize_uploaded_file_name("LPT9.log"), "LPT9_file.log");
         assert_eq!(sanitize_uploaded_file_name("COM0.log"), "COM0.log");
+    }
+
+    #[test]
+    fn sanitize_uploaded_file_name_preserves_unicode_names() {
+        assert_eq!(sanitize_uploaded_file_name("报告.pdf"), "报告.pdf");
+        assert_eq!(
+            sanitize_uploaded_file_name("第三季度 财务:报表.xlsx"),
+            "第三季度 财务_报表.xlsx"
+        );
+        assert_eq!(sanitize_uploaded_file_name("русский файл.txt"), "русский файл.txt");
+        assert_eq!(sanitize_uploaded_file_name("面试题（最终版）.docx"), "面试题（最终版）.docx");
+        // 路径分隔符与遍历序列被压成单段组件；控制字符被替换。
+        assert_eq!(sanitize_uploaded_file_name("../../秘密.txt"), "_.._秘密.txt");
+        assert_eq!(sanitize_uploaded_file_name("恶意\u{7}响铃.txt"), "恶意_响铃.txt");
+        // 全部非法字符时回退到占位名。
+        assert_eq!(sanitize_uploaded_file_name("..."), "file");
     }
 
     #[test]
@@ -1692,6 +1709,45 @@ mod tests {
             let _ = fs::remove_dir_all(parent);
         }
         let _ = fs::remove_dir_all(&workdir);
+    }
+
+    #[test]
+    fn import_uploaded_readable_files_preserves_unicode_file_names() {
+        let temp = tempdir().expect("create temp dir");
+        let workdir = temp.path().join("workspace");
+        fs::create_dir_all(&workdir).expect("create workdir");
+
+        let response = system_import_uploaded_readable_files_sync(
+            workdir.to_string_lossy().into_owned(),
+            vec![SystemReadableFileUploadInput {
+                file_name: "季度报告.txt".to_string(),
+                mime_type: Some("text/plain".to_string()),
+                content: "你好".as_bytes().to_vec(),
+            }],
+        )
+        .expect("import unicode-named upload");
+
+        assert!(
+            response.skipped.is_empty(),
+            "skipped = {:?}",
+            response.skipped
+        );
+        assert_eq!(response.files.len(), 1);
+        assert_eq!(response.files[0].file_name, "季度报告.txt");
+        assert!(
+            response.files[0].relative_path.ends_with("/季度报告.txt"),
+            "relative_path = {}",
+            response.files[0].relative_path
+        );
+        assert!(
+            response.files[0].absolute_path.ends_with("季度报告.txt"),
+            "absolute_path = {}",
+            response.files[0].absolute_path
+        );
+
+        if let Some(parent) = Path::new(&response.files[0].absolute_path).parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
     }
 
     #[test]

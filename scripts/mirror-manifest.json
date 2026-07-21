@@ -30,6 +30,7 @@
     "components/project-tools/file-tree/Row.tsx",
     "components/project-tools/file-tree/ContextMenu.tsx",
     "components/chat/promptHistory.ts",
+    "components/chat/NotifyToast.tsx",
     "components/Markdown.tsx",
     "lib/normalizeLatexDelimiters.ts",
     "lib/providers/customHeaders.ts",

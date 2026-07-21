@@ -15,10 +15,17 @@ const READABLE_FILE_KINDS = new Set([
   "archive",
 ]);
 
-async function readFetchError(response: Response, fallback: string) {
-  const raw = (await response.text()).trim();
+// Exported for tests. Gateway errors are JSON with an error/message field;
+// anything else (a reverse proxy's HTML error page, a truncated body) must
+// not leak into the UI verbatim — map it to a friendly message instead.
+export async function readFetchError(response: Response, fallback: string) {
+  const fallbackWithStatus = `${fallback}（HTTP ${response.status}）`;
+  if (response.status === 413) {
+    return "文件过大，服务器拒绝接收（HTTP 413）。请压缩文件后重试，或调大反向代理的请求体大小限制。";
+  }
+  const raw = (await response.text().catch(() => "")).trim();
   if (!raw) {
-    return fallback;
+    return fallbackWithStatus;
   }
 
   try {
@@ -29,8 +36,11 @@ async function readFetchError(response: Response, fallback: string) {
         : typeof payload.message === "string"
           ? payload.message.trim()
           : "";
-    return errorText || raw;
+    return errorText || fallbackWithStatus;
   } catch {
+    if (raw.startsWith("<") || raw.length > 300) {
+      return fallbackWithStatus;
+    }
     return raw;
   }
 }

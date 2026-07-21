@@ -13,6 +13,7 @@ import type {
   MentionComposerDraft,
   MentionComposerHandle,
 } from "@/components/chat/MentionComposer";
+import { type NotifyItem, NotifyToast } from "@/components/chat/NotifyToast";
 import { SharedHistoryManagerModal } from "@/components/chat/SharedHistoryManagerModal";
 import { ChevronDown, PanelRightClose, PanelRightOpen, Terminal } from "@/components/icons";
 import type {
@@ -238,6 +239,17 @@ export default function GatewayApp() {
     ReadonlyMap<string, SelectedModel>
   >(new Map());
   const [chatError, setChatError] = useState<string | null>(null);
+  // Top-right toast stack for upload/attachment feedback — mirrors the GUI's
+  // NotifyToast usage so upload failures never render as conversation output.
+  const [notifyItems, setNotifyItems] = useState<NotifyItem[]>([]);
+  const notifyIdCounter = useRef(0);
+  const addNotify = useCallback((type: NotifyItem["type"], message: string) => {
+    const id = `notify-${++notifyIdCounter.current}`;
+    setNotifyItems((prev) => [...prev, { id, type, message }]);
+  }, []);
+  const dismissNotify = useCallback((id: string) => {
+    setNotifyItems((prev) => prev.filter((item) => item.id !== id));
+  }, []);
   // Sidebar errors raised outside the sidebar store (project removal flow).
   const [sidebarActionError, setSidebarActionError] = useState<string | null>(null);
   const [queuedChatTurns, setQueuedChatTurns] = useState<ChatQueueItemSummary[]>([]);
@@ -543,7 +555,7 @@ export default function GatewayApp() {
     selectedHistoryId,
     displayedConversationWorkdirRef,
     composerRef,
-    setChatError,
+    addNotify,
   });
 
   const applyChatQueueSnapshot = useCallback((snapshot: ChatQueueSnapshot | null | undefined) => {
@@ -4191,6 +4203,11 @@ export default function GatewayApp() {
                       </>
                     }
                   />
+                  {/* Zero-height anchor: NotifyToast positions itself below
+                      the header's bottom edge, mirroring the GUI placement. */}
+                  <div className="relative z-50">
+                    <NotifyToast items={notifyItems} onDismiss={dismissNotify} />
+                  </div>
 
                   {statusError ? <div className="gateway-banner-error">{statusError}</div> : null}
                   {settingsSyncError ? (
@@ -4339,7 +4356,7 @@ export default function GatewayApp() {
                               text = materialized.text;
                               files = materialized.uploadedFiles;
                             } catch (error) {
-                              setChatError(asErrorMessage(error, "大段粘贴内容导入失败"));
+                              addNotify("error", asErrorMessage(error, "大段粘贴内容导入失败"));
                               return;
                             }
 
