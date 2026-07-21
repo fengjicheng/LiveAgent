@@ -238,7 +238,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.tool.todoTitle": "任务清单",
     "chat.tool.todoEmpty": "暂无任务",
     "chat.tool.askUserTitle": "向你提问",
-    "chat.askUser.preparing": "正在准备提问",
+    "chat.askUser.preparing": "正在准备问题",
     "chat.askUser.waiting": "等待你的选择",
     "chat.askUser.tabFallback": "问题",
     "chat.askUser.recommended": "推荐",
