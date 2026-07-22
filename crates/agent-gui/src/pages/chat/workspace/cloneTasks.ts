@@ -88,6 +88,15 @@ export async function cancelWorkspaceCloneTask(taskId: string) {
 export function dismissWorkspaceCloneTask(taskId: string) {
   dismissedTaskIds.add(taskId);
   replaceTasks(tasks.filter((task) => task.id !== taskId));
+  // 服务端同步移除终态任务，否则重新挂载后快照会让卡片重现。
+  void invoke<WorkspaceCloneTask[]>("git_clone_repository_dismiss", { task_id: taskId })
+    .then((nextTasks) => {
+      dismissedTaskIds.delete(taskId);
+      replaceTasks(nextTasks);
+    })
+    .catch(() => {
+      // 本地 dismissedTaskIds 已隐藏该卡片；服务端移除失败留待下次快照。
+    });
 }
 
 function subscribe(listener: () => void) {

@@ -376,6 +376,24 @@ impl GitCloneTaskRegistry {
             .ok_or_else(|| "找不到克隆任务。".to_string())
     }
 
+    /// 终态任务的唯一清理路径：用户关闭任务卡时从注册表移除，
+    /// 否则刷新/重连后快照会让已关闭的卡片重现。运行中的任务拒绝移除。
+    pub fn dismiss(&self, id: String) -> Result<(), String> {
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|_| "克隆任务注册表不可用。".to_string())?;
+        let id = id.trim();
+        let Some(entry) = tasks.get(id) else {
+            return Ok(());
+        };
+        if entry.task.status == "running" || entry.task.status == "cancelling" {
+            return Err("克隆任务仍在进行，无法移除。".to_string());
+        }
+        tasks.remove(id);
+        Ok(())
+    }
+
     fn run(
         self: Arc<Self>,
         id: String,
@@ -457,20 +475,25 @@ impl GitCloneTaskRegistry {
     }
 
     fn apply_output(&self, id: &str, chunk: &str) {
-        let detail = chunk.trim().to_string();
-        if detail.is_empty() {
-            return;
+        // 读取线程按 \r 切块，但 git 的非进度输出（Cloning into/remote: 等）
+        // 以 \n 结尾，会与下一条进度行合并进同一 chunk——逐行处理防止
+        // detail 混入多行文本。
+        for line in chunk.split(['\r', '\n']) {
+            let detail = line.trim();
+            if detail.is_empty() {
+                continue;
+            }
+            self.update(id, |task| {
+                if task.status != "running" {
+                    return;
+                }
+                task.detail = detail.to_string();
+                if let Some((phase, progress)) = parse_git_clone_progress(detail) {
+                    task.phase = phase.to_string();
+                    task.progress = Some(progress);
+                }
+            });
         }
-        self.update(id, |task| {
-            if task.status != "running" {
-                return;
-            }
-            task.detail = detail.clone();
-            if let Some((phase, progress)) = parse_git_clone_progress(&detail) {
-                task.phase = phase.to_string();
-                task.progress = Some(progress);
-            }
-        });
     }
 
     fn fail(&self, id: &str, error: String, target: &Path) {
@@ -525,15 +548,16 @@ fn parse_git_clone_progress(line: &str) -> Option<(&'static str, u8)> {
             .trim()
             .parse::<u8>()
             .ok()
+            .map(|percent| percent.min(100) as u16)
     };
     if let Some(percent) = parse_percent("Receiving objects:") {
-        return Some(("receiving", 5 + percent.saturating_mul(80) / 100));
+        return Some(("receiving", (5 + percent * 80 / 100) as u8));
     }
     if let Some(percent) = parse_percent("Resolving deltas:") {
-        return Some(("resolving", 85 + percent.saturating_mul(15) / 100));
+        return Some(("resolving", (85 + percent * 15 / 100) as u8));
     }
     if let Some(percent) = parse_percent("Checking out files:") {
-        return Some(("finalizing", 95 + percent.saturating_mul(5) / 100));
+        return Some(("finalizing", (95 + percent * 5 / 100) as u8));
     }
     if line.starts_with("remote:") || line.starts_with("Cloning into") {
         return Some(("preparing", 5));
@@ -3088,6 +3112,11 @@ pub(crate) fn git_gateway_clone_task_action_sync(
             .map_err(|error| format!("序列化 Git 响应失败：{error}")),
         "clone_cancel" => serde_json::to_value(registry.cancel(args.task_id.unwrap_or_default())?)
             .map_err(|error| format!("序列化 Git 响应失败：{error}")),
+        "clone_dismiss" => {
+            registry.dismiss(args.task_id.unwrap_or_default())?;
+            serde_json::to_value(registry.snapshot()?)
+                .map_err(|error| format!("序列化 Git 响应失败：{error}"))
+        }
         _ => git_gateway_action_sync(action, workdir, args_json),
     }
 }
@@ -3194,6 +3223,15 @@ pub fn git_clone_repository_cancel(
     task_id: String,
 ) -> Result<GitCloneTask, String> {
     registry.cancel(task_id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn git_clone_repository_dismiss(
+    registry: tauri::State<'_, Arc<GitCloneTaskRegistry>>,
+    task_id: String,
+) -> Result<Vec<GitCloneTask>, String> {
+    registry.dismiss(task_id)?;
+    registry.snapshot()
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -3689,8 +3727,12 @@ mod tests {
             },
         );
 
-        let cancelled = registry.cancel(task.id).expect("cancel clone task");
+        let cancelled = registry.cancel(task.id.clone()).expect("cancel clone task");
         assert_eq!(cancelled.status, "cancelling");
+        assert!(
+            registry.dismiss(task.id).is_err(),
+            "in-flight clone task must refuse dismissal"
+        );
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
             if child.try_wait().expect("read clone process").is_some() {
@@ -3796,6 +3838,53 @@ mod tests {
             .expect("task snapshot")
             .iter()
             .any(|task| task["id"] == task_id));
+        let dismissed = git_gateway_clone_task_action_sync(
+            "clone_dismiss".to_string(),
+            String::new(),
+            json!({ "taskId": task_id }).to_string(),
+            &registry,
+        )
+        .expect("dismiss gateway clone task");
+        assert!(
+            dismissed.as_array().expect("dismissed snapshot").is_empty(),
+            "dismissed task must leave the registry"
+        );
+    }
+
+    #[test]
+    fn parses_git_clone_progress_lines() {
+        assert_eq!(
+            parse_git_clone_progress("Cloning into '.'..."),
+            Some(("preparing", 5))
+        );
+        assert_eq!(
+            parse_git_clone_progress("remote: Enumerating objects: 1553, done."),
+            Some(("preparing", 5))
+        );
+        assert_eq!(
+            parse_git_clone_progress("Receiving objects:   0% (1/1553)"),
+            Some(("receiving", 5))
+        );
+        assert_eq!(
+            parse_git_clone_progress("Receiving objects:  50% (777/1553), 10.20 MiB | 5.00 MiB/s"),
+            Some(("receiving", 45))
+        );
+        assert_eq!(
+            parse_git_clone_progress("Receiving objects: 100% (1553/1553), done."),
+            Some(("receiving", 85))
+        );
+        assert_eq!(
+            parse_git_clone_progress("Resolving deltas: 100% (900/900), done."),
+            Some(("resolving", 100))
+        );
+        assert_eq!(
+            parse_git_clone_progress("Checking out files:  40% (200/500)"),
+            Some(("finalizing", 97))
+        );
+        assert_eq!(
+            parse_git_clone_progress("fatal: repository not found"),
+            None
+        );
     }
 
     #[test]

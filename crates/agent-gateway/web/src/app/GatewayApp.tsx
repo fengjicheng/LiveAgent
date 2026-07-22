@@ -1205,7 +1205,7 @@ export default function GatewayApp() {
       void refreshWorkspaceCloneTasks().catch(() => {
         // Keep the last task snapshot visible while transport reconnects.
       });
-    }, 250);
+    }, 750);
     return () => window.clearInterval(timer);
   }, [hasActiveWorkspaceCloneTask, refreshWorkspaceCloneTasks]);
 
@@ -1226,10 +1226,26 @@ export default function GatewayApp() {
     [api],
   );
 
-  const handleDismissWorkspaceCloneTask = useCallback((taskId: string) => {
-    dismissedWorkspaceCloneTaskIds.current.add(taskId);
-    setWorkspaceCloneTasks((tasks) => tasks.filter((task) => task.id !== taskId));
-  }, []);
+  const handleDismissWorkspaceCloneTask = useCallback(
+    (taskId: string) => {
+      dismissedWorkspaceCloneTaskIds.current.add(taskId);
+      setWorkspaceCloneTasks((tasks) => tasks.filter((task) => task.id !== taskId));
+      if (!api) return;
+      // 服务端同步移除终态任务，否则刷新页面后快照会让卡片重现。
+      void api
+        .gitRequest<WorkspaceCloneTask[]>("clone_dismiss", "", { taskId })
+        .then((tasks) => {
+          dismissedWorkspaceCloneTaskIds.current.delete(taskId);
+          setWorkspaceCloneTasks(
+            tasks.filter((task) => !dismissedWorkspaceCloneTaskIds.current.has(task.id)),
+          );
+        })
+        .catch(() => {
+          // 本地 dismissed 集合已隐藏该卡片；服务端移除失败留待下次快照。
+        });
+    },
+    [api],
+  );
 
   const handleOpenClonedWorkspace = useCallback(
     (path: string) => {
