@@ -10,11 +10,15 @@ use serde_json::Value;
 use tempfile::NamedTempFile;
 use wait_timeout::ChildExt;
 
+use crate::commands::system::validate_project_folder_name;
 use crate::runtime::process::{configure_child_process_group, kill_child_process_tree_best_effort};
 
 const GIT_DIFF_MAX_BYTES: usize = 512 * 1024;
 const GIT_UNTRACKED_FILE_MAX_BYTES: u64 = 128 * 1024;
 const GIT_COMMAND_TIMEOUT_SECS: u64 = 60;
+// Cloning a large repository easily outlives the default 60s command budget;
+// give clone its own, much larger allowance.
+const GIT_CLONE_TIMEOUT_SECS: u64 = 15 * 60;
 const GIT_TRANSIENT_RETRY_ATTEMPTS: usize = 3;
 const GIT_TRANSIENT_RETRY_DELAY_MS: u64 = 160;
 const GIT_LOG_DEFAULT_LIMIT: usize = 50;
@@ -96,6 +100,13 @@ pub struct GitBranch {
 pub struct GitBranchesResponse {
     pub state: GitRepositoryState,
     pub branches: Vec<GitBranch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRemoteBranchesResponse {
+    pub default_branch: String,
+    pub branches: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,6 +210,7 @@ struct GitGatewayArgs {
     start_point: Option<String>,
     limit: Option<usize>,
     skip: Option<usize>,
+    name: Option<String>,
     user_name: Option<String>,
     user_email: Option<String>,
     force: Option<bool>,
@@ -227,6 +239,14 @@ fn read_temp_file(file: &mut NamedTempFile, label: &str) -> Result<Vec<u8>, Stri
 }
 
 fn git_output(workdir: &str, args: &[&str]) -> Result<Output, String> {
+    git_output_with_timeout(workdir, args, Duration::from_secs(GIT_COMMAND_TIMEOUT_SECS))
+}
+
+fn git_output_with_timeout(
+    workdir: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<Output, String> {
     let mut stdout_file =
         NamedTempFile::new().map_err(|error| format!("创建 git stdout 缓存失败：{error}"))?;
     let mut stderr_file =
@@ -252,14 +272,14 @@ fn git_output(workdir: &str, args: &[&str]) -> Result<Output, String> {
         .stderr(Stdio::from(stderr_target))
         .spawn()
         .map_err(|error| format!("git 执行失败：{error}"))?;
-    let timeout = Duration::from_secs(GIT_COMMAND_TIMEOUT_SECS);
     let Some(status) = child
         .wait_timeout(timeout)
         .map_err(|error| format!("等待 git 命令失败：{error}"))?
     else {
         kill_child_process_tree_best_effort(&mut child);
         return Err(format!(
-            "git 命令超时（{GIT_COMMAND_TIMEOUT_SECS} 秒）：git {}",
+            "git 命令超时（{} 秒）：git {}",
+            timeout.as_secs(),
             args.join(" ")
         ));
     };
@@ -271,9 +291,17 @@ fn git_output(workdir: &str, args: &[&str]) -> Result<Output, String> {
 }
 
 fn git_success(workdir: &str, args: &[&str]) -> Result<GitOutput, String> {
+    git_success_with_timeout(workdir, args, Duration::from_secs(GIT_COMMAND_TIMEOUT_SECS))
+}
+
+fn git_success_with_timeout(
+    workdir: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<GitOutput, String> {
     let mut last_error = String::new();
     for attempt in 0..GIT_TRANSIENT_RETRY_ATTEMPTS {
-        let output = git_output(workdir, args)?;
+        let output = git_output_with_timeout(workdir, args, timeout)?;
         let stdout = trim_output(&output.stdout);
         let stderr = trim_output(&output.stderr);
         if output.status.success() {
@@ -909,6 +937,114 @@ fn validate_git_init_workdir(workdir: &str) -> Result<String, String> {
     Ok(workdir.to_string())
 }
 
+fn validate_git_clone_parent(parent: &str) -> Result<PathBuf, String> {
+    let parent = parent.trim();
+    if parent.is_empty() {
+        return Err("克隆目标的父目录不能为空。".to_string());
+    }
+    let parent_path = PathBuf::from(parent);
+    if !parent_path.is_absolute() {
+        return Err(format!("克隆目标的父目录必须是绝对路径：{parent}"));
+    }
+    let metadata = fs::metadata(&parent_path)
+        .map_err(|error| format!("克隆目标的父目录不可访问：{error}"))?;
+    if !metadata.is_dir() {
+        return Err("克隆目标的父目录必须是文件夹。".to_string());
+    }
+    fs::canonicalize(&parent_path).map_err(|error| format!("无法解析克隆目标的父目录：{error}"))
+}
+
+pub(crate) fn git_clone_repository_sync(
+    parent: String,
+    name: String,
+    remote_url: String,
+    branch: Option<String>,
+) -> Result<GitOperationResponse, String> {
+    let parent = validate_git_clone_parent(&parent)?;
+    let name = validate_project_folder_name(&name)?;
+    let remote_url = validate_git_remote_url(&remote_url)?;
+    let branch = validate_git_config_value("分支名", branch)?;
+    let target = parent.join(name);
+
+    match fs::create_dir(&target) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(format!("克隆目标已存在：{}", target.display()));
+        }
+        Err(error) => return Err(format!("创建克隆目标失败：{error}")),
+    }
+
+    let target_workdir = target.to_string_lossy().into_owned();
+    let mut clone_args = vec!["clone"];
+    if let Some(branch) = branch.as_deref() {
+        clone_args.extend(["--branch", branch]);
+    }
+    clone_args.extend(["--", remote_url.as_str(), "."]);
+    let clone_output = match git_success_with_timeout(
+        &target_workdir,
+        &clone_args,
+        Duration::from_secs(GIT_CLONE_TIMEOUT_SECS),
+    ) {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&target);
+            return Err(error);
+        }
+    };
+    let state = git_status_sync(target_workdir)?;
+    Ok(GitOperationResponse {
+        ok: true,
+        state,
+        stdout: clone_output.stdout,
+        stderr: clone_output.stderr,
+        message: "仓库已克隆。".to_string(),
+    })
+}
+
+pub(crate) fn git_list_remote_branches_sync(
+    remote_url: String,
+) -> Result<GitRemoteBranchesResponse, String> {
+    let remote_url = validate_git_remote_url(&remote_url)?;
+    // Run ls-remote from a private temp dir so whatever repository happens to
+    // contain the process cwd can't leak its configuration into the lookup.
+    let scratch = tempfile::tempdir().map_err(|error| format!("创建临时目录失败：{error}"))?;
+    let cwd = scratch.path().to_string_lossy().into_owned();
+    let heads = git_success(&cwd, &["ls-remote", "--heads", "--", remote_url.as_str()])?;
+    let mut branches = heads
+        .stdout
+        .lines()
+        .filter_map(|line| {
+            line.split_once("refs/heads/")
+                .map(|(_, branch)| branch.trim())
+        })
+        .filter(|branch| !branch.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    branches.sort();
+    branches.dedup();
+
+    let default_branch = git_success(
+        &cwd,
+        &["ls-remote", "--symref", "--", remote_url.as_str(), "HEAD"],
+    )
+    .ok()
+    .and_then(|output| {
+        output.stdout.lines().find_map(|line| {
+            line.strip_prefix("ref: refs/heads/").and_then(|line| {
+                line.split_once('\t')
+                    .map(|(branch, _)| branch.trim().to_string())
+            })
+        })
+    })
+    .filter(|branch| branches.iter().any(|candidate| candidate == branch));
+
+    Ok(GitRemoteBranchesResponse {
+        default_branch: default_branch
+            .unwrap_or_else(|| branches.first().cloned().unwrap_or_default()),
+        branches,
+    })
+}
+
 fn validate_git_config_value(label: &str, value: Option<String>) -> Result<Option<String>, String> {
     let Some(value) = value else {
         return Ok(None);
@@ -931,7 +1067,22 @@ fn validate_git_remote_url(value: &str) -> Result<String, String> {
     if value.chars().any(|ch| matches!(ch, '\0' | '\n' | '\r')) {
         return Err("远端仓库地址不能包含换行或空字符。".to_string());
     }
+    if is_git_remote_helper_url(value) {
+        return Err("不支持 remote helper 形式的远端地址（如 ext::）。".to_string());
+    }
     Ok(value.to_string())
+}
+
+/// Mirrors git's transport-helper detection (transport.c): when the URL's
+/// leading scheme characters are followed by `::`, git invokes
+/// `git-remote-<scheme>` — and `ext::` runs an arbitrary command, so the
+/// whole helper syntax must be rejected up front.
+fn is_git_remote_helper_url(value: &str) -> bool {
+    let scheme_len = value
+        .chars()
+        .take_while(|&ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
+        .count();
+    value[scheme_len..].starts_with("::")
 }
 
 fn git_remote_names(repo_root: &str) -> Result<Vec<String>, String> {
@@ -2515,6 +2666,15 @@ pub(crate) fn git_gateway_action_sync(
             args.user_name,
             args.user_email,
         )?),
+        "clone" => serde_json::to_value(git_clone_repository_sync(
+            workdir,
+            args.name.unwrap_or_default(),
+            args.remote_url.unwrap_or_default(),
+            args.branch,
+        )?),
+        "list_remote_branches" => serde_json::to_value(git_list_remote_branches_sync(
+            args.remote_url.unwrap_or_default(),
+        )?),
         "switch_branch" => serde_json::to_value(git_switch_branch_sync(
             workdir,
             args.branch.unwrap_or_default(),
@@ -2651,6 +2811,29 @@ pub async fn git_init(
     })
     .await
     .map_err(|error| format!("git_init join 失败：{error}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn git_clone_repository(
+    parent: String,
+    name: String,
+    remote_url: String,
+    branch: Option<String>,
+) -> Result<GitOperationResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_clone_repository_sync(parent, name, remote_url, branch)
+    })
+    .await
+    .map_err(|error| format!("git_clone_repository join 失败：{error}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn git_list_remote_branches(
+    remote_url: String,
+) -> Result<GitRemoteBranchesResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || git_list_remote_branches_sync(remote_url))
+        .await
+        .map_err(|error| format!("git_list_remote_branches join 失败：{error}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -3104,6 +3287,104 @@ mod tests {
         let duplicate = git_init_sync(workdir, "main".to_string(), None, None)
             .expect_err("second init should fail");
         assert!(duplicate.contains("Git 仓库内"), "{duplicate}");
+    }
+
+    #[test]
+    fn clones_repository_into_a_fresh_workspace() {
+        let Some(source) = init_temp_repo() else {
+            return;
+        };
+        run_temp_git(source.path(), &["checkout", "-b", "release"]);
+        fs::write(source.path().join("RELEASE.md"), "release\n").expect("write release file");
+        run_temp_git(source.path(), &["add", "RELEASE.md"]);
+        run_temp_git(source.path(), &["commit", "-m", "release"]);
+        let parent = tempfile::tempdir().expect("clone parent");
+        let response = git_clone_repository_sync(
+            parent.path().to_string_lossy().into_owned(),
+            "cloned-project".to_string(),
+            source.path().to_string_lossy().into_owned(),
+            Some("release".to_string()),
+        )
+        .expect("clone repository");
+
+        assert!(response.ok, "clone failed: {}", response.message);
+        assert_eq!(response.state.status, "ready");
+        assert_eq!(response.state.head, "release");
+        assert_eq!(response.state.remote_name, "origin");
+        assert!(parent.path().join("cloned-project/RELEASE.md").is_file());
+
+        let gateway_parent = tempfile::tempdir().expect("gateway clone parent");
+        let gateway_response: GitOperationResponse = serde_json::from_value(
+            git_gateway_action_sync(
+                "clone".to_string(),
+                gateway_parent.path().to_string_lossy().into_owned(),
+                serde_json::json!({
+                    "name": "gateway-project",
+                    "remoteUrl": source.path(),
+                    "branch": "release",
+                })
+                .to_string(),
+            )
+            .expect("gateway clone repository"),
+        )
+        .expect("decode gateway clone response");
+        assert_eq!(gateway_response.state.head, "release");
+        assert!(gateway_parent
+            .path()
+            .join("gateway-project/RELEASE.md")
+            .is_file());
+        assert!(git_clone_repository_sync(
+            parent.path().to_string_lossy().into_owned(),
+            "cloned-project".to_string(),
+            source.path().to_string_lossy().into_owned(),
+            None,
+        )
+        .expect_err("existing clone target must be rejected")
+        .contains("克隆目标已存在"));
+    }
+
+    #[test]
+    fn lists_remote_branches_and_default_branch() {
+        let Some(source) = init_temp_repo() else {
+            return;
+        };
+        run_temp_git(source.path(), &["checkout", "-b", "release"]);
+
+        let response = git_list_remote_branches_sync(source.path().to_string_lossy().into_owned())
+            .expect("list remote branches");
+
+        assert!(response.branches.iter().any(|branch| branch == "release"));
+        assert!(response
+            .branches
+            .iter()
+            .any(|branch| branch == &response.default_branch));
+    }
+
+    #[test]
+    fn rejects_remote_helper_transport_urls() {
+        let error = validate_git_remote_url("ext::sh -c 'touch /tmp/pwned'")
+            .expect_err("ext:: transport must be rejected");
+        assert!(error.contains("ext::"), "{error}");
+        assert!(validate_git_remote_url("hg::https://example.com/repo").is_err());
+        assert!(validate_git_remote_url("::example.com/repo").is_err());
+
+        assert!(validate_git_remote_url("https://example.com/owner/repo.git").is_ok());
+        assert!(validate_git_remote_url("git@github.com:owner/repo.git").is_ok());
+        assert!(validate_git_remote_url("ssh://[2001:db8::1]/repo.git").is_ok());
+        assert!(validate_git_remote_url("/tmp/local/repo").is_ok());
+
+        let parent = tempfile::tempdir().expect("clone parent");
+        let clone_error = git_clone_repository_sync(
+            parent.path().to_string_lossy().into_owned(),
+            "pwned".to_string(),
+            "ext::sh -c 'touch /tmp/pwned'".to_string(),
+            None,
+        )
+        .expect_err("clone must reject ext:: transport");
+        assert!(clone_error.contains("ext::"), "{clone_error}");
+        assert!(
+            git_list_remote_branches_sync("ext::sh -c 'touch /tmp/pwned'".to_string()).is_err()
+        );
     }
 
     #[test]
