@@ -400,7 +400,7 @@ export async function runTextConversationTurn(params: RunTextConversationTurnPar
   }));
   hookLifecycle.ensureMessageEnded();
   hookLifecycle.endAgent();
-  void persistConversationWithHistorySync({
+  await persistConversationWithHistorySync({
     conversationId,
     sessionId,
     providerId,
@@ -415,7 +415,7 @@ export async function runTextConversationTurn(params: RunTextConversationTurnPar
     type: "done",
     conversation_id: conversationId,
   });
-  gatewayBridgeEvents.close();
+  await gatewayBridgeEvents.close();
   if (shouldRunMemoryExtraction) {
     const currentMemoryExtractionModel: MemoryExtractionModelConfig = {
       providerId,

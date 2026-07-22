@@ -46,6 +46,9 @@ export type Turn = {
   // carrying assistant content adopts wholesale (enrichTurnFromHistory)
   // instead of the usual payload-only upgrade.
   contentStale?: boolean;
+  // Error entry appended for a falsifiable liveness verdict. A same-run
+  // resurrection removes this exact entry before streaming resumes.
+  inferredLossErrorEntryId?: string;
 };
 
 export type TranscriptRowOrigin = "history" | "stream";
@@ -111,6 +114,9 @@ export type TranscriptSnapshot = {
   // Live run's stream-retry history (cleared at run boundaries and whenever
   // the desktop starts a fresh network attempt).
   retryAttempts: readonly RetryAttemptRecord[];
+  // At least one settled streamed turn may be incomplete and should keep
+  // retrying the quiet history enrich while the conversation is idle.
+  needsHistoryRefresh: boolean;
   // Bumped whenever turns fold into the virtualized region.
   foldRevision: number;
   revision: number;

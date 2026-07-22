@@ -8,7 +8,7 @@ use super::{
     GatewayChatRuntimeSnapshot, GatewayController, GatewayStatusSnapshot, RemoteChatInboxRecord,
     GATEWAY_CHAT_LEASE_MS, GATEWAY_CHAT_RUNNING_LEASE_MS, GATEWAY_RECONNECT_MAX,
     GATEWAY_RECONNECT_MIN, GATEWAY_RECONNECT_STABLE_AFTER,
-    GATEWAY_RUNTIME_STATUS_REPUBLISH_MAX_AGE,
+    GATEWAY_RUNTIME_STATUS_REPUBLISH_MAX_AGE, GATEWAY_WEBVIEW_REPORT_FRESH_WINDOW,
 };
 use crate::commands::settings::RemoteSettingsPayload;
 use serde_json::{json, Value};
@@ -908,5 +908,42 @@ fn runtime_status_republish_payload_expires_after_max_age() {
     assert_eq!(
         GatewayController::runtime_status_republish_payload(None, now),
         None
+    );
+}
+
+#[test]
+fn stalled_webview_status_refreshes_running_ledger_only_inside_grace_window() {
+    let now = Instant::now();
+    let record =
+        GatewayController::next_runtime_status_republish_record("worker-1", "busy", false, 1, now)
+            .expect("busy record");
+
+    assert!(
+        !GatewayController::webview_status_report_stalled_but_alive_at(
+            Some(&record),
+            now + GATEWAY_WEBVIEW_REPORT_FRESH_WINDOW,
+        )
+    );
+    assert!(
+        GatewayController::webview_status_report_stalled_but_alive_at(
+            Some(&record),
+            now + GATEWAY_WEBVIEW_REPORT_FRESH_WINDOW + Duration::from_secs(1),
+        )
+    );
+    assert!(
+        !GatewayController::webview_status_report_stalled_but_alive_at(
+            Some(&record),
+            now + GATEWAY_RUNTIME_STATUS_REPUBLISH_MAX_AGE + Duration::from_secs(1),
+        )
+    );
+    assert!(!GatewayController::webview_status_report_stalled_but_alive_at(None, now,));
+    let idle_record =
+        GatewayController::next_runtime_status_republish_record("worker-1", "ready", false, 0, now)
+            .expect("idle record");
+    assert!(
+        !GatewayController::webview_status_report_stalled_but_alive_at(
+            Some(&idle_record),
+            now + GATEWAY_WEBVIEW_REPORT_FRESH_WINDOW + Duration::from_secs(1),
+        )
     );
 }

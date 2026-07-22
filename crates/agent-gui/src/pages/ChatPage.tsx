@@ -432,7 +432,8 @@ export function ChatPage(props: ChatPageProps) {
   } = useLiveTranscriptController({
     currentConversationId,
   });
-  const { queueGatewayBridgeEventForRequest } = useGatewayBridgeBatcher();
+  const { queueGatewayBridgeEventForRequest, flushGatewayBridgeEventsForRequest } =
+    useGatewayBridgeBatcher();
   const {
     currentConversationIdRef,
     conversationRuntimeCacheRef,
@@ -1249,6 +1250,7 @@ export function ChatPage(props: ChatPageProps) {
     updateToolStatus,
     updateRetryAttempts,
     queueGatewayBridgeEventForRequest,
+    flushGatewayBridgeEventsForRequest,
     activeGatewayRuntimeRunsRef,
     queueGatewayRuntimeSnapshot,
     queueGatewayRuntimeSnapshotForRun,

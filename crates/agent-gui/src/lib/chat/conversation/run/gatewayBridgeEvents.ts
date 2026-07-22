@@ -37,6 +37,7 @@ type GatewayBridgeEventControllerParams = {
     event: Record<string, unknown>,
     options?: { workerId?: string },
   ) => GatewayBridgeSendResult;
+  flushEvents?: (requestId: string) => Promise<void>;
   resolveErrorConversationId?: () => string;
 };
 
@@ -56,7 +57,7 @@ export type GatewayBridgeEventController = {
   queueRetryAttempts: (attempts: readonly RetryAttemptRecord[]) => void;
   queueCheckpoint: (state: ConversationViewState) => void;
   emitError: (message: string, conversationIdOverride?: string) => void;
-  close: () => void;
+  close: () => Promise<void>;
   hasForwardedText: () => boolean;
   isClosed: () => boolean;
 };
@@ -66,6 +67,7 @@ export function createGatewayBridgeEventController(
 ): GatewayBridgeEventController {
   let forwardedText = false;
   let streamClosed = false;
+  let closePromise: Promise<void> | null = null;
   let lastToolStatusKey = "";
   let lastToolStatus: string | null = null;
   let lastToolStatusIsCompaction = false;
@@ -197,6 +199,8 @@ export function createGatewayBridgeEventController(
     },
     close() {
       streamClosed = true;
+      closePromise ??= params.flushEvents?.(params.requestId) ?? Promise.resolve();
+      return closePromise;
     },
     hasForwardedText() {
       return forwardedText;

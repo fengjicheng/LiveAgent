@@ -225,6 +225,76 @@ func TestChatEventResurrectsInferredLostRun(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeTerminalCorrectsInferredLostRun(t *testing.T) {
+	tests := []struct {
+		name       string
+		finish     func(*Manager)
+		wantStatus string
+	}{
+		{
+			name: "done event",
+			finish: func(m *Manager) {
+				m.ingestChatEvent("run-1", doneEvent("conv-1"))
+			},
+			wantStatus: "completed",
+		},
+		{
+			name: "error event",
+			finish: func(m *Manager) {
+				m.ingestChatEvent("run-1", &gatewayv1.ChatEvent{
+					Type:           gatewayv1.ChatEvent_ERROR,
+					ConversationId: "conv-1",
+					Data:           `{"message":"provider failed"}`,
+				})
+			},
+			wantStatus: "failed",
+		},
+		{
+			name: "completed control",
+			finish: func(m *Manager) {
+				m.ingestChatControl("run-1", completedControl("run-1", "conv-1"))
+			},
+			wantStatus: "completed",
+		},
+		{
+			name: "terminal snapshot",
+			finish: func(m *Manager) {
+				m.ingestRuntimeSnapshot(&gatewayv1.ChatRuntimeSnapshot{
+					RunId:          "run-1",
+					ConversationId: "conv-1",
+					State:          "completed",
+				})
+			},
+			wantStatus: "completed",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := NewManager()
+			m.ingestChatControl("run-1", startedControl("run-1", "conv-1"))
+			m.convStreams.onRuntimeStatus(runsReport(nil, nil), time.Now().Add(16*time.Second))
+
+			test.finish(m)
+
+			last := lastEvent(t, m, "conv-1")
+			if last.Type != StreamEventRunFinished || last.Payload["status"] != test.wantStatus {
+				t.Fatalf("corrected terminal = %s %#v, want run_finished/%s", last.Type, last.Payload, test.wantStatus)
+			}
+			if last.Payload["error_code"] == "desktop_run_lost" {
+				t.Fatalf("authoritative terminal retained inferred loss: %#v", last.Payload)
+			}
+			record := m.convStreams.runs["run-1"]
+			if record == nil || record.lostInferred || record.revived {
+				t.Fatalf("terminal run flags not settled: %#v", record)
+			}
+			if activities := m.ActiveConversationActivities(); len(activities) != 0 {
+				t.Fatalf("authoritative terminal left activity behind: %#v", activities)
+			}
+		})
+	}
+}
+
 // Stragglers after a genuine terminal stay dropped — resurrection applies only
 // to inferred losses.
 func TestGenuineTerminalStragglersStayDropped(t *testing.T) {

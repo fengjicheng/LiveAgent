@@ -21,6 +21,7 @@ function createController(options = {}) {
       }
       sent.push(item);
     },
+    flushEvents: options.flushEvents,
     resolveErrorConversationId: options.resolveErrorConversationId,
   });
   return { controller, sent };
@@ -221,6 +222,40 @@ test("gateway bridge close blocks normal events but allows forced title updates"
       },
     ],
   );
+});
+
+test("gateway bridge close waits for the transport drain and stays idempotent", async () => {
+  let releaseDrain;
+  let drainCalls = 0;
+  const drain = new Promise((resolve) => {
+    releaseDrain = resolve;
+  });
+  const { controller } = createController({
+    flushEvents: async (requestId) => {
+      drainCalls += 1;
+      assert.equal(requestId, "request-1");
+      await drain;
+    },
+  });
+
+  controller.queueToken("tail");
+  const firstClose = controller.close();
+  const secondClose = controller.close();
+  assert.equal(firstClose, secondClose);
+  assert.equal(controller.isClosed(), true);
+  assert.equal(drainCalls, 1);
+
+  let settled = false;
+  void firstClose.then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  assert.equal(settled, false, "close must remain pending until queued events drain");
+
+  releaseDrain();
+  await firstClose;
+  assert.equal(settled, true);
+  assert.equal(drainCalls, 1);
 });
 
 test("gateway bridge checkpoint emits compaction summary payload", () => {

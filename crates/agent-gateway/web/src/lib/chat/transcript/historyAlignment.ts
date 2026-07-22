@@ -102,7 +102,12 @@ function enrichTurnFromHistory(turn: Turn, historyTurn: HistoryTurn): Turn {
     historyTurn.entries.length > 0 &&
     next.phase === "settled"
   ) {
-    return { ...next, entries: historyTurn.entries, contentStale: false };
+    return {
+      ...next,
+      entries: historyTurn.entries,
+      contentStale: false,
+      inferredLossErrorEntryId: undefined,
+    };
   }
 
   const historyToolCalls = historyTurn.entries.filter(

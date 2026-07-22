@@ -171,13 +171,13 @@ export function useGatewayRuntimeSnapshots(params: UseGatewayRuntimeSnapshotsPar
   ) {
     const targetConversationId = conversationId.trim();
     if (!targetConversationId) {
-      return;
+      return Promise.resolve();
     }
     const run = activeGatewayRuntimeRunsRef.current.get(targetConversationId);
     if (!run) {
-      return;
+      return Promise.resolve();
     }
-    void queueGatewayRuntimeSnapshotForRun(run, { state, force: true }).finally(() => {
+    return queueGatewayRuntimeSnapshotForRun(run, { state, force: true }).finally(() => {
       if (activeGatewayRuntimeRunsRef.current.get(targetConversationId) === run) {
         activeGatewayRuntimeRunsRef.current.delete(targetConversationId);
       }

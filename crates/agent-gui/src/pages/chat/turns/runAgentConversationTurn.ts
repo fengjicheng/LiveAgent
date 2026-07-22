@@ -1136,7 +1136,7 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
     ...prev,
     state: completedState,
   }));
-  void persistConversationWithHistorySync({
+  await persistConversationWithHistorySync({
     conversationId,
     sessionId,
     providerId,
@@ -1151,7 +1151,7 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
     type: "done",
     conversation_id: conversationId,
   });
-  gatewayBridgeEvents.close();
+  await gatewayBridgeEvents.close();
   if (!showSilentMemoryExtraction && shouldRunMemoryExtraction) {
     void runPostTurnMemoryExtraction();
   }

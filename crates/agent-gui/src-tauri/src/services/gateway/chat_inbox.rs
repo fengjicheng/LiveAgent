@@ -937,15 +937,25 @@ impl GatewayController {
     // nothing about the run. Beyond the max age the webview is treated as gone
     // and the normal TTL judgment resumes, keeping terminal delivery for
     // genuinely lost runs guaranteed.
+    pub(super) fn webview_status_report_stalled_but_alive_at(
+        record: Option<&RuntimeStatusRepublishRecord>,
+        now: Instant,
+    ) -> bool {
+        let Some(record) = record else {
+            return false;
+        };
+        if record.active_run_count == 0 {
+            return false;
+        }
+        let age = now.saturating_duration_since(record.updated_at);
+        age > GATEWAY_WEBVIEW_REPORT_FRESH_WINDOW && age <= GATEWAY_RUNTIME_STATUS_REPUBLISH_MAX_AGE
+    }
+
     fn webview_status_report_stalled_but_alive(&self) -> bool {
         let Ok(slot) = self.runtime_status_republish.lock() else {
             return false;
         };
-        let Some(record) = slot.as_ref() else {
-            return false;
-        };
-        let age = Instant::now().saturating_duration_since(record.updated_at);
-        age > GATEWAY_WEBVIEW_REPORT_FRESH_WINDOW && age <= GATEWAY_RUNTIME_STATUS_REPUBLISH_MAX_AGE
+        Self::webview_status_report_stalled_but_alive_at(slot.as_ref(), Instant::now())
     }
 
     pub(crate) async fn flush_unsent_chat_run_terminals(&self) -> Result<(), String> {

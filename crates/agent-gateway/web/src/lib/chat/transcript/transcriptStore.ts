@@ -95,6 +95,7 @@ const EMPTY_SNAPSHOT: TranscriptSnapshot = {
   toolStatus: null,
   toolStatusIsCompaction: false,
   retryAttempts: EMPTY_RETRY_ATTEMPTS,
+  needsHistoryRefresh: false,
   foldRevision: 0,
   revision: 0,
 };
@@ -347,6 +348,7 @@ export function createTranscriptStore(options?: {
       toolStatus,
       toolStatusIsCompaction,
       retryAttempts,
+      needsHistoryRefresh: turns.some((turn) => turn.contentStale === true),
       foldRevision,
       revision: snapshot.revision + 1,
     };
@@ -571,6 +573,9 @@ export function createTranscriptStore(options?: {
     }
     let next = adoptRun(turn, runId);
     next = rebuildTurnFromSnapshot(next, parsed);
+    if (next.inferredLossErrorEntryId) {
+      next = { ...next, inferredLossErrorEntryId: undefined };
+    }
     if (next.phase !== "streaming" || next.folded) {
       next = { ...next, phase: "streaming", folded: false };
     }
@@ -606,16 +611,42 @@ export function createTranscriptStore(options?: {
       reason?: string;
       error_code?: string;
     };
+    const inferredLoss =
+      payload.status === "failed" && isInferredRunLossErrorCode(payload.error_code);
     let turn = findTurnByRunId(runId) ?? findStreamingTurn();
+    if (turn && !inferredLoss && turn.inferredLossErrorEntryId) {
+      const previousTurn = turn;
+      const correctedTurn = {
+        ...previousTurn,
+        entries: previousTurn.entries.filter(
+          (entry) => entry.id !== previousTurn.inferredLossErrorEntryId,
+        ),
+        inferredLossErrorEntryId: undefined,
+      };
+      replaceTurn(previousTurn, correctedTurn);
+      turn = correctedTurn;
+    }
     if (payload.status === "failed" && payload.message && payload.reason !== "superseded") {
       if (!turn) {
         turn = createTurn({ key: `run:${runId || `finished-${readEventSeq(event)}`}`, runId });
         turns = [...turns, turn];
       }
-      const withError = applyEventToTurn(turn, {
+      const previousEntryIds = new Set(turn.entries.map((entry) => entry.id));
+      let withError = applyEventToTurn(turn, {
         type: "error",
         message: payload.message,
       } as ChatEvent);
+      if (inferredLoss) {
+        const inferredErrorEntry = withError.entries.find(
+          (entry) => !previousEntryIds.has(entry.id),
+        );
+        if (inferredErrorEntry) {
+          withError = {
+            ...withError,
+            inferredLossErrorEntryId: inferredErrorEntry.id,
+          };
+        }
+      }
       replaceTurn(turn, withError);
       turn = withError;
     }
@@ -624,8 +655,6 @@ export function createTranscriptStore(options?: {
     // trusted as the full content: mark it stale so the post-persist history
     // refresh may adopt the real reply (enrichTurnFromHistory). A gateway
     // resurrection rebuilds from the runtime snapshot and clears the mark.
-    const inferredLoss =
-      payload.status === "failed" && isInferredRunLossErrorCode(payload.error_code);
     if (turn && (turn.phase !== "settled" || (inferredLoss && turn.contentStale !== true))) {
       replaceTurn(turn, {
         ...turn,
@@ -717,10 +746,15 @@ export function createTranscriptStore(options?: {
           turns = [...turns, turn];
         }
         const bound = adoptRun(turn, runId);
+        const entries = bound.inferredLossErrorEntryId
+          ? bound.entries.filter((entry) => entry.id !== bound.inferredLossErrorEntryId)
+          : bound.entries;
         replaceTurn(turn, {
           ...bound,
+          entries,
           phase: "streaming",
           folded: false,
+          inferredLossErrorEntryId: undefined,
         });
         activeRun = {
           runId,

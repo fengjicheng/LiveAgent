@@ -205,6 +205,9 @@ import type { ModelProviderSource, OverlayState, SendChatFn, SendChatOptions } f
 import { UserMenu } from "./UserMenu";
 import { WorkspaceOverlayHost } from "./WorkspaceOverlayHost";
 
+const STALE_HISTORY_RETRY_INITIAL_DELAY_MS = 1_000;
+const STALE_HISTORY_RETRY_MAX_DELAY_MS = 30_000;
+
 // Two-phase open: schedule the quiet full hydration at browser idle time,
 // with a hard timeout so it still runs on busy pages (mirrors the GUI helper
 // semantics).
@@ -1662,6 +1665,61 @@ export default function GatewayApp() {
     displayedConversationBusy,
     displayedConversationId,
     refreshDisplayedConversationHistorySnapshot,
+  ]);
+
+  // Inferred liveness failures can settle before the desktop's final history
+  // write. History upserts are intentionally lossy broadcasts under WebSocket
+  // backpressure, so a stale displayed turn cannot rely on that one signal:
+  // keep retrying the quiet enrich at a bounded cadence until history adopts
+  // the authoritative persisted reply or the conversation becomes busy again.
+  useEffect(() => {
+    const conversationIdValue = displayedConversationId.trim();
+    if (
+      !api ||
+      !conversationIdValue ||
+      displayedConversationBusy ||
+      !displayedTranscript.needsHistoryRefresh
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    let timerId: number | null = null;
+    let retryDelayMs = STALE_HISTORY_RETRY_INITIAL_DELAY_MS;
+    const retry = async () => {
+      await refreshDisplayedConversationHistorySnapshot(conversationIdValue, api);
+      if (cancelled) {
+        return;
+      }
+      const stillStale =
+        transcriptStoreRegistry.peek(conversationIdValue)?.getSnapshot().needsHistoryRefresh ===
+        true;
+      if (!stillStale || isConversationBusy(conversationIdValue)) {
+        return;
+      }
+      retryDelayMs = Math.min(retryDelayMs * 2, STALE_HISTORY_RETRY_MAX_DELAY_MS);
+      timerId = window.setTimeout(() => {
+        void retry();
+      }, retryDelayMs);
+    };
+
+    timerId = window.setTimeout(() => {
+      void retry();
+    }, retryDelayMs);
+    return () => {
+      cancelled = true;
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
+    };
+  }, [
+    api,
+    displayedConversationBusy,
+    displayedConversationId,
+    displayedTranscript.needsHistoryRefresh,
+    isConversationBusy,
+    refreshDisplayedConversationHistorySnapshot,
+    transcriptStoreRegistry,
   ]);
 
   // The upsert-while-idle backstop: the desktop reports run completion before

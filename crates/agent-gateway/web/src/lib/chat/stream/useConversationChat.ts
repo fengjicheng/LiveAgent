@@ -72,6 +72,7 @@ const EMPTY_TRANSCRIPT: TranscriptSnapshot = {
   toolStatus: null,
   toolStatusIsCompaction: false,
   retryAttempts: [],
+  needsHistoryRefresh: false,
   foldRevision: 0,
   revision: 0,
 };

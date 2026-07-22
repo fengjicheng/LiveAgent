@@ -175,6 +175,7 @@ test("inferred desktop_run_lost marks the streamed copy stale so enrich adopts t
   );
   store.flush();
   assert.equal(store.getSnapshot().activeRun, null);
+  assert.equal(store.getSnapshot().needsHistoryRefresh, true);
 
   // The run actually kept going on the desktop and persisted the full reply;
   // the truncated streamed copy must not be treated as authoritative.
@@ -189,6 +190,7 @@ test("inferred desktop_run_lost marks the streamed copy stale so enrich adopts t
   const text = allRows(store.getSnapshot()).map(rowText).join("\n");
   assert.match(text, /partial plus the rest of the reply/, "persisted reply adopted");
   assert.doesNotMatch(text, /stopped reporting/, "inferred error entry replaced by real content");
+  assert.equal(store.getSnapshot().needsHistoryRefresh, false);
 });
 
 test("a genuine failure keeps the streamed copy authoritative under enrich", () => {
@@ -237,10 +239,39 @@ test("a resurrected run reopens its truncated turn in place and finishes normall
   const liveText = allRows(live).map(rowText).join("\n");
   assert.match(liveText, /part one/);
   assert.match(liveText, /part two/);
+  assert.doesNotMatch(liveText, /stopped reporting/, "resurrection removes the inferred error");
+  assert.equal(live.needsHistoryRefresh, true, "persisted history still owns final convergence");
 
   store.applyEvent(runFinished("run-1", 7));
   store.flush();
   assert.equal(store.getSnapshot().activeRun, null, "genuine completion settles the revived run");
+});
+
+test("an authoritative terminal replaces an inferred loss without leaving its error", () => {
+  const store = createTranscriptStore();
+  store.applyEvent(userMessage("run-1", 1, "hello"));
+  store.applyEvent(runStarted("run-1", 2));
+  store.applyEvent(token("run-1", 3, "partial"));
+  store.applyEvent(
+    runFinished("run-1", 4, "failed", {
+      error_code: "desktop_run_lost",
+      message: "The desktop runtime stopped reporting this run.",
+    }),
+  );
+  store.flush();
+
+  store.applyEvent(
+    runFinished("run-1", 5, "failed", {
+      error_code: "provider_error",
+      message: "provider failed",
+    }),
+  );
+  store.flush();
+  const snapshot = store.getSnapshot();
+  const text = allRows(snapshot).map(rowText).join("\n");
+  assert.match(text, /provider failed/);
+  assert.doesNotMatch(text, /stopped reporting/);
+  assert.equal(snapshot.needsHistoryRefresh, true, "history still owns final tail convergence");
 });
 
 test("run_queued removes the turn entirely", () => {
