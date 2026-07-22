@@ -430,32 +430,57 @@ async function maybeAttachReadmeFallbackInline(skill: SkillSummary): Promise<Ski
   }
 }
 
+const README_INLINE_ENRICH_CONCURRENCY = 6;
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await fn(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 async function managedSkillListToDiscovery(
   managed: SystemManageSkillResponse,
 ): Promise<SkillDiscovery> {
   const rootDir = normalizeDisplayPath(managed.rootDir ?? "");
-  const skills: SkillSummary[] = [];
+  const rawSkills: SkillSummary[] = [];
   for (const raw of managed.skills ?? []) {
     const name = typeof raw.name === "string" ? raw.name.trim() : "";
     const description = typeof raw.description === "string" ? raw.description.trim() : "";
     const skillFile = typeof raw.skillFile === "string" ? normalizeRelPath(raw.skillFile) : "";
     const baseDir = typeof raw.baseDir === "string" ? normalizeRelPath(raw.baseDir) : "";
     if (!name || !description || !skillFile || !baseDir) continue;
-    skills.push(
-      await maybeAttachReadmeFallbackInline({
-        name,
-        description,
-        skillFile,
-        baseDir,
-        builtIn: raw.builtIn === true,
-        installedAt:
-          typeof raw.installedAt === "number" && Number.isFinite(raw.installedAt)
-            ? raw.installedAt
-            : null,
-        source: normalizeSkillSourceMetadata(raw.source),
-      }),
-    );
+    rawSkills.push({
+      name,
+      description,
+      skillFile,
+      baseDir,
+      builtIn: raw.builtIn === true,
+      installedAt:
+        typeof raw.installedAt === "number" && Number.isFinite(raw.installedAt)
+          ? raw.installedAt
+          : null,
+      source: normalizeSkillSourceMetadata(raw.source),
+    });
   }
+  // README 回退型 skill 的富化各需两次串行往返；数量多时串行等待主导加载耗时，
+  // 这里做有界并发（保序），失败兜底在 maybeAttachReadmeFallbackInline 内部。
+  const skills = await mapWithConcurrency(
+    rawSkills,
+    README_INLINE_ENRICH_CONCURRENCY,
+    maybeAttachReadmeFallbackInline,
+  );
 
   const discovery: SkillDiscovery = {
     rootDir,

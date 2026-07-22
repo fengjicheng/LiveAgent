@@ -1744,6 +1744,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.skillsImportSelectAll": "全部选中",
     "settings.skillsImportDeselectAll": "取消全选",
     "settings.skillsHubScanning": "正在读取固定技能目录并同步会话可用能力",
+    "settings.skillsHubPreparing": "正在准备技能列表",
+    "settings.skillsHubPreparingDesc": "正在后台准备大量技能的展示，完成后将一次性显示",
     "settings.skillsHubDeleteSkill": "删除技能",
     "settings.skillsHubBulkSelect": "批量选择",
     "settings.skillsBulkSelect": "批量选择",
@@ -3735,6 +3737,9 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.skillsImportDeselectAll": "Deselect all",
     "settings.skillsHubScanning":
       "Scanning the fixed Skills directory and syncing available conversation capabilities",
+    "settings.skillsHubPreparing": "Preparing the Skills list",
+    "settings.skillsHubPreparingDesc":
+      "Preparing a large set of Skills in the background; it will appear when ready",
     "settings.skillsHubDeleteSkill": "Delete Skill",
     "settings.skillsHubBulkSelect": "Bulk Select",
     "settings.skillsBulkSelect": "Bulk Select",

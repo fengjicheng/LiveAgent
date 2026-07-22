@@ -583,7 +583,7 @@ fn clawhub_candidate_normalizes_nonportable_name_when_it_matches_slug() {
     )
     .expect("write skill");
 
-    let transform = normalize_clawhub_candidate_name(&candidate, "skillscan")
+    let transform = normalize_clawhub_candidate_name(&candidate, Some("skillscan"))
         .expect("normalize candidate")
         .expect("compatibility transform");
     let metadata = read_skill_metadata_from_dir(&candidate).expect("read normalized metadata");
@@ -597,21 +597,104 @@ fn clawhub_candidate_normalizes_nonportable_name_when_it_matches_slug() {
 }
 
 #[test]
-fn clawhub_candidate_does_not_normalize_name_that_does_not_match_slug() {
+fn clawhub_candidate_prefers_registry_slug_when_name_does_not_match_it() {
+    // Real registry shape: ClawHub keeps slug and display name separate, so
+    // "Self-Improving + Proactive Agent" is published under slug
+    // "self-improving" with no derivation relationship between the two.
     let tmp = TempDir::new("liveagent-clawhub-name-mismatch-test").expect("temp dir");
     let candidate = tmp.path().join("candidate");
     fs::create_dir_all(&candidate).expect("create candidate");
     fs::write(
         candidate.join("SKILL.md"),
-        "---\nname: DifferentName\ndescription: Mismatch\n---\n",
+        "---\nname: Self-Improving + Proactive Agent\nslug: self-improving\ndescription: Self-reflection loops\n---\n",
+    )
+    .expect("write skill");
+
+    let transform = normalize_clawhub_candidate_name(&candidate, Some("self-improving"))
+        .expect("normalize candidate")
+        .expect("compatibility transform");
+    let metadata = read_skill_metadata_from_dir(&candidate).expect("read normalized metadata");
+
+    assert_eq!(transform.original_name, "Self-Improving + Proactive Agent");
+    assert_eq!(transform.normalized_name, "self-improving");
+    assert_eq!(metadata.name, "self-improving");
+}
+
+#[test]
+fn clawhub_candidate_falls_back_to_normalized_name_without_usable_slug() {
+    let tmp = TempDir::new("liveagent-clawhub-name-fallback-test").expect("temp dir");
+    let candidate = tmp.path().join("candidate");
+    fs::create_dir_all(&candidate).expect("create candidate");
+    fs::write(
+        candidate.join("SKILL.md"),
+        "---\nname: Self-Improving Proactive Agent\ndescription: Merged variant\n---\n",
+    )
+    .expect("write skill");
+
+    let transform = normalize_clawhub_candidate_name(&candidate, None)
+        .expect("normalize candidate")
+        .expect("compatibility transform");
+    let metadata = read_skill_metadata_from_dir(&candidate).expect("read normalized metadata");
+
+    assert_eq!(transform.normalized_name, "self-improving-proactive-agent");
+    assert_eq!(metadata.name, "self-improving-proactive-agent");
+}
+
+#[test]
+fn clawhub_candidate_keeps_portable_name_untouched_even_when_it_differs_from_slug() {
+    let tmp = TempDir::new("liveagent-clawhub-name-portable-test").expect("temp dir");
+    let candidate = tmp.path().join("candidate");
+    fs::create_dir_all(&candidate).expect("create candidate");
+    fs::write(
+        candidate.join("SKILL.md"),
+        "---\nname: already-portable\ndescription: Valid name\n---\n",
+    )
+    .expect("write skill");
+
+    let transform = normalize_clawhub_candidate_name(&candidate, Some("some-other-slug"))
+        .expect("inspect candidate");
+    let metadata = read_skill_metadata_from_dir(&candidate).expect("read metadata");
+
+    assert_eq!(transform, None);
+    assert_eq!(metadata.name, "already-portable");
+}
+
+#[test]
+fn clawhub_candidate_rejects_when_neither_slug_nor_name_is_usable() {
+    let tmp = TempDir::new("liveagent-clawhub-name-unusable-test").expect("temp dir");
+    let candidate = tmp.path().join("candidate");
+    fs::create_dir_all(&candidate).expect("create candidate");
+    fs::write(
+        candidate.join("SKILL.md"),
+        "---\nname: \"###\"\ndescription: Unusable\n---\n",
     )
     .expect("write skill");
 
     let transform =
-        normalize_clawhub_candidate_name(&candidate, "skillscan").expect("inspect candidate");
+        normalize_clawhub_candidate_name(&candidate, Some("CON")).expect("inspect candidate");
 
     assert_eq!(transform, None);
     assert!(read_skill_metadata_from_dir(&candidate).is_err());
+}
+
+#[test]
+fn clawhub_download_query_param_reads_slug_and_owner_from_source_url() {
+    let source =
+        "https://clawhub.ai/api/v1/download?slug=self-improving&tag=latest&ownerHandle=ivangdavila";
+
+    assert_eq!(
+        clawhub_download_query_param(source, "slug").as_deref(),
+        Some("self-improving")
+    );
+    assert_eq!(
+        clawhub_download_query_param(source, "ownerHandle").as_deref(),
+        Some("ivangdavila")
+    );
+    assert_eq!(clawhub_download_query_param(source, "version"), None);
+    assert_eq!(
+        clawhub_download_query_param("https://example.com/api/v1/download?slug=x", "slug"),
+        None
+    );
 }
 
 #[test]
