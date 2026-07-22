@@ -305,6 +305,8 @@
     height: 100%;
     -webkit-user-select: none;
     user-select: none;
+    /* 桌面 webview：禁掉根滚动链上的浏览器手势导航（触摸板/触屏横扫的历史前进后退）。 */
+    overscroll-behavior: none;
   }
 
   body {
