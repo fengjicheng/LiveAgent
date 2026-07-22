@@ -10,7 +10,10 @@ import {
   workspaceProjectPathKey,
 } from "../../lib/settings";
 import { cn } from "../../lib/shared/utils";
-import type { SidebarBatchDeleteResult } from "../../lib/sidebar/batchDelete";
+import type {
+  SidebarBatchDeleteOptions,
+  SidebarBatchDeleteResult,
+} from "../../lib/sidebar/batchDelete";
 import { reconcileSidebarSelection, updateSidebarSelection } from "../../lib/sidebar/selection";
 import type {
   SidebarConversation,
@@ -116,7 +119,10 @@ type ChatHistorySidebarProps = {
   onShareConversation: (item: SidebarConversation) => void;
   onOpenSharedConversations: () => void;
   onDeleteConversation: (id: string) => void;
-  onDeleteConversations: (ids: readonly string[]) => Promise<SidebarBatchDeleteResult>;
+  onDeleteConversations: (
+    ids: readonly string[],
+    options?: SidebarBatchDeleteOptions,
+  ) => Promise<SidebarBatchDeleteResult>;
   onLoadMore: () => void;
   onCloseSidebar: () => void;
   onOpenSettings: () => void;
@@ -1072,6 +1078,9 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
   const projectSectionResizeCleanupRef = useRef<(() => void) | null>(null);
   const selectionAnchorRef = useRef<string | null>(null);
   const bulkConfirmOpenRef = useRef(false);
+  // Bumped to invalidate an in-flight bulk delete: its shouldStop callback
+  // starts returning true and its continuation stops touching state.
+  const bulkDeleteRunRef = useRef(0);
   const { confirm: requestBulkDeleteConfirm, dialog: bulkDeleteDialog } = useConfirmDialog();
   const orderedConversationIds = useMemo(() => items.map((item) => item.id), [items]);
   const selectableConversationIds = useMemo(
@@ -1132,6 +1141,8 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     onUnarchiveProject?.(project);
   });
   const exitSelectionMode = useCallback(() => {
+    bulkDeleteRunRef.current += 1;
+    setIsBulkDeleting(false);
     setSelectionMode(false);
     setSelectedConversationIds(new Set());
     selectionAnchorRef.current = null;
@@ -1200,9 +1211,17 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
       return;
     }
 
+    const runId = bulkDeleteRunRef.current + 1;
+    bulkDeleteRunRef.current = runId;
     setIsBulkDeleting(true);
     try {
-      const result = await handleDeleteConversations(ids);
+      const result = await handleDeleteConversations(ids, {
+        shouldStop: () => bulkDeleteRunRef.current !== runId,
+      });
+      if (bulkDeleteRunRef.current !== runId) {
+        // Cancelled mid-batch: exitSelectionMode already reset the selection UI.
+        return;
+      }
       const failedIds = result.failedIds.filter((id) => orderedConversationIds.includes(id));
       setSelectedConversationIds(new Set(failedIds));
       selectionAnchorRef.current = failedIds[0] ?? null;
@@ -1210,7 +1229,9 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
         setSelectionMode(false);
       }
     } finally {
-      setIsBulkDeleting(false);
+      if (bulkDeleteRunRef.current === runId) {
+        setIsBulkDeleting(false);
+      }
     }
   });
   // Archived rows are split into their own collapsed group at the list end;
@@ -1389,17 +1410,27 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
   }, [orderedConversationIds, selectableConversationIds]);
 
   useEffect(() => {
-    if (!selectionMode || isBulkDeleting) {
+    if (!selectionMode) {
       return;
     }
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !bulkConfirmOpenRef.current) {
-        exitSelectionMode();
+      if (event.key !== "Escape" || event.defaultPrevented || bulkConfirmOpenRef.current) {
+        return;
       }
+      // Escape inside the composer or any text field belongs to that editor,
+      // not to the sidebar selection.
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      ) {
+        return;
+      }
+      exitSelectionMode();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [exitSelectionMode, isBulkDeleting, selectionMode]);
+  }, [exitSelectionMode, selectionMode]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-run to (re)observe section refs when sections mount/unmount or toggle
   useEffect(() => {
@@ -1967,7 +1998,6 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                     variant="ghost"
                     size="icon"
                     onClick={exitSelectionMode}
-                    disabled={isBulkDeleting}
                     className={PROJECT_ICON_BUTTON_CLASS}
                     title={t("chat.cancel")}
                     aria-label={t("chat.cancel")}

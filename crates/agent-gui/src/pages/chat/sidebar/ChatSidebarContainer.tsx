@@ -9,6 +9,7 @@ import { useLocale } from "../../../i18n";
 import type { AppUpdateController } from "../../../lib/appUpdates";
 import { normalizeConversationTitle } from "../../../lib/chat/page/chatPageHelpers";
 import type { WorkspaceProject } from "../../../lib/settings";
+import type { SidebarBatchDeleteOptions } from "../../../lib/sidebar/batchDelete";
 import { deleteSidebarConversations } from "../../../lib/sidebar/batchDelete";
 import {
   selectConversations,
@@ -156,11 +157,15 @@ export function ChatSidebarContainer(props: ChatSidebarContainerProps) {
   );
 
   const handleDeleteConversations = useCallback(
-    async (ids: readonly string[]) => {
-      const result = await deleteSidebarConversations(ids, async (id) => {
-        store.clearMutationError(id);
-        return store.remove(id);
-      });
+    async (ids: readonly string[], options?: SidebarBatchDeleteOptions) => {
+      const result = await deleteSidebarConversations(
+        ids,
+        async (id) => {
+          store.clearMutationError(id);
+          return store.remove(id);
+        },
+        options,
+      );
       for (const id of result.deletedIds) {
         onConversationDeleted(id);
       }

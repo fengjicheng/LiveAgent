@@ -108,4 +108,24 @@ test("batch deletion continues after returned and thrown failures", async () => 
   assert.deepEqual(calls, ["one", "two", "three"]);
   assert.deepEqual(result.deletedIds, ["one"]);
   assert.deepEqual(result.failedIds, ["two", "three"]);
+  assert.deepEqual(result.skippedIds, []);
+});
+
+test("a stop request halts the batch and reports the rest as skipped", async () => {
+  const calls = [];
+  let stopRequested = false;
+  const result = await deleteSidebarConversations(
+    ["one", "two", "three"],
+    async (id) => {
+      calls.push(id);
+      stopRequested = true;
+      return true;
+    },
+    { shouldStop: () => stopRequested },
+  );
+
+  assert.deepEqual(calls, ["one"]);
+  assert.deepEqual(result.deletedIds, ["one"]);
+  assert.deepEqual(result.failedIds, []);
+  assert.deepEqual(result.skippedIds, ["two", "three"]);
 });
