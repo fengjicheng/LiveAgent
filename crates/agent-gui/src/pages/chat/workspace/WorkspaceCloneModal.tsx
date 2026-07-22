@@ -65,6 +65,17 @@ export function WorkspaceCloneModal({
     remoteUrl.trim() && parent.trim() && name.trim() && branch && !branchesLoading && !cloning,
   );
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      // defaultPrevented: an open branch Select consumes Escape to close itself.
+      if (event.key !== "Escape" || event.defaultPrevented || cloning) return;
+      event.preventDefault();
+      requestClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [cloning, requestClose]);
+
   async function chooseParent() {
     try {
       const selected = await invoke<string | null>("system_pick_folder", {
@@ -219,6 +230,7 @@ export function WorkspaceCloneModal({
                   }}
                   placeholder={t("chat.workspaceCloneUrlPlaceholder")}
                   autoComplete="off"
+                  autoFocus
                 />
               </div>
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">

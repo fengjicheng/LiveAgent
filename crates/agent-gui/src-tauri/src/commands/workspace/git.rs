@@ -16,6 +16,9 @@ use crate::runtime::process::{configure_child_process_group, kill_child_process_
 const GIT_DIFF_MAX_BYTES: usize = 512 * 1024;
 const GIT_UNTRACKED_FILE_MAX_BYTES: u64 = 128 * 1024;
 const GIT_COMMAND_TIMEOUT_SECS: u64 = 60;
+// Cloning a large repository easily outlives the default 60s command budget;
+// give clone its own, much larger allowance.
+const GIT_CLONE_TIMEOUT_SECS: u64 = 15 * 60;
 const GIT_TRANSIENT_RETRY_ATTEMPTS: usize = 3;
 const GIT_TRANSIENT_RETRY_DELAY_MS: u64 = 160;
 const GIT_LOG_DEFAULT_LIMIT: usize = 50;
@@ -236,6 +239,14 @@ fn read_temp_file(file: &mut NamedTempFile, label: &str) -> Result<Vec<u8>, Stri
 }
 
 fn git_output(workdir: &str, args: &[&str]) -> Result<Output, String> {
+    git_output_with_timeout(workdir, args, Duration::from_secs(GIT_COMMAND_TIMEOUT_SECS))
+}
+
+fn git_output_with_timeout(
+    workdir: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<Output, String> {
     let mut stdout_file =
         NamedTempFile::new().map_err(|error| format!("创建 git stdout 缓存失败：{error}"))?;
     let mut stderr_file =
@@ -261,14 +272,14 @@ fn git_output(workdir: &str, args: &[&str]) -> Result<Output, String> {
         .stderr(Stdio::from(stderr_target))
         .spawn()
         .map_err(|error| format!("git 执行失败：{error}"))?;
-    let timeout = Duration::from_secs(GIT_COMMAND_TIMEOUT_SECS);
     let Some(status) = child
         .wait_timeout(timeout)
         .map_err(|error| format!("等待 git 命令失败：{error}"))?
     else {
         kill_child_process_tree_best_effort(&mut child);
         return Err(format!(
-            "git 命令超时（{GIT_COMMAND_TIMEOUT_SECS} 秒）：git {}",
+            "git 命令超时（{} 秒）：git {}",
+            timeout.as_secs(),
             args.join(" ")
         ));
     };
@@ -280,9 +291,17 @@ fn git_output(workdir: &str, args: &[&str]) -> Result<Output, String> {
 }
 
 fn git_success(workdir: &str, args: &[&str]) -> Result<GitOutput, String> {
+    git_success_with_timeout(workdir, args, Duration::from_secs(GIT_COMMAND_TIMEOUT_SECS))
+}
+
+fn git_success_with_timeout(
+    workdir: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<GitOutput, String> {
     let mut last_error = String::new();
     for attempt in 0..GIT_TRANSIENT_RETRY_ATTEMPTS {
-        let output = git_output(workdir, args)?;
+        let output = git_output_with_timeout(workdir, args, timeout)?;
         let stdout = trim_output(&output.stdout);
         let stderr = trim_output(&output.stderr);
         if output.status.success() {
@@ -961,7 +980,11 @@ pub(crate) fn git_clone_repository_sync(
         clone_args.extend(["--branch", branch]);
     }
     clone_args.extend(["--", remote_url.as_str(), "."]);
-    let clone_output = match git_success(&target_workdir, &clone_args) {
+    let clone_output = match git_success_with_timeout(
+        &target_workdir,
+        &clone_args,
+        Duration::from_secs(GIT_CLONE_TIMEOUT_SECS),
+    ) {
         Ok(output) => output,
         Err(error) => {
             let _ = fs::remove_dir_all(&target);
@@ -982,8 +1005,10 @@ pub(crate) fn git_list_remote_branches_sync(
     remote_url: String,
 ) -> Result<GitRemoteBranchesResponse, String> {
     let remote_url = validate_git_remote_url(&remote_url)?;
-    let cwd = std::env::current_dir().map_err(|error| format!("无法读取当前目录：{error}"))?;
-    let cwd = cwd.to_string_lossy().into_owned();
+    // Run ls-remote from a private temp dir so whatever repository happens to
+    // contain the process cwd can't leak its configuration into the lookup.
+    let scratch = tempfile::tempdir().map_err(|error| format!("创建临时目录失败：{error}"))?;
+    let cwd = scratch.path().to_string_lossy().into_owned();
     let heads = git_success(&cwd, &["ls-remote", "--heads", "--", remote_url.as_str()])?;
     let mut branches = heads
         .stdout
@@ -1042,7 +1067,22 @@ fn validate_git_remote_url(value: &str) -> Result<String, String> {
     if value.chars().any(|ch| matches!(ch, '\0' | '\n' | '\r')) {
         return Err("远端仓库地址不能包含换行或空字符。".to_string());
     }
+    if is_git_remote_helper_url(value) {
+        return Err("不支持 remote helper 形式的远端地址（如 ext::）。".to_string());
+    }
     Ok(value.to_string())
+}
+
+/// Mirrors git's transport-helper detection (transport.c): when the URL's
+/// leading scheme characters are followed by `::`, git invokes
+/// `git-remote-<scheme>` — and `ext::` runs an arbitrary command, so the
+/// whole helper syntax must be rejected up front.
+fn is_git_remote_helper_url(value: &str) -> bool {
+    let scheme_len = value
+        .chars()
+        .take_while(|&ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
+        .count();
+    value[scheme_len..].starts_with("::")
 }
 
 fn git_remote_names(repo_root: &str) -> Result<Vec<String>, String> {
@@ -3318,6 +3358,33 @@ mod tests {
             .branches
             .iter()
             .any(|branch| branch == &response.default_branch));
+    }
+
+    #[test]
+    fn rejects_remote_helper_transport_urls() {
+        let error = validate_git_remote_url("ext::sh -c 'touch /tmp/pwned'")
+            .expect_err("ext:: transport must be rejected");
+        assert!(error.contains("ext::"), "{error}");
+        assert!(validate_git_remote_url("hg::https://example.com/repo").is_err());
+        assert!(validate_git_remote_url("::example.com/repo").is_err());
+
+        assert!(validate_git_remote_url("https://example.com/owner/repo.git").is_ok());
+        assert!(validate_git_remote_url("git@github.com:owner/repo.git").is_ok());
+        assert!(validate_git_remote_url("ssh://[2001:db8::1]/repo.git").is_ok());
+        assert!(validate_git_remote_url("/tmp/local/repo").is_ok());
+
+        let parent = tempfile::tempdir().expect("clone parent");
+        let clone_error = git_clone_repository_sync(
+            parent.path().to_string_lossy().into_owned(),
+            "pwned".to_string(),
+            "ext::sh -c 'touch /tmp/pwned'".to_string(),
+            None,
+        )
+        .expect_err("clone must reject ext:: transport");
+        assert!(clone_error.contains("ext::"), "{clone_error}");
+        assert!(
+            git_list_remote_branches_sync("ext::sh -c 'touch /tmp/pwned'".to_string()).is_err()
+        );
     }
 
     #[test]

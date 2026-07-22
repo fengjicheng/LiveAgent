@@ -74,15 +74,36 @@ export function WorkspaceCloneModal({
       !cloning,
   );
   const { modalState, requestClose } = useModalMotion(onClose);
+  // The nested path picker owns Escape while it is open; don't let the same
+  // keydown fall through and dismiss this modal too.
+  const pickingPathRef = useRef(false);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      // defaultPrevented: an open branch Select consumes Escape to close itself.
+      if (event.key !== "Escape" || event.defaultPrevented || cloning || pickingPathRef.current) {
+        return;
+      }
+      event.preventDefault();
+      requestClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [cloning, requestClose]);
 
   async function chooseParent() {
-    const selected = await pickPath({
-      mode: "directory",
-      initialPath: parent,
-      title: t("chat.workspaceCloneParent"),
-      description: t("chat.workspaceCloneParentPickerDescription"),
-    });
-    if (selected?.trim()) setParent(selected.trim());
+    pickingPathRef.current = true;
+    try {
+      const selected = await pickPath({
+        mode: "directory",
+        initialPath: parent,
+        title: t("chat.workspaceCloneParent"),
+        description: t("chat.workspaceCloneParentPickerDescription"),
+      });
+      if (selected?.trim()) setParent(selected.trim());
+    } finally {
+      pickingPathRef.current = false;
+    }
   }
 
   const loadRemoteBranches = useCallback(
@@ -227,6 +248,7 @@ export function WorkspaceCloneModal({
                   }}
                   placeholder={t("chat.workspaceCloneUrlPlaceholder")}
                   autoComplete="off"
+                  autoFocus
                 />
               </div>
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
