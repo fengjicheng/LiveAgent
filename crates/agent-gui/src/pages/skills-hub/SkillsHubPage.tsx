@@ -14,17 +14,27 @@ import {
   AlertTriangle,
   Blend,
   BookOpen,
+  Bot,
   Brain,
+  Cable,
   Check,
+  CircleHelp,
   Cloud,
   Copy,
+  Cpu,
   Download,
   ExternalLink,
   FileText,
   Folder,
+  GitBranch,
   Globe,
   House,
+  ImageIcon,
+  Key,
   Layers,
+  LayoutGrid,
+  Lightbulb,
+  Link2,
   ListChecks,
   Loader2,
   Lock,
@@ -33,13 +43,23 @@ import {
   Package,
   Palette,
   Plug,
+  Radio,
   RefreshCw,
+  ScanText,
+  ScrollText,
   Search,
+  Send,
   Server,
+  Settings,
   Shield,
   SkillIcon,
+  Sparkles,
+  Terminal,
+  Timer,
   Trash2,
   Wallet,
+  Waypoints,
+  Wifi,
   Wrench,
   X,
   Zap,
@@ -85,6 +105,15 @@ import {
   type ClawHubCategorySlug,
   classifyClawHubSkill,
 } from "../../lib/skills/clawHubCategories";
+import {
+  getInstalledSkillCardIdentity,
+  type InstalledSkillCardIconName,
+} from "../../lib/skills/skillCardIdentity";
+import {
+  getInstalledSkillCardSource,
+  getRelativeInstalledAt,
+} from "../../lib/skills/skillCardMetadata";
+import { getSkillTriggerHint } from "../../lib/skills/skillTriggerHint";
 import {
   DEFAULT_INSTALLED_SKILL_SORT,
   type InstalledSkillSort,
@@ -154,6 +183,87 @@ function classifyInstalledSkill(skill: SkillSummary): ClawHubCategorySlug[] {
 }
 
 const STORE_CATEGORY_OPTIONS: readonly StoreCategoryValue[] = ["all", ...CLAWHUB_CATEGORY_SLUGS];
+
+const INSTALLED_SKILL_ICON_TONES = [
+  "border-sky-500/30 bg-sky-500/12 text-sky-700 dark:border-sky-400/30 dark:bg-sky-400/15 dark:text-sky-200",
+  "border-indigo-500/30 bg-indigo-500/12 text-indigo-700 dark:border-indigo-400/30 dark:bg-indigo-400/15 dark:text-indigo-200",
+  "border-violet-500/30 bg-violet-500/12 text-violet-700 dark:border-violet-400/30 dark:bg-violet-400/15 dark:text-violet-200",
+  "border-fuchsia-500/30 bg-fuchsia-500/12 text-fuchsia-700 dark:border-fuchsia-400/30 dark:bg-fuchsia-400/15 dark:text-fuchsia-200",
+  "border-rose-500/30 bg-rose-500/12 text-rose-700 dark:border-rose-400/30 dark:bg-rose-400/15 dark:text-rose-200",
+  "border-orange-500/30 bg-orange-500/12 text-orange-700 dark:border-orange-400/30 dark:bg-orange-400/15 dark:text-orange-200",
+  "border-amber-500/30 bg-amber-500/12 text-amber-800 dark:border-amber-400/30 dark:bg-amber-400/15 dark:text-amber-200",
+  "border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/15 dark:text-emerald-200",
+  "border-cyan-500/30 bg-cyan-500/12 text-cyan-700 dark:border-cyan-400/30 dark:bg-cyan-400/15 dark:text-cyan-200",
+] as const;
+
+const INSTALLED_SKILL_CARD_ICONS: Record<InstalledSkillCardIconName, typeof Activity> = {
+  bookOpen: BookOpen,
+  bot: Bot,
+  brain: Brain,
+  cable: Cable,
+  circleHelp: CircleHelp,
+  cloud: Cloud,
+  cpu: Cpu,
+  fileText: FileText,
+  folder: Folder,
+  gitBranch: GitBranch,
+  globe: Globe,
+  imageIcon: ImageIcon,
+  key: Key,
+  layoutGrid: LayoutGrid,
+  lightbulb: Lightbulb,
+  link2: Link2,
+  listChecks: ListChecks,
+  lock: Lock,
+  messageSquare: MessageSquare,
+  plug: Plug,
+  radio: Radio,
+  refreshCw: RefreshCw,
+  scanText: ScanText,
+  scrollText: ScrollText,
+  search: Search,
+  send: Send,
+  server: Server,
+  settings: Settings,
+  shield: Shield,
+  sparkles: Sparkles,
+  terminal: Terminal,
+  timer: Timer,
+  waypoints: Waypoints,
+  wifi: Wifi,
+  wrench: Wrench,
+  zap: Zap,
+};
+
+function formatInstalledSkillMetadata(skill: SkillSummary, t: (key: string) => string): string {
+  const source = getInstalledSkillCardSource(skill);
+  const sourceLabel =
+    source === "built-in"
+      ? t("settings.skillsInstalledCardSourceBuiltIn")
+      : source === "clawhub"
+        ? t("settings.skillsInstalledCardSourceClawHub")
+        : t("settings.skillsInstalledCardSourceLocal");
+  if (source === "built-in") return sourceLabel;
+
+  const relativeInstalledAt = getRelativeInstalledAt(skill.installedAt);
+  if (!relativeInstalledAt) return sourceLabel;
+  if (relativeInstalledAt.kind === "today") {
+    return `${sourceLabel} · ${t("settings.skillsInstalledCardInstalledToday")}`;
+  }
+  if (relativeInstalledAt.kind === "days-ago") {
+    return `${sourceLabel} · ${t("settings.skillsInstalledCardInstalledDaysAgo").replace(
+      "{count}",
+      String(relativeInstalledAt.days),
+    )}`;
+  }
+
+  const date = new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  }).format(new Date(relativeInstalledAt.timestamp));
+  return `${sourceLabel} · ${date}`;
+}
 
 /** 选中分类后若本地过滤结果少于该值且还有下一页，自动继续拉取补齐。 */
 const STORE_CATEGORY_FILL_TARGET = 12;
@@ -2158,20 +2268,42 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                               const bulkSelected = bulkSelection.has(skill.name);
                               const deleting = deletingSkillName === skill.name;
                               const deleteDisabled = deletingSkillName !== null;
-                              const PrimaryCategoryIcon =
-                                STORE_CATEGORY_ICONS[categories[0] ?? "other"];
+                              const primaryCategory = categories[0] ?? "other";
+                              const triggerHint = getSkillTriggerHint(skill.description);
+                              const cardIdentity = alwaysEnabled
+                                ? null
+                                : getInstalledSkillCardIdentity(skill.name, primaryCategory);
+                              const CardIcon = alwaysEnabled
+                                ? SkillIcon
+                                : INSTALLED_SKILL_CARD_ICONS[cardIdentity?.iconName ?? "circleHelp"];
+                              const iconTone = cardIdentity
+                                ? INSTALLED_SKILL_ICON_TONES[cardIdentity.colorIndex]
+                                : null;
+                              const metadataSource = getInstalledSkillCardSource(skill);
+                              const MetadataIcon =
+                                metadataSource === "built-in"
+                                  ? Lock
+                                  : metadataSource === "clawhub"
+                                    ? Cloud
+                                    : Folder;
+                              const metadataLabel = formatInstalledSkillMetadata(skill, t);
                               const card = (
                                 <>
                                   <div className="flex items-start justify-between gap-2">
                                     <div
                                       className={cn(
                                         "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border transition-all",
-                                        checked
+                                        alwaysEnabled
                                           ? "border-border/55 bg-background/80 text-foreground/85 shadow-[0_1px_0_rgba(255,255,255,0.55)_inset] dark:border-white/[0.09] dark:bg-white/[0.06] dark:shadow-[0_1px_0_rgba(255,255,255,0.06)_inset]"
-                                          : "border-border/30 bg-muted/50 text-muted-foreground group-hover:border-border/50 group-hover:bg-background/70 group-hover:text-foreground/85",
+                                          : cn(
+                                              iconTone,
+                                              checked
+                                                ? "shadow-[0_1px_0_rgba(255,255,255,0.45)_inset]"
+                                                : "opacity-70 group-hover:opacity-100",
+                                            ),
                                       )}
                                     >
-                                      <PrimaryCategoryIcon className="h-5 w-5" />
+                                      <CardIcon className="h-5 w-5" />
                                     </div>
 
                                     {alwaysEnabled && !bulkMode ? (
@@ -2299,15 +2431,27 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                                         </span>
                                       ) : null}
                                     </div>
+                                    {triggerHint ? (
+                                      <p className="mt-1 flex min-w-0 items-center gap-1 text-[11px] font-medium leading-[1.35] text-primary/90 dark:text-primary">
+                                        <MessageSquare className="h-3 w-3 shrink-0" />
+                                        <span className="shrink-0">{t("settings.skillsInstalledCardTrigger")}</span>
+                                        <span className="truncate">{triggerHint}</span>
+                                      </p>
+                                    ) : null}
                                     {skill.description ? (
-                                      <p className="mt-1 line-clamp-2 text-[11.5px] leading-[1.4] text-muted-foreground">
+                                      <p
+                                        className={cn(
+                                          "mt-1 text-[11.5px] leading-[1.4] text-muted-foreground",
+                                          triggerHint ? "line-clamp-1" : "line-clamp-2",
+                                        )}
+                                      >
                                         {skill.description}
                                       </p>
                                     ) : null}
                                     {!alwaysEnabled ? (
                                       <div className="mt-2">
-                                        <SkillCategoryBadges
-                                          categories={categories}
+                                        <InstalledSkillCategoryChip
+                                          category={primaryCategory}
                                           onSelect={setInstalledCategory}
                                         />
                                       </div>
@@ -2315,8 +2459,8 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                                   </div>
 
                                   <div className="mt-2.5 flex min-h-8 items-center gap-1 border-t border-border/30 pt-2 text-[10.5px] text-muted-foreground/70">
-                                    <FileText className="h-3 w-3 shrink-0" />
-                                    <span className="truncate">{skill.skillFile}</span>
+                                    <MetadataIcon className="h-3 w-3 shrink-0" />
+                                    <span className="truncate">{metadataLabel}</span>
                                     {!alwaysEnabled && !bulkMode ? (
                                       <div
                                         className="ml-auto shrink-0"
@@ -2379,7 +2523,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                                       openInstalledSkillPreview(skill);
                                     }}
                                     className={cn(
-                                      "hub-skill-card skill-card-enter group flex h-full w-full cursor-pointer flex-col rounded-2xl border border-border/50 bg-background/75 p-3.5 text-left shadow-[0_1px_0_rgba(255,255,255,0.55)_inset,0_4px_18px_-12px_rgba(15,23,42,0.16)] transition-all hover:-translate-y-0.5 hover:border-border/60 hover:bg-background/85 hover:shadow-[0_4px_16px_-10px_rgba(15,23,42,0.18)] dark:border-white/[0.08] dark:bg-white/[0.05] dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_4px_18px_-12px_rgba(0,0,0,0.5)] dark:hover:border-white/[0.12] dark:hover:bg-white/[0.07] dark:hover:shadow-[0_4px_16px_-10px_rgba(0,0,0,0.55)] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-foreground/15",
+                                      "hub-skill-card skill-card-enter group flex h-full min-h-[13rem] w-full cursor-pointer flex-col rounded-2xl border border-border/50 bg-background/75 p-3.5 text-left shadow-[0_1px_0_rgba(255,255,255,0.55)_inset,0_4px_18px_-12px_rgba(15,23,42,0.16)] transition-all hover:-translate-y-0.5 hover:border-border/60 hover:bg-background/85 hover:shadow-[0_4px_16px_-10px_rgba(15,23,42,0.18)] dark:border-white/[0.08] dark:bg-white/[0.05] dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_4px_18px_-12px_rgba(0,0,0,0.5)] dark:hover:border-white/[0.12] dark:hover:bg-white/[0.07] dark:hover:shadow-[0_4px_16px_-10px_rgba(0,0,0,0.55)] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-foreground/15",
                                       bulkMode ? "cursor-default hover:translate-y-0" : null,
                                     )}
                                   >
@@ -2424,7 +2568,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                                     handleInstalledSkillCardKeyDown(event, skill);
                                   }}
                                   className={cn(
-                                    "hub-skill-card skill-card-enter group relative flex h-full w-full flex-col rounded-2xl border p-3.5 text-left transition-all",
+                                    "hub-skill-card skill-card-enter group relative flex h-full min-h-[13rem] w-full flex-col rounded-2xl border p-3.5 text-left transition-all",
                                     "cursor-pointer focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-foreground/15",
                                     // Enabled style always visible; bulk selection overlays primary ring.
                                     checked
@@ -3439,6 +3583,28 @@ function StoreCategoryChips(props: {
         })}
       </div>
     </div>
+  );
+}
+
+function InstalledSkillCategoryChip(props: {
+  category: ClawHubCategorySlug;
+  onSelect: (category: ClawHubCategorySlug) => void;
+}) {
+  const { t } = useLocale();
+  const CategoryIcon = STORE_CATEGORY_ICONS[props.category];
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        props.onSelect(props.category);
+      }}
+      onKeyDown={(event) => event.stopPropagation()}
+      className="inline-flex shrink-0 items-center gap-1 rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10px] font-medium text-foreground/75 ring-1 ring-border/45 transition-colors hover:bg-foreground/[0.1]"
+    >
+      <CategoryIcon className="h-2.5 w-2.5" />
+      <span>{t(storeCategoryLabelKey(props.category))}</span>
+    </button>
   );
 }
 
