@@ -93,10 +93,13 @@ import {
   resolveClawHubSkillOwner,
   searchClawHubSkills,
 } from "../../lib/skills/clawHub";
+import { type ClawHubCategorySlug, classifyClawHubSkill } from "../../lib/skills/clawHubCategories";
 import {
-  type ClawHubCategorySlug,
-  classifyClawHubSkill,
-} from "../../lib/skills/clawHubCategories";
+  DEFAULT_INSTALLED_SKILL_SORT,
+  type InstalledSkillSort,
+  isInstalledSkillSort,
+  sortInstalledSkillItems,
+} from "../../lib/skills/installedSort";
 import {
   getInstalledSkillCardIdentity,
   type InstalledSkillCardIconName,
@@ -106,12 +109,6 @@ import {
   getRelativeInstalledAt,
 } from "../../lib/skills/skillCardMetadata";
 import { getSkillTriggerHint } from "../../lib/skills/skillTriggerHint";
-import {
-  DEFAULT_INSTALLED_SKILL_SORT,
-  type InstalledSkillSort,
-  isInstalledSkillSort,
-  sortInstalledSkillItems,
-} from "../../lib/skills/installedSort";
 
 type SkillsHubView = "installed" | "store" | "import";
 
@@ -2210,7 +2207,9 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                                   : getInstalledSkillCardIdentity(skill.name, primaryCategory);
                                 const CardIcon = alwaysEnabled
                                   ? SkillIcon
-                                  : INSTALLED_SKILL_CARD_ICONS[cardIdentity?.iconName ?? "circleHelp"];
+                                  : INSTALLED_SKILL_CARD_ICONS[
+                                      cardIdentity?.iconName ?? "circleHelp"
+                                    ];
                                 const iconTone = cardIdentity
                                   ? INSTALLED_SKILL_ICON_TONES[cardIdentity.colorIndex]
                                   : null;
@@ -2369,7 +2368,9 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                                       {triggerHint ? (
                                         <p className="mt-1 flex min-w-0 items-center gap-1 text-[11px] font-medium leading-[1.35] text-primary/90 dark:text-primary">
                                           <MessageSquare className="h-3 w-3 shrink-0" />
-                                          <span className="shrink-0">{t("settings.skillsInstalledCardTrigger")}</span>
+                                          <span className="shrink-0">
+                                            {t("settings.skillsInstalledCardTrigger")}
+                                          </span>
                                           <span className="truncate">{triggerHint}</span>
                                         </p>
                                       ) : null}
