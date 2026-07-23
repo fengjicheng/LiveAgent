@@ -151,7 +151,7 @@ async fn read_limited_response(response: reqwest::Response) -> Result<Vec<u8>, S
 }
 
 fn normalize_provider_base_url(provider_type: &str, raw: &str) -> Result<Url, String> {
-    if !matches!(provider_type, "claude_code" | "codex" | "gemini") {
+    if !matches!(provider_type, "claude_code" | "codex" | "gemini" | "xai") {
         return Err("不支持的供应商类型".to_string());
     }
     let mut url = Url::parse(raw.trim()).map_err(|_| "Base URL 必须是绝对 URL".to_string())?;
@@ -167,7 +167,7 @@ fn normalize_provider_base_url(provider_type: &str, raw: &str) -> Result<Url, St
     }
 
     let mut path = url.path().trim_end_matches('/').to_string();
-    if provider_type == "codex" {
+    if provider_type == "codex" || provider_type == "xai" {
         let lower = path.to_ascii_lowercase();
         if let Some(suffix) = CODEX_MODELS_SUFFIXES
             .iter()
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn provider_model_headers_exclude_inference_identity() {
-        for provider_type in ["claude_code", "codex", "gemini"] {
+        for provider_type in ["claude_code", "codex", "gemini", "xai"] {
             let headers = build_provider_models_headers(provider_type, "key");
             let names = headers
                 .iter()
@@ -395,6 +395,7 @@ mod tests {
             ("claude_code", "x-api-key"),
             ("codex", "authorization"),
             ("gemini", "x-goog-api-key"),
+            ("xai", "authorization"),
         ] {
             let headers = build_provider_models_headers(provider_type, "key");
             let auth_names = headers

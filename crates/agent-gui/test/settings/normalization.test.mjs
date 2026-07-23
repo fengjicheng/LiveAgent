@@ -344,6 +344,7 @@ test("chat runtime controls default and follow provider model reasoning support"
       codex_openai_responses: "high",
       codex_openai_completions: "high",
       gemini: "high",
+      xai: "high",
     },
   });
 
@@ -470,6 +471,7 @@ test("chat runtime controls default and follow provider model reasoning support"
         codex_openai_responses: "xhigh",
         codex_openai_completions: "xhigh",
         gemini: "high",
+        xai: "xhigh",
       },
     },
   );
@@ -498,9 +500,10 @@ test("chat runtime controls default and follow provider model reasoning support"
         claude_code: "xhigh",
         codex_openai_responses: "xhigh",
         codex_openai_completions: "xhigh",
-        // gemini 未在 reasoningByProvider 输入里显式给出，也未参与本次调用
+        // gemini / xai 未在 reasoningByProvider 输入里显式给出，也未参与本次调用
         // 的当前 provider key，因此只继承顶层 reasoning 原值，不做钳制。
         gemini: "xhigh",
+        xai: "xhigh",
       },
     },
   );
@@ -525,6 +528,7 @@ test("chat runtime controls default and follow provider model reasoning support"
         codex_openai_responses: "xhigh",
         codex_openai_completions: "high",
         gemini: "high",
+        xai: "high",
       },
     },
   );
@@ -581,6 +585,7 @@ test("chat runtime controls default and follow provider model reasoning support"
       codex_openai_responses: "high",
       codex_openai_completions: "high",
       gemini: "high",
+      xai: "high",
     },
   });
 });

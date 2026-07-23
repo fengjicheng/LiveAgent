@@ -142,8 +142,10 @@ function requestBodyMatchesProbe(probe: FetchProbe, body: unknown) {
   if (!probe.sessionId) return true;
   if (!isRecord(body)) return false;
 
-  if (probe.providerId === "codex") {
+  if (probe.providerId === "codex" || probe.providerId === "xai") {
     const promptCacheKey = readString(body.prompt_cache_key);
+    // xAI Responses 会剥离 prompt_cache_key；有 requestId 头时已在上游匹配。
+    if (!promptCacheKey && probe.providerId === "xai") return true;
     return promptCacheKey === probe.sessionId;
   }
 
@@ -650,7 +652,9 @@ function createGeminiSearchEventParser(): SearchEventParser {
 }
 
 function createHostedSearchEventParser(providerId: ProviderId): SearchEventParser {
-  if (providerId === "codex") return createOpenAIResponsesSearchEventParser();
+  if (providerId === "codex" || providerId === "xai") {
+    return createOpenAIResponsesSearchEventParser();
+  }
   if (providerId === "claude_code") return createAnthropicSearchEventParser();
   if (providerId === "gemini") return createGeminiSearchEventParser();
   return { parse: () => [] };

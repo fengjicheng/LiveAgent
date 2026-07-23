@@ -4,9 +4,12 @@ import test from "node:test";
 import { createTsModuleLoader } from "../helpers/load-ts-module.mjs";
 
 const loader = createTsModuleLoader();
-const { attachXaiResponsesPayloadCompat, isXaiDirectBaseUrl } = loader.loadModule(
-  "src/lib/providers/runtime/xaiResponsesPayload.ts",
-);
+const {
+  attachXaiResponsesPayloadCompat,
+  isXaiDirectBaseUrl,
+  isXaiProviderTarget,
+  mapUiEffortToXaiEffort,
+} = loader.loadModule("src/lib/providers/runtime/xaiResponsesPayload.ts");
 const { finalizeProviderStreamOptions } = loader.loadModule(
   "src/lib/providers/runtime/payloadPipeline.ts",
 );
@@ -39,7 +42,32 @@ test("isXaiDirectBaseUrl only matches the api.x.ai host", () => {
   assert.equal(isXaiDirectBaseUrl(undefined), false);
 });
 
-test("xAI responses compat strips unsupported payload fields and adds the encrypted reasoning include", async () => {
+test("isXaiProviderTarget matches the formal xai provider type", () => {
+  assert.equal(isXaiProviderTarget({ providerId: "xai", baseUrl: "https://relay.example.com/v1" }), true);
+  assert.equal(
+    isXaiProviderTarget({ providerId: "codex", baseUrl: "https://api.x.ai/v1" }),
+    true,
+  );
+  assert.equal(
+    isXaiProviderTarget({ providerId: "codex", baseUrl: "https://api.openai.com/v1" }),
+    false,
+  );
+});
+
+test("mapUiEffortToXaiEffort maps LiveAgent levels onto official Grok efforts", () => {
+  assert.equal(mapUiEffortToXaiEffort("minimal", "grok-4.5"), "low");
+  assert.equal(mapUiEffortToXaiEffort("low", "grok-4.5"), "low");
+  assert.equal(mapUiEffortToXaiEffort("medium", "grok-4.5"), "medium");
+  assert.equal(mapUiEffortToXaiEffort("high", "grok-4.5"), "high");
+  assert.equal(mapUiEffortToXaiEffort("xhigh", "grok-4.5"), "xhigh");
+  assert.equal(mapUiEffortToXaiEffort("max", "grok-4.5"), "high");
+  assert.equal(mapUiEffortToXaiEffort("off", "grok-4.5"), undefined);
+  assert.equal(mapUiEffortToXaiEffort("none", "grok-4.5"), undefined);
+  assert.equal(mapUiEffortToXaiEffort("none", "grok-4.3"), "none");
+  assert.equal(mapUiEffortToXaiEffort("off", "grok-4.3"), "none");
+});
+
+test("xAI responses compat strips unsupported fields and keeps mapped reasoning effort", async () => {
   const options = attachXaiResponsesPayloadCompat(
     {},
     { providerId: "codex", baseUrl: "https://api.x.ai/v1" },
@@ -53,7 +81,7 @@ test("xAI responses compat strips unsupported payload fields and adds the encryp
       background: false,
       prompt_cache_key: "session-1",
       prompt_cache_retention: "24h",
-      reasoning: { effort: "none" },
+      reasoning: { effort: "minimal", summary: "auto" },
       metadata: { trace: "ok" },
       instructions: "custom instructions",
       prompt: { id: "pmpt_123" },
@@ -72,7 +100,6 @@ test("xAI responses compat strips unsupported payload fields and adds the encryp
     "background",
     "prompt_cache_key",
     "prompt_cache_retention",
-    "reasoning",
     "metadata",
     "instructions",
     "prompt",
@@ -82,12 +109,33 @@ test("xAI responses compat strips unsupported payload fields and adds the encryp
   ]) {
     assert.equal(Object.hasOwn(payload, key), false, `expected ${key} to be stripped`);
   }
+  assert.deepEqual(payload.reasoning, { effort: "low" });
   assert.deepEqual(payload.include, ["reasoning.encrypted_content"]);
   assert.equal(payload.model, "grok-4.5");
   assert.equal(payload.stream, true);
   assert.equal(payload.temperature, 0.7);
   assert.equal(payload.max_output_tokens, 8_192);
   assert.deepEqual(payload.tools, [{ type: "function", name: "Bash" }]);
+});
+
+test("formal xai provider type also applies responses compat", async () => {
+  const options = attachXaiResponsesPayloadCompat(
+    {},
+    { providerId: "xai", baseUrl: "https://relay.example.com/v1" },
+  );
+  const payload = await options.onPayload(
+    {
+      model: "grok-4.5",
+      input: [],
+      stream: true,
+      store: true,
+      reasoning: { effort: "high", summary: "auto" },
+    },
+    createXaiResponsesModel(),
+  );
+  assert.equal(Object.hasOwn(payload, "store"), false);
+  assert.deepEqual(payload.reasoning, { effort: "high" });
+  assert.deepEqual(payload.include, ["reasoning.encrypted_content"]);
 });
 
 test("xAI responses compat maps hosted tool types to include values and keeps custom includes", async () => {
@@ -119,7 +167,7 @@ test("xAI responses compat maps hosted tool types to include values and keeps cu
   ]);
 });
 
-test("xAI responses compat is a no-op for non-xAI targets and non-codex providers", () => {
+test("xAI responses compat is a no-op for non-xAI targets and non-openai providers", () => {
   const options = {};
   assert.equal(
     attachXaiResponsesPayloadCompat(options, {
@@ -157,7 +205,7 @@ test("xAI responses compat leaves openai-completions payloads untouched", async 
 
 test("payload pipeline turns an xAI web-search request into a sanitized hosted-tool payload", async () => {
   const options = finalizeProviderStreamOptions({
-    providerId: "codex",
+    providerId: "xai",
     baseUrl: "https://api.x.ai/v1",
     options: {},
     nativeWebSearch: true,
@@ -169,7 +217,7 @@ test("payload pipeline turns an xAI web-search request into a sanitized hosted-t
       stream: true,
       store: false,
       prompt_cache_key: "session-1",
-      reasoning: { effort: "none" },
+      reasoning: { effort: "high" },
       tools: [{ type: "function", name: "Bash" }],
     },
     createXaiResponsesModel(),
@@ -177,7 +225,7 @@ test("payload pipeline turns an xAI web-search request into a sanitized hosted-t
 
   assert.equal(Object.hasOwn(payload, "store"), false);
   assert.equal(Object.hasOwn(payload, "prompt_cache_key"), false);
-  assert.equal(Object.hasOwn(payload, "reasoning"), false);
+  assert.deepEqual(payload.reasoning, { effort: "high" });
   assert.deepEqual(payload.include, [
     "reasoning.encrypted_content",
     "web_search_call.action.sources",

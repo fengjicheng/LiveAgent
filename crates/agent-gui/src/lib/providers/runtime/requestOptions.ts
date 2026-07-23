@@ -70,6 +70,7 @@ export function buildProviderRequestHeaders(
       [CODEX_CONVERSATION_ID_HEADER]: requestSessionId,
     };
   }
+  // xai 与其它 OpenAI 兼容端：仅 Bearer，不带 Codex CLI 身份头。
   return authHeaders;
 }
 

@@ -17,6 +17,19 @@ test("xAI direct base URLs are forced onto the openai-responses API even when co
   assert.equal(model.id, "grok-4.5");
 });
 
+test("formal xai provider type always uses openai-responses", () => {
+  const model = createModelFromConfig(
+    "xai",
+    "grok-4.5",
+    "https://api.x.ai/v1",
+    "openai-completions",
+  );
+  assert.equal(model.api, "openai-responses");
+  assert.equal(model.thinkingLevelMap?.minimal, "low");
+  assert.equal(model.thinkingLevelMap?.high, "high");
+  assert.equal(model.thinkingLevelMap?.off, null);
+});
+
 test("xAI direct detection uses the upstream base URL when requests are proxied", () => {
   const model = createModelFromConfig(
     "codex",

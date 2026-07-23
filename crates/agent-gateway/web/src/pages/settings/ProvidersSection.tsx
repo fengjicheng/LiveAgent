@@ -7,6 +7,7 @@ import {
   EyeOff,
   GeminiIcon,
   Globe,
+  GrokIcon,
   List,
   OpenaiChatgptIcon,
   Pencil,
@@ -85,11 +86,12 @@ type ModelEditDraft = {
   costCacheRead: string;
   costCacheWrite: string;
 };
-const PROVIDER_TABS: ProviderId[] = ["claude_code", "codex", "gemini"];
+const PROVIDER_TABS: ProviderId[] = ["claude_code", "codex", "gemini", "xai"];
 const PROVIDER_LABELS: Record<ProviderId, string> = {
   claude_code: "Anthropic",
   codex: "OpenAI",
   gemini: "Gemini",
+  xai: "Grok",
 };
 
 function getProviderLabel(type: ProviderId) {
@@ -99,6 +101,7 @@ function getProviderLabel(type: ProviderId) {
 function ProviderBrandIcon({ type }: { type: ProviderId }) {
   if (type === "claude_code") return <ClaudeIcon height="1em" />;
   if (type === "gemini") return <GeminiIcon height="1em" />;
+  if (type === "xai") return <GrokIcon height="1em" />;
   return <OpenaiChatgptIcon height="1em" className="fill-current dark:text-white" />;
 }
 
@@ -235,7 +238,7 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
   );
   const [useSystemProxy, setUseSystemProxy] = useState(initialData?.useSystemProxy ?? false);
   const [promptCachingEnabled, setPromptCachingEnabled] = useState(
-    initialData?.promptCachingEnabled ?? providerType !== "gemini",
+    initialData?.promptCachingEnabled ?? (providerType !== "gemini" && providerType !== "xai"),
   );
   const [promptCacheRetention, setPromptCacheRetention] = useState<"short" | "long">(
     initialData?.promptCacheRetention === "long" ? "long" : "short",
@@ -561,12 +564,18 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
       models,
       modelOrder,
       activeModels: Array.from(activeModels),
-      requestFormat: providerType === "codex" ? requestFormat : undefined,
+      requestFormat:
+        providerType === "xai"
+          ? "openai-responses"
+          : providerType === "codex"
+            ? requestFormat
+            : undefined,
       reasoning:
         providerType === "gemini" && initialData?.reasoning === "xhigh"
           ? "high"
           : (initialData?.reasoning ?? "off"),
-      promptCachingEnabled: providerType === "gemini" ? false : promptCachingEnabled,
+      promptCachingEnabled:
+        providerType === "gemini" || providerType === "xai" ? false : promptCachingEnabled,
       promptCacheRetention:
         providerType === "claude_code" && promptCachingEnabled && promptCacheRetention === "long"
           ? "long"
@@ -1218,7 +1227,7 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
                   />
                 </div>
 
-                {providerType !== "gemini" ? (
+                {providerType !== "gemini" && providerType !== "xai" ? (
                   <div
                     className={cn(
                       "mt-3 rounded-xl border bg-card px-4 py-3 transition-colors",

@@ -165,6 +165,7 @@ export function providerSupportsNativeWebSearch(
 
   return (
     (providerId === "codex" && api === "openai-responses") ||
+    (providerId === "xai" && api === "openai-responses") ||
     (providerId === "claude_code" && api === "anthropic-messages") ||
     (providerId === "gemini" && api === "google-generative-ai")
   );
