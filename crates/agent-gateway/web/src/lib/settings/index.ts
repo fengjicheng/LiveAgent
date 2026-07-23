@@ -1015,10 +1015,27 @@ function toKnownProvider(providerId: ProviderId): KnownProvider {
   return "anthropic";
 }
 
+// 仅限限额（contextWindow/maxOutputToken）回查的目录：xai 走 pi-ai 的 xai
+// 目录拿 grok 真实窗口（grok-4.5=500K、grok-3=131K、grok-code-fast-1=32K），
+// 不能落到 openai 目录查不到后吃统一兜底值。思考档位检测
+// （findKnownModelForThinking）刻意不用该目录——其 compat/reasoning 反映的是
+// pi-ai completions 路径，与 LiveAgent 强制 Responses + thinkingLevelMap 不符。
+function toLimitsCatalogProvider(providerId: ProviderId): KnownProvider {
+  return providerId === "xai" ? "xai" : toKnownProvider(providerId);
+}
+
 function findKnownModel(providerId: ProviderId, modelId: string | undefined) {
   const trimmedId = modelId?.trim();
   if (!trimmedId) return undefined;
   return getBuiltinModels(toKnownProvider(providerId)).find((model) => model.id === trimmedId);
+}
+
+function findKnownModelLimitsEntry(providerId: ProviderId, modelId: string | undefined) {
+  const trimmedId = modelId?.trim();
+  if (!trimmedId) return undefined;
+  return getBuiltinModels(toLimitsCatalogProvider(providerId)).find(
+    (model) => model.id === trimmedId,
+  );
 }
 
 // —— 以下 Anthropic id 规范化与启发式与桌面端 anthropicModels.ts/modelFactory.ts
@@ -1142,7 +1159,7 @@ function getKnownModelLimits(
           : Math.min(known.contextWindow, ANTHROPIC_STANDARD_CONTEXT_WINDOW);
     return { contextWindow, maxOutputToken: known.maxTokens };
   }
-  const known = findKnownModel(providerId, modelId);
+  const known = findKnownModelLimitsEntry(providerId, modelId);
   if (!known) return undefined;
   return { contextWindow: known.contextWindow, maxOutputToken: known.maxTokens };
 }

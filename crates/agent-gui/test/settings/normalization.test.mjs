@@ -2332,3 +2332,11 @@ test("gateway sync merge keeps system proxy password against redacted payloads",
   assert.equal(mergedHost.system.systemProxy.port, 1080);
   assert.equal(mergedHost.system.systemProxy.password, "secret");
 });
+
+test("xai provider model defaults come from the pi-ai xai catalog", () => {
+  assert.equal(settings.getProviderModelDefaults("xai", "grok-4.5").contextWindow, 500_000);
+  assert.equal(settings.getProviderModelDefaults("xai", "grok-3").contextWindow, 131_072);
+  assert.equal(settings.getProviderModelDefaults("xai", "grok-code-fast-1").contextWindow, 32_768);
+  // 目录未收录的模型仍吃 Codex 系兜底窗口。
+  assert.equal(settings.getProviderModelDefaults("xai", "grok-unknown").contextWindow, 258_000);
+});

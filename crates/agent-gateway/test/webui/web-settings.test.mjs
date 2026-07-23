@@ -1575,3 +1575,12 @@ test("web right dock migrates the legacy tabs shape", () => {
   assert.deepEqual(project.tabOrder, ["sess-1", RIGHT_DOCK_TAB_IDS.fileTree]);
   assert.equal(project.activeTabId, "sess-1");
 });
+
+test("xai model limits use the pi-ai xai catalog without changing thinking detection", () => {
+  assert.equal(settings.getProviderModelDefaults("xai", "grok-4.5").contextWindow, 500_000);
+  assert.equal(settings.getProviderModelDefaults("xai", "grok-3").contextWindow, 131_072);
+  assert.equal(settings.getProviderModelDefaults("xai", "grok-unknown").contextWindow, 258_000);
+  // 思考档位检测刻意不吃 xai 目录（其 compat 反映 pi-ai completions 路径）：
+  // grok 仍按可推理的自定义模型给标准档位。
+  assert.ok(settings.getKnownModelThinkingLevels("xai", "grok-4.5").includes("high"));
+});

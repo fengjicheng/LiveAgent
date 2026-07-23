@@ -1043,7 +1043,11 @@ export function normalizeRemoteSettings(input: unknown): RemoteSettings {
 }
 
 function toKnownProvider(providerId: ProviderId): KnownProvider {
-  if (providerId === "codex" || providerId === "xai") return "openai";
+  if (providerId === "codex") return "openai";
+  // pi-ai 自带 xai 目录（grok 真实窗口差异极大：grok-4.5=500K、grok-3=131K、
+  // grok-code-fast-1=32K），限额回查必须走它，不能落到 openai 目录查不到后
+  // 吃统一兜底值。
+  if (providerId === "xai") return "xai";
   if (providerId === "gemini") return "google";
   return "anthropic";
 }
