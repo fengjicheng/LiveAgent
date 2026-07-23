@@ -573,6 +573,7 @@ pub fn app_restart(app: AppHandle) -> Result<(), String> {
     // (sync command, main thread), so the exit-path cleanup must run here or
     // non-isolated managed processes leak across every update restart.
     use tauri::Manager;
+    use tauri_plugin_window_state::AppHandleExt;
     if let Some(registry) =
         app.try_state::<std::sync::Arc<crate::runtime::managed_process::ManagedProcessRegistry>>()
     {
@@ -582,6 +583,9 @@ pub fn app_restart(app: AppHandle) -> Result<(), String> {
         app.try_state::<std::sync::Arc<crate::services::power_activity::PowerActivityManager>>()
     {
         power.clear_all();
+    }
+    if let Err(error) = app.save_window_state(crate::WINDOW_STATE_FLAGS) {
+        eprintln!("failed to save window state before restart: {error}");
     }
     app.restart();
 }

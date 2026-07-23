@@ -13,6 +13,13 @@ use tauri::Manager;
 use tauri::WindowEvent;
 
 const MAIN_WINDOW_LABEL: &str = "main";
+// Only size + maximized are persisted: POSITION would fight multi-monitor
+// layouts we don't manage, VISIBLE would re-show a tray-hidden window on
+// startup, and DECORATIONS would override the per-platform window chrome
+// (Windows runs undecorated with custom chrome).
+pub(crate) const WINDOW_STATE_FLAGS: tauri_plugin_window_state::StateFlags =
+    tauri_plugin_window_state::StateFlags::SIZE
+        .union(tauri_plugin_window_state::StateFlags::MAXIMIZED);
 const TRAY_SHOW_ID: &str = "tray-show";
 const TRAY_QUIT_ID: &str = "tray-quit";
 const TRAY_DOUBLE_CLICK_INTERVAL_MS: u64 = 500;
@@ -495,6 +502,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_mcp_bridge::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(WINDOW_STATE_FLAGS)
+                .build(),
+        )
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
