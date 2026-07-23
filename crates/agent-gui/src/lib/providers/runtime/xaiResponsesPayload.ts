@@ -58,10 +58,7 @@ export function isXaiDirectBaseUrl(baseUrl: string | undefined): boolean {
   }
 }
 
-export function isXaiProviderTarget(params: {
-  providerId: ProviderId;
-  baseUrl?: string;
-}): boolean {
+export function isXaiProviderTarget(params: { providerId: ProviderId; baseUrl?: string }): boolean {
   return params.providerId === "xai" || isXaiDirectBaseUrl(params.baseUrl);
 }
 

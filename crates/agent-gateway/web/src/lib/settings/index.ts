@@ -1412,10 +1412,7 @@ export function normalizeCustomProvider(input: unknown): CustomProvider {
   const type = normalizeProviderId(obj.type);
   const codexRouting =
     type === "codex" || type === "xai"
-      ? normalizeCodexRouting(
-          obj.baseUrl,
-          type === "xai" ? "openai-responses" : obj.requestFormat,
-        )
+      ? normalizeCodexRouting(obj.baseUrl, type === "xai" ? "openai-responses" : obj.requestFormat)
       : undefined;
   const models = normalizeProviderModelConfigs(obj.models, type);
   const modelOrder = normalizeProviderModelOrder(obj.modelOrder, models);

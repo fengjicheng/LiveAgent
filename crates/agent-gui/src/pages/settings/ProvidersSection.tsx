@@ -1891,8 +1891,7 @@ function providerFromCherry(
           : undefined,
     reasoning: existing?.reasoning ?? "off",
     promptCachingEnabled:
-      existing?.promptCachingEnabled ??
-      (providerType !== "gemini" && providerType !== "xai"),
+      existing?.promptCachingEnabled ?? (providerType !== "gemini" && providerType !== "xai"),
     nativeWebSearchEnabled: existing?.nativeWebSearchEnabled ?? true,
     useSystemProxy: existing?.useSystemProxy ?? false,
   };
