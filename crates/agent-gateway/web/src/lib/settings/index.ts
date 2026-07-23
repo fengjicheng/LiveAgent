@@ -1164,13 +1164,27 @@ function getKnownModelLimits(
   return { contextWindow: known.contextWindow, maxOutputToken: known.maxTokens };
 }
 
-export function getKnownModelThinkingLevels(
-  providerId: ProviderId,
-  modelId: string | undefined,
-): ReasoningLevel[] {
-  const trimmedId = modelId?.trim();
-  if (!trimmedId) return [];
+// Grok / xAI 思考档：与桌面端 modelFactory 的 XAI_THINKING_LEVEL_MAP 手动同步
+// （off:null=思考恒开，max 不暴露）。桌面端对 xai 的所有模型（目录内外）一律
+// 盖这份映射，web 侧同样无条件应用，否则跨端钳制会把桌面设置的 xhigh 压回 high。
+const XAI_THINKING_LEVEL_MAP = {
+  off: null,
+  minimal: "low",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "xhigh",
+} as const;
+
+function resolveThinkingModel(providerId: ProviderId, trimmedId: string) {
+  if (providerId === "xai") {
+    return {
+      reasoning: true,
+      thinkingLevelMap: XAI_THINKING_LEVEL_MAP,
+    } as Parameters<typeof getSupportedThinkingLevels>[0];
+  }
   const known = findKnownModelForThinking(providerId, trimmedId);
+  if (known) return known;
   // 目录之外的自定义模型（deepseek/glm 等三方聚合）无法从 id 判断推理能力，
   // 与桌面端 modelFactory 自定义分支一致按可推理处理：标准档位，xhigh/max
   // 仍需目录 opt-in；deepseek 走 codex 时镜像桌面端 DeepSeek 适配层的 xhigh 档，
@@ -1181,12 +1195,19 @@ export function getKnownModelThinkingLevels(
       : toKnownProvider(providerId) === "anthropic"
         ? deriveAnthropicThinkingLevelMapForCustomModel(trimmedId)
         : undefined;
-  const model =
-    known ??
-    ({
-      reasoning: true,
-      ...(customThinkingLevelMap ? { thinkingLevelMap: customThinkingLevelMap } : {}),
-    } as Parameters<typeof getSupportedThinkingLevels>[0]);
+  return {
+    reasoning: true,
+    ...(customThinkingLevelMap ? { thinkingLevelMap: customThinkingLevelMap } : {}),
+  } as Parameters<typeof getSupportedThinkingLevels>[0];
+}
+
+export function getKnownModelThinkingLevels(
+  providerId: ProviderId,
+  modelId: string | undefined,
+): ReasoningLevel[] {
+  const trimmedId = modelId?.trim();
+  if (!trimmedId) return [];
+  const model = resolveThinkingModel(providerId, trimmedId);
   return getSupportedThinkingLevels(model).filter((level) => level !== "off");
 }
 
@@ -1199,6 +1220,11 @@ export function isThinkingAlwaysOnForModel(
 ): boolean {
   const trimmedId = modelId?.trim();
   if (!trimmedId) return false;
+  // xai 的映射 off:null 意味着思考恒开（与桌面端一致）；其余供应商目录
+  // 未命中时保持可关闭的兜底判定。
+  if (providerId === "xai") {
+    return !getSupportedThinkingLevels(resolveThinkingModel(providerId, trimmedId)).includes("off");
+  }
   const known = findKnownModelForThinking(providerId, trimmedId);
   return known ? !getSupportedThinkingLevels(known).includes("off") : false;
 }
