@@ -17,6 +17,7 @@ pub use crate::services::skills::{
 
 const UPLOADED_IMAGE_PREVIEW_MAX_BYTES: usize = 5 * 1024 * 1024; // 5MB
 const UPLOADED_NATIVE_ATTACHMENT_MAX_BYTES: u64 = 25 * 1024 * 1024; // 25MB
+const UPLOADED_TEXT_TRANSCODE_MAX_BYTES: u64 = 64 * 1024 * 1024; // 64MB，超出则原样落盘不转码
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -292,52 +293,138 @@ fn probe_file_prefix(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String> {
     Ok(buffer)
 }
 
-fn is_probably_utf8_text_file(path: &Path) -> Result<bool, String> {
-    let buffer = probe_file_prefix(path, 32 * 1024)?;
-    if buffer.is_empty() {
-        return Ok(true);
-    }
-    if buffer.contains(&0) {
-        return Ok(false);
-    }
-    let bytes = buffer
-        .strip_prefix(&[0xEF, 0xBB, 0xBF])
-        .unwrap_or(buffer.as_slice());
-    Ok(std::str::from_utf8(bytes).is_ok())
+const UPLOAD_TEXT_PROBE_BYTES: usize = 32 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UploadTextClass {
+    /// 内容是合法 UTF-8（或空文件），可原样使用。
+    Utf8,
+    /// 内容是文本，但采用 GBK/Big5/Shift-JIS/UTF-16 等非 UTF-8 编码；
+    /// 暂存副本需要转码为 UTF-8，否则下游 Read/原生附件内联全是乱码。
+    NeedsTranscode,
+    /// 不是可解析的文本。
+    Binary,
 }
 
-fn is_probably_utf8_text_bytes(bytes: &[u8]) -> bool {
+/// 上传文本判定不能只做严格 UTF-8 校验：中文 Windows 上 .txt 常见 GBK/
+/// UTF-16（记事本"Unicode"），且探测只取前缀，UTF-8 多字节字符被截断
+/// 也会导致严格校验失败——这两类都不是二进制文件。
+fn classify_upload_text_bytes(bytes: &[u8], prefix_truncated: bool) -> UploadTextClass {
     if bytes.is_empty() {
-        return true;
+        return UploadTextClass::Utf8;
+    }
+    // UTF-16 BOM 要先于 NUL 检查：UTF-16 编码的 ASCII 字符必然带 0x00。
+    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+        return UploadTextClass::NeedsTranscode;
     }
     if bytes.contains(&0) {
-        return false;
+        return UploadTextClass::Binary;
     }
-    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-    std::str::from_utf8(bytes).is_ok()
+    let stripped = bytes
+        .strip_prefix(&[0xEF, 0xBB, 0xBF])
+        .unwrap_or(bytes);
+    match std::str::from_utf8(stripped) {
+        Ok(_) => return UploadTextClass::Utf8,
+        Err(error) => {
+            // 探测前缀截断了末尾多字节字符（error_len() == None 表示序列
+            // 不完整而非非法），整个文件仍可能是合法 UTF-8。
+            if prefix_truncated
+                && error.error_len().is_none()
+                && stripped.len() - error.valid_up_to() < 4
+            {
+                return UploadTextClass::Utf8;
+            }
+        }
+    }
+    // 无 NUL 且非 UTF-8：按控制字符占比区分传统编码文本与二进制。
+    // GBK/Big5/Shift-JIS 的多字节序列全部落在 0x80 以上，正文控制字符
+    // 只应出现 \t \n \r（含少量 \x0C 换页、\x1B 转义）。
+    let suspicious = stripped
+        .iter()
+        .filter(|byte| matches!(**byte, 0x01..=0x08 | 0x0B | 0x0E..=0x1A | 0x1C..=0x1F | 0x7F))
+        .count();
+    if suspicious * 32 > stripped.len() {
+        UploadTextClass::Binary
+    } else {
+        UploadTextClass::NeedsTranscode
+    }
 }
 
-fn detect_upload_file_kind(path: &Path) -> Result<&'static str, String> {
+fn classify_upload_text_file(path: &Path) -> Result<UploadTextClass, String> {
+    let buffer = probe_file_prefix(path, UPLOAD_TEXT_PROBE_BYTES)?;
+    let prefix_truncated = buffer.len() == UPLOAD_TEXT_PROBE_BYTES;
+    Ok(classify_upload_text_bytes(&buffer, prefix_truncated))
+}
+
+/// 把非 UTF-8 编码的文本转码为 UTF-8。输入必须是完整文件内容（分类可能
+/// 基于截断前缀，这里先复查完整字节，合法 UTF-8 原样返回）。
+fn transcode_upload_text_to_utf8(bytes: &[u8]) -> Vec<u8> {
+    if bytes.is_empty() || std::str::from_utf8(bytes).is_ok() {
+        return bytes.to_vec();
+    }
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        let (text, _, _) = encoding_rs::UTF_16LE.decode(bytes);
+        return text.into_owned().into_bytes();
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let (text, _, _) = encoding_rs::UTF_16BE.decode(bytes);
+        return text.into_owned().into_bytes();
+    }
+    let mut detector = chardetng::EncodingDetector::new();
+    detector.feed(bytes, true);
+    let encoding = detector.guess(None, true);
+    let (text, _, _) = encoding.decode(bytes);
+    text.into_owned().into_bytes()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DetectedUploadKind {
+    kind: &'static str,
+    /// 仅 kind == "text" 时可能为 true：暂存副本落盘前需转码为 UTF-8。
+    needs_utf8_transcode: bool,
+}
+
+impl DetectedUploadKind {
+    fn plain(kind: &'static str) -> Self {
+        Self {
+            kind,
+            needs_utf8_transcode: false,
+        }
+    }
+
+    fn from_text_class(class: UploadTextClass) -> Option<Self> {
+        match class {
+            UploadTextClass::Utf8 => Some(Self::plain("text")),
+            UploadTextClass::NeedsTranscode => Some(Self {
+                kind: "text",
+                needs_utf8_transcode: true,
+            }),
+            UploadTextClass::Binary => None,
+        }
+    }
+}
+
+fn detect_upload_file_kind(path: &Path) -> Result<DetectedUploadKind, String> {
     if let Some(kind) = infer_image_upload_kind(path) {
-        return Ok(kind);
+        return Ok(DetectedUploadKind::plain(kind));
     }
     if is_pdf_upload(path) {
-        return Ok("pdf");
+        return Ok(DetectedUploadKind::plain("pdf"));
     }
     if is_notebook_upload(path) {
-        return Ok("notebook");
+        return Ok(DetectedUploadKind::plain("notebook"));
     }
     if is_word_upload(path) {
-        return Ok("word");
+        return Ok(DetectedUploadKind::plain("word"));
     }
     if is_spreadsheet_upload(path) {
-        return Ok("spreadsheet");
+        return Ok(DetectedUploadKind::plain("spreadsheet"));
     }
     if is_archive_upload(path) {
-        return Ok("archive");
+        return Ok(DetectedUploadKind::plain("archive"));
     }
-    if is_probably_utf8_text_file(path)? {
-        return Ok("text");
+    if let Some(detected) = DetectedUploadKind::from_text_class(classify_upload_text_file(path)?) {
+        return Ok(detected);
     }
     Err(format!(
         "{} 不是当前 Read 支持解析的文本/图片/PDF/notebook/Word/Excel/压缩包文件",
@@ -349,7 +436,7 @@ fn detect_uploaded_bytes_kind(
     file_name: &str,
     mime_type: Option<&str>,
     bytes: &[u8],
-) -> Result<&'static str, String> {
+) -> Result<DetectedUploadKind, String> {
     let path = Path::new(file_name);
     let normalized_mime = mime_type
         .map(str::trim)
@@ -361,28 +448,30 @@ fn detect_uploaded_bytes_kind(
         .map(|value| value.starts_with("image/"))
         .unwrap_or(false)
     {
-        return Ok("image");
+        return Ok(DetectedUploadKind::plain("image"));
     }
     if let Some(kind) = infer_image_upload_kind(path) {
-        return Ok(kind);
+        return Ok(DetectedUploadKind::plain(kind));
     }
     if normalized_mime.as_deref() == Some("application/pdf") || is_pdf_upload(path) {
-        return Ok("pdf");
+        return Ok(DetectedUploadKind::plain("pdf"));
     }
     if is_notebook_upload(path) {
-        return Ok("notebook");
+        return Ok(DetectedUploadKind::plain("notebook"));
     }
     if is_word_upload(path) || is_word_upload_mime(mime_type) {
-        return Ok("word");
+        return Ok(DetectedUploadKind::plain("word"));
     }
     if is_spreadsheet_upload(path) || is_spreadsheet_upload_mime(mime_type) {
-        return Ok("spreadsheet");
+        return Ok(DetectedUploadKind::plain("spreadsheet"));
     }
     if is_archive_upload(path) || is_archive_upload_mime(mime_type) {
-        return Ok("archive");
+        return Ok(DetectedUploadKind::plain("archive"));
     }
-    if is_probably_utf8_text_bytes(bytes) {
-        return Ok("text");
+    if let Some(detected) =
+        DetectedUploadKind::from_text_class(classify_upload_text_bytes(bytes, false))
+    {
+        return Ok(detected);
     }
 
     Err(format!(
@@ -840,8 +929,8 @@ fn import_readable_file_paths_into_workdir(
             continue;
         }
 
-        let kind = match detect_upload_file_kind(&source) {
-            Ok(kind) => kind,
+        let detected = match detect_upload_file_kind(&source) {
+            Ok(detected) => detected,
             Err(message) => {
                 skipped.push(message);
                 continue;
@@ -849,7 +938,10 @@ fn import_readable_file_paths_into_workdir(
         };
 
         let canonical_source = fs::canonicalize(&source).unwrap_or_else(|_| source.clone());
+        let mut entry_size = metadata.len();
         let destination = if canonical_source.starts_with(workdir) {
+            // 工作区内文件保持原地引用（含非 UTF-8 文本，不改写用户文件）；
+            // 原生附件内联在读取侧转码，见 system_read_uploaded_native_attachment_sync。
             canonical_source
         } else {
             let import_root = match import_root.as_ref() {
@@ -866,21 +958,37 @@ fn import_readable_file_paths_into_workdir(
                 .unwrap_or("file");
             let sanitized_name = sanitize_uploaded_file_name(source_name);
             let target = unique_path_for_copy(import_root.join(sanitized_name));
-            fs::copy(&source, &target).map_err(|e| {
-                format!(
-                    "复制文件到上传暂存区失败 {} -> {}: {e}",
-                    source.display(),
-                    target.display()
-                )
-            })?;
+            if detected.needs_utf8_transcode
+                && metadata.len() <= UPLOADED_TEXT_TRANSCODE_MAX_BYTES
+            {
+                let bytes = fs::read(&source)
+                    .map_err(|e| format!("读取文件失败 {}: {e}", source.display()))?;
+                let utf8 = transcode_upload_text_to_utf8(&bytes);
+                entry_size = utf8.len() as u64;
+                fs::write(&target, &utf8).map_err(|e| {
+                    format!(
+                        "写入上传暂存文件失败 {} -> {}: {e}",
+                        source.display(),
+                        target.display()
+                    )
+                })?;
+            } else {
+                fs::copy(&source, &target).map_err(|e| {
+                    format!(
+                        "复制文件到上传暂存区失败 {} -> {}: {e}",
+                        source.display(),
+                        target.display()
+                    )
+                })?;
+            }
             target
         };
 
         files.push(build_readable_file_entry(
             workdir,
             &destination,
-            kind,
-            metadata.len(),
+            detected.kind,
+            entry_size,
         )?);
     }
 
@@ -917,12 +1025,12 @@ pub(crate) fn system_import_uploaded_readable_files_sync(
             continue;
         }
 
-        let kind = match detect_uploaded_bytes_kind(
+        let detected = match detect_uploaded_bytes_kind(
             source_name,
             upload.mime_type.as_deref(),
             &upload.content,
         ) {
-            Ok(kind) => kind,
+            Ok(detected) => detected,
             Err(message) => {
                 skipped.push(message);
                 continue;
@@ -938,16 +1046,24 @@ pub(crate) fn system_import_uploaded_readable_files_sync(
             }
         };
 
+        let content = if detected.needs_utf8_transcode
+            && upload.content.len() as u64 <= UPLOADED_TEXT_TRANSCODE_MAX_BYTES
+        {
+            transcode_upload_text_to_utf8(&upload.content)
+        } else {
+            upload.content
+        };
+
         let sanitized_name = sanitize_uploaded_file_name(source_name);
         let target = unique_path_for_copy(import_root.join(sanitized_name));
-        fs::write(&target, &upload.content)
+        fs::write(&target, &content)
             .map_err(|e| format!("写入上传文件失败 {}: {e}", target.display()))?;
 
         files.push(build_readable_file_entry(
             &workdir,
             &target,
-            kind,
-            upload.content.len() as u64,
+            detected.kind,
+            content.len() as u64,
         )?);
     }
 
@@ -1041,11 +1157,20 @@ pub(crate) fn system_read_uploaded_native_attachment_sync(
         ));
     }
     let bytes = fs::read(&target).map_err(|e| format!("读取附件失败 {}: {e}", target.display()))?;
+    // 文本类附件必须以 UTF-8 内联：工作区内原地引用的文件可能是 GBK/UTF-16
+    // 等编码（导入时不改写用户文件），JS 侧 decodeBase64Utf8 与各家 API 都按
+    // UTF-8 解读 text/plain，这里在读取侧转码。
+    let bytes = if kind.as_deref() == Some("text") {
+        transcode_upload_text_to_utf8(&bytes)
+    } else {
+        bytes
+    };
+    let size_bytes = bytes.len() as u64;
 
     Ok(SystemUploadedNativeAttachmentResponse {
         mime_type: infer_native_attachment_mime(&target, kind.as_deref()),
         data: BASE64_STANDARD.encode(bytes),
-        size_bytes: metadata.len(),
+        size_bytes,
     })
 }
 
@@ -1903,7 +2028,8 @@ mod tests {
                 Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
                 b"not validated here",
             )
-            .expect("docx should be accepted"),
+            .expect("docx should be accepted")
+            .kind,
             "word"
         );
         assert_eq!(
@@ -1912,18 +2038,207 @@ mod tests {
                 Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
                 b"not validated here",
             )
-            .expect("xlsx should be accepted"),
+            .expect("xlsx should be accepted")
+            .kind,
             "spreadsheet"
         );
         assert_eq!(
             detect_uploaded_bytes_kind("bundle.tar.gz", Some("application/gzip"), b"gzip")
-                .expect("tar.gz should be accepted"),
+                .expect("tar.gz should be accepted")
+                .kind,
             "archive"
         );
         assert_eq!(
             detect_uploaded_bytes_kind("assets.7z", Some("application/x-7z-compressed"), b"7z")
-                .expect("7z should be accepted"),
+                .expect("7z should be accepted")
+                .kind,
             "archive"
         );
+    }
+
+    /// "中文测试文本" 的 GBK 编码字节。
+    fn gbk_sample(repeat: usize) -> Vec<u8> {
+        let unit: &[u8] = &[
+            0xD6, 0xD0, 0xCE, 0xC4, 0xB2, 0xE2, 0xCA, 0xD4, 0xCE, 0xC4, 0xB1, 0xBE,
+        ];
+        unit.repeat(repeat)
+    }
+
+    #[test]
+    fn classify_upload_text_bytes_accepts_legacy_encodings() {
+        assert_eq!(
+            classify_upload_text_bytes("你好".as_bytes(), false),
+            UploadTextClass::Utf8
+        );
+        assert_eq!(
+            classify_upload_text_bytes(&[0xEF, 0xBB, 0xBF, b'h', b'i'], false),
+            UploadTextClass::Utf8
+        );
+        assert_eq!(
+            classify_upload_text_bytes(&gbk_sample(4), false),
+            UploadTextClass::NeedsTranscode
+        );
+        // UTF-16LE BOM + "你好"：ASCII 之外也不能被 NUL 检查误杀。
+        assert_eq!(
+            classify_upload_text_bytes(&[0xFF, 0xFE, 0x60, 0x4F, 0x7D, 0x59], false),
+            UploadTextClass::NeedsTranscode
+        );
+        assert_eq!(
+            classify_upload_text_bytes(&[0x00, 0x01, 0x02, 0x03], false),
+            UploadTextClass::Binary
+        );
+        // 非 UTF-8 且控制字符占比高：判二进制而不是待转码文本。
+        assert_eq!(
+            classify_upload_text_bytes(&[0x80, 0x01, 0x02, 0x81, 0x03, 0x04, 0x82, 0x05], false),
+            UploadTextClass::Binary
+        );
+    }
+
+    #[test]
+    fn classify_upload_text_bytes_tolerates_truncated_utf8_tail() {
+        // 模拟 32KiB 探测边界切断多字节字符：完整 UTF-8 文本在截断前缀上
+        // 也必须判为 UTF-8 文本，而不是二进制或待转码。
+        let mut prefix = vec![b'a'; 16];
+        prefix.extend_from_slice(&"界".as_bytes()[..2]);
+        assert_eq!(
+            classify_upload_text_bytes(&prefix, true),
+            UploadTextClass::Utf8
+        );
+        // 非截断场景下同样的字节仍是非法 UTF-8 → 走待转码分类。
+        assert_eq!(
+            classify_upload_text_bytes(&prefix, false),
+            UploadTextClass::NeedsTranscode
+        );
+    }
+
+    #[test]
+    fn classify_upload_text_file_tolerates_probe_boundary_split() {
+        let temp = tempdir().expect("create temp dir");
+        let path = temp.path().join("large-utf8.txt");
+        // 让一个三字节汉字恰好跨越 32KiB 探测边界。
+        let mut content = vec![b'a'; UPLOAD_TEXT_PROBE_BYTES - 1];
+        content.extend_from_slice("界界界".as_bytes());
+        fs::write(&path, &content).expect("write large utf8 file");
+
+        assert_eq!(
+            classify_upload_text_file(&path).expect("classify large utf8 file"),
+            UploadTextClass::Utf8
+        );
+        assert_eq!(
+            detect_upload_file_kind(&path)
+                .expect("large utf8 txt must stay text")
+                .kind,
+            "text"
+        );
+    }
+
+    #[test]
+    fn transcode_upload_text_handles_gbk_and_utf16() {
+        let gbk = gbk_sample(4);
+        let transcoded = transcode_upload_text_to_utf8(&gbk);
+        assert_eq!(
+            String::from_utf8(transcoded).expect("transcoded output must be utf8"),
+            "中文测试文本".repeat(4)
+        );
+
+        let utf16le = [0xFF, 0xFE, 0x60, 0x4F, 0x7D, 0x59];
+        assert_eq!(
+            String::from_utf8(transcode_upload_text_to_utf8(&utf16le)).expect("utf16 to utf8"),
+            "你好"
+        );
+
+        // 合法 UTF-8 原样返回（分类可能来自截断前缀的误报）。
+        let utf8 = "中文测试文本".as_bytes();
+        assert_eq!(transcode_upload_text_to_utf8(utf8), utf8);
+    }
+
+    #[test]
+    fn import_uploaded_gbk_text_is_transcoded_to_utf8() {
+        let temp = tempdir().expect("create temp dir");
+        let workdir = temp.path().join("workspace");
+        fs::create_dir_all(&workdir).expect("create workdir");
+
+        let response = system_import_uploaded_readable_files_sync(
+            workdir.to_string_lossy().into_owned(),
+            vec![SystemReadableFileUploadInput {
+                file_name: "gbk-notes.txt".to_string(),
+                mime_type: Some("text/plain".to_string()),
+                content: gbk_sample(8),
+            }],
+        )
+        .expect("import gbk upload");
+
+        assert!(
+            response.skipped.is_empty(),
+            "skipped = {:?}",
+            response.skipped
+        );
+        assert_eq!(response.files.len(), 1);
+        assert_eq!(response.files[0].kind, "text");
+        let staged =
+            fs::read_to_string(&response.files[0].absolute_path).expect("staged copy must be utf8");
+        assert_eq!(staged, "中文测试文本".repeat(8));
+        assert_eq!(response.files[0].size_bytes, staged.len() as u64);
+
+        if let Some(parent) = Path::new(&response.files[0].absolute_path).parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+    }
+
+    #[test]
+    fn import_external_gbk_file_path_is_transcoded_to_utf8() {
+        let temp = tempdir().expect("create temp dir");
+        let workdir = temp.path().join("workspace");
+        let external = temp.path().join("external");
+        fs::create_dir_all(&workdir).expect("create workdir");
+        fs::create_dir_all(&external).expect("create external dir");
+        let source = external.join("gbk-notes.txt");
+        fs::write(&source, gbk_sample(8)).expect("write gbk source");
+
+        let response = system_import_readable_file_paths_sync(
+            workdir.to_string_lossy().into_owned(),
+            vec![source.to_string_lossy().into_owned()],
+            None,
+        )
+        .expect("import gbk file path");
+
+        assert!(
+            response.skipped.is_empty(),
+            "skipped = {:?}",
+            response.skipped
+        );
+        assert_eq!(response.files.len(), 1);
+        assert_eq!(response.files[0].kind, "text");
+        let staged =
+            fs::read_to_string(&response.files[0].absolute_path).expect("staged copy must be utf8");
+        assert_eq!(staged, "中文测试文本".repeat(8));
+        // 原始文件保持原样，不被改写。
+        assert_eq!(fs::read(&source).expect("read source"), gbk_sample(8));
+
+        if let Some(parent) = Path::new(&response.files[0].absolute_path).parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+    }
+
+    #[test]
+    fn read_uploaded_native_attachment_transcodes_legacy_text() {
+        let temp = tempdir().expect("create temp dir");
+        let workdir = temp.path().join("workspace");
+        fs::create_dir_all(&workdir).expect("create workdir");
+        // 工作区内原地引用的 GBK 文件：导入时不改写，内联读取时转码。
+        let inside = workdir.join("legacy.txt");
+        fs::write(&inside, gbk_sample(8)).expect("write gbk workspace file");
+
+        let response = system_read_uploaded_native_attachment_sync(
+            workdir.to_string_lossy().into_owned(),
+            Some(inside.to_string_lossy().into_owned()),
+            Some("text".to_string()),
+        )
+        .expect("read gbk native attachment");
+
+        assert_eq!(response.mime_type, "text/plain");
+        let expected = "中文测试文本".repeat(8);
+        assert_eq!(response.data, BASE64_STANDARD.encode(expected.as_bytes()));
+        assert_eq!(response.size_bytes, expected.len() as u64);
     }
 }
