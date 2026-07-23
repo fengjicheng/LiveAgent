@@ -366,6 +366,17 @@ impl GatewayController {
                     ssh_tabs: None,
                 })
             }
+            "ssh_reconnect" => {
+                self.ensure_terminal_session_in_project(
+                    &request.session_id,
+                    &request.project_path_key,
+                )?;
+                let session = self
+                    .terminal_registry
+                    .ssh_reconnect(request.session_id)
+                    .await?;
+                Ok(terminal_record_response_to_proto(action, session))
+            }
             "cancel_ssh_prompt" => {
                 self.terminal_registry
                     .cancel_ssh_prompt(request.prompt_id)?;
@@ -488,7 +499,8 @@ impl GatewayController {
                     Err("web terminal is disabled in desktop Remote settings".to_string())
                 }
             }
-            "attach" | "input" | "resize" | "rename" | "close" | "ssh_latency" => {
+            "attach" | "input" | "resize" | "rename" | "close" | "ssh_latency"
+            | "ssh_reconnect" => {
                 let session = self
                     .terminal_registry
                     .session_record(request.session_id.trim().to_string())?;

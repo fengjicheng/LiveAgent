@@ -98,6 +98,9 @@
     "lib/mcpRegistry/index.ts",
     "lib/shared/id.ts",
     "pages/settings/SystemToolsSection.tsx",
+    "pages/settings/SshSection.tsx",
+    "lib/terminal/types.ts",
+    "components/ui/confirm-dialog.tsx",
     "pages/mcp-hub/McpHubPage.tsx",
     "pages/mcp-hub/McpImportView.tsx"
   ]

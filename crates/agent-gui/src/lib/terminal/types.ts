@@ -161,6 +161,7 @@ export type TerminalClient = {
     trustHostKey?: boolean;
   }): Promise<TerminalSshCreateResult>;
   cancelSshPrompt(promptId: string): Promise<void>;
+  sshReconnect(sessionId: string, projectPathKey?: string): Promise<TerminalSession>;
   sshLatency(sessionId: string, projectPathKey?: string): Promise<TerminalSshLatency>;
   listSshTerminalTabs(projectPathKey: string): Promise<SshTerminalTabsSnapshot>;
   openSshTerminalTab(params: {

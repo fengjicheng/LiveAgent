@@ -58,7 +58,7 @@ func TerminalEventAllowed(sm session.AgentView, event *gatewayv2.TerminalEvent) 
 func TerminalRequestAllowed(sm session.AgentView, action string, sessionID string) bool {
 	switch action {
 	case "create_ssh", "answer_ssh_prompt", "cancel_ssh_prompt", "ssh_latency",
-		"ssh_tabs_list", "ssh_tab_open", "ssh_tab_close":
+		"ssh_reconnect", "ssh_tabs_list", "ssh_tab_open", "ssh_tab_close":
 		return sm.WebSshTerminalEnabled()
 	case "list", "close_project":
 		return sm.WebTerminalEnabled() || sm.WebSshTerminalEnabled()
@@ -76,7 +76,7 @@ func TerminalRequestAllowed(sm session.AgentView, action string, sessionID strin
 func TerminalPermissionError(action string) string {
 	switch action {
 	case "create_ssh", "answer_ssh_prompt", "cancel_ssh_prompt", "ssh_latency",
-		"ssh_tabs_list", "ssh_tab_open", "ssh_tab_close":
+		"ssh_reconnect", "ssh_tabs_list", "ssh_tab_open", "ssh_tab_close":
 		return "web SSH terminal is disabled in desktop Remote settings"
 	default:
 		return "web terminal is disabled in desktop Remote settings"

@@ -2188,6 +2188,17 @@ export class GatewayWebSocketClient {
     });
   }
 
+  async reconnectSshTerminal(sessionId: string, projectPathKey?: string): Promise<TerminalSession> {
+    const response = await this.request<RawTerminalResponse>("terminal.ssh_reconnect", {
+      session_id: sessionId,
+      project_path_key: projectPathKey,
+    });
+    if (!response.session) {
+      throw new Error("Terminal response did not include a session");
+    }
+    return normalizeTerminalSession(response.session);
+  }
+
   async sshTerminalLatency(
     sessionId: string,
     projectPathKey?: string,
@@ -3587,6 +3598,7 @@ export type GatewayWebSocketClientLike = {
     trustHostKey?: boolean;
   }): Promise<TerminalSshCreateResult>;
   cancelSshTerminalPrompt(promptId: string): Promise<void>;
+  reconnectSshTerminal(sessionId: string, projectPathKey?: string): Promise<TerminalSession>;
   sshTerminalLatency(sessionId: string, projectPathKey?: string): Promise<TerminalSshLatency>;
   listSshTerminalTabs(projectPathKey: string): Promise<SshTerminalTabsSnapshot>;
   openSshTerminalTab(params: {

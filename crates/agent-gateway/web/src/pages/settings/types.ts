@@ -28,4 +28,5 @@ export type SettingsPageProps = {
 export type SettingsSectionProps = {
   settings: AppSettings;
   setSettings: SetSettingsFn;
+  saveState?: WebSettingsSaveState;
 };

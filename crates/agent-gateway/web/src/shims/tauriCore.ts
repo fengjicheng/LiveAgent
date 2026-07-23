@@ -345,6 +345,22 @@ export async function invoke<T>(command: string, args?: Record<string, unknown>)
         port,
       })) as T;
     }
+    case "terminal_list":
+      return {
+        sessions: await getGatewayWebSocketClient(loadToken().trim()).listTerminals(
+          typeof args?.project_path_key === "string" ? args.project_path_key : undefined,
+        ),
+      } as T;
+    case "terminal_close":
+      return (await getGatewayWebSocketClient(loadToken().trim()).closeTerminal(
+        String(args?.session_id ?? ""),
+        typeof args?.project_path_key === "string" ? args.project_path_key : undefined,
+      )) as T;
+    case "terminal_ssh_reconnect":
+      return (await getGatewayWebSocketClient(loadToken().trim()).reconnectSshTerminal(
+        String(args?.session_id ?? ""),
+        typeof args?.project_path_key === "string" ? args.project_path_key : undefined,
+      )) as T;
     case "system_http_get_test":
       return {
         url: `${window.location.origin}/api/status`,

@@ -14,6 +14,7 @@ export type ConfirmDialogOptions = {
   cancelLabel: string;
   closeLabel?: string;
   tone?: ConfirmDialogTone;
+  hideCancel?: boolean;
 };
 
 type PendingConfirmDialog = ConfirmDialogOptions & {
@@ -49,6 +50,7 @@ function ConfirmDialog(
     cancelLabel,
     closeLabel = cancelLabel,
     tone = "destructive",
+    hideCancel = false,
     onCancel,
     onConfirm,
   } = props;
@@ -118,13 +120,20 @@ function ConfirmDialog(
             ) : null}
 
             <div className="flex flex-col-reverse gap-2 border-t border-border/60 bg-muted/20 px-5 py-4 sm:flex-row sm:justify-end">
-              <AlertDialog.Close
-                render={
-                  <Button type="button" variant="outline" autoFocus className="w-full sm:w-auto" />
-                }
-              >
-                {cancelLabel}
-              </AlertDialog.Close>
+              {hideCancel ? null : (
+                <AlertDialog.Close
+                  render={
+                    <Button
+                      type="button"
+                      variant="outline"
+                      autoFocus
+                      className="w-full sm:w-auto"
+                    />
+                  }
+                >
+                  {cancelLabel}
+                </AlertDialog.Close>
+              )}
               <Button
                 type="button"
                 variant="destructive"
@@ -178,6 +187,7 @@ export function useConfirmDialog() {
       cancelLabel={pending.cancelLabel}
       closeLabel={pending.closeLabel}
       tone={pending.tone}
+      hideCancel={pending.hideCancel}
       onCancel={() => close(false)}
       onConfirm={() => close(true)}
     />

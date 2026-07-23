@@ -207,6 +207,69 @@ fn insert_test_ssh_session(
         .insert(id.to_string(), entry);
 }
 
+fn block_on_test<F: std::future::Future>(future: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build test runtime")
+        .block_on(future)
+}
+
+fn test_ssh_runtime(registry: &TerminalSessionRegistry, id: &str) -> Arc<SshSessionRuntime> {
+    let entry = registry.entry(id).expect("terminal session entry");
+    let TerminalSessionBackend::Ssh { runtime } = &entry.backend else {
+        panic!("expected ssh backend");
+    };
+    Arc::clone(runtime)
+}
+
+#[test]
+fn ssh_reconnect_rejects_missing_session() {
+    let registry = Arc::new(TerminalSessionRegistry::default());
+
+    let result = block_on_test(registry.ssh_reconnect("missing".to_string()));
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn ssh_reconnect_rejects_closing_session() {
+    let registry = Arc::new(TerminalSessionRegistry::default());
+    insert_test_ssh_session(
+        &registry,
+        "ssh-1",
+        "/tmp/project",
+        false,
+        SSH_STATUS_CONNECTED,
+    );
+    test_ssh_runtime(&registry, "ssh-1").close();
+
+    let result = block_on_test(registry.ssh_reconnect("ssh-1".to_string()));
+
+    assert_eq!(result.unwrap_err(), "SSH session is closing");
+}
+
+#[test]
+fn ssh_reconnect_rejects_concurrent_reconnect_runner() {
+    let registry = Arc::new(TerminalSessionRegistry::default());
+    insert_test_ssh_session(
+        &registry,
+        "ssh-1",
+        "/tmp/project",
+        false,
+        SSH_STATUS_RECONNECTING,
+    );
+    let runtime = test_ssh_runtime(&registry, "ssh-1");
+    assert!(runtime.begin_reconnect_runner());
+
+    let result = block_on_test(registry.ssh_reconnect("ssh-1".to_string()));
+
+    assert_eq!(result.unwrap_err(), "SSH reconnect already in progress");
+    // The rejected call must not release the flag owned by the active runner.
+    runtime.finish_reconnect_runner();
+    assert!(runtime.begin_reconnect_runner());
+}
+
 fn test_stream_payload(start_offset: u64, bytes: &[u8]) -> TerminalStreamEventPayload {
     TerminalStreamEventPayload {
         kind: "output".to_string(),
