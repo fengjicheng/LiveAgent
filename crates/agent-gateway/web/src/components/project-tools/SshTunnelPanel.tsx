@@ -226,6 +226,9 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
   const [createSftpEnabled, setCreateSftpEnabled] = useState(false);
   const [creating, setCreating] = useState(false);
   const [closingSessionIds, setClosingSessionIds] = useState<ReadonlySet<string>>(new Set());
+  const [reconnectingSessionIds, setReconnectingSessionIds] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
   // Create-page failures and list-page failures surface in their own views;
   // a close error must not appear under the create form and vice versa.
   const [createError, setCreateError] = useState<string | null>(null);
@@ -555,6 +558,102 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
         );
     },
     [client, closingSessionIds, onSessionClosed, requestCloseSessionConfirm, t],
+  );
+
+  // keyboard-interactive hosts cannot re-authenticate inside the reconnect
+  // path (it has no prompt channel) — the fallback is a fresh create, which
+  // owns the full host-key/auth prompt flow.
+  const recreateSessionForKbi = useCallback(
+    async (session: TerminalSession) => {
+      const hostId = session.ssh?.hostId ?? "";
+      if (!hostId) return;
+      try {
+        await client.close(session.id, session.projectPathKey);
+        onSessionClosed(session.id);
+      } catch (err) {
+        if (isTerminalSessionNotFoundError(err)) {
+          onSessionClosed(session.id);
+        } else {
+          setListError(errorMessage(err));
+          return;
+        }
+      }
+      pendingCreateRef.current = { hostId, promptId: null };
+      try {
+        const result = await client.createSsh({
+          cwd: session.cwd || cwd,
+          projectPathKey: session.projectPathKey || projectPathKey,
+          hostId,
+          title: session.title.trim() || undefined,
+          sftpEnabled: session.ssh?.sftpEnabled ?? false,
+        });
+        if (result.prompt) {
+          const pending = pendingCreateRef.current;
+          if (pending && pending.hostId === hostId) {
+            pendingCreateRef.current = { ...pending, promptId: result.prompt.id };
+            setPrompt(result.prompt);
+            setPromptAnswer("");
+            setView("list");
+          } else {
+            void client.cancelSshPrompt(result.prompt.id).catch(() => undefined);
+          }
+          return;
+        }
+        if (result.snapshot) {
+          onSessionSnapshot(result.snapshot);
+        }
+      } catch (err) {
+        pendingCreateRef.current = null;
+        setListError(errorMessage(err));
+      }
+    },
+    [client, cwd, onSessionClosed, onSessionSnapshot, projectPathKey],
+  );
+
+  const handleReconnectSession = useCallback(
+    async (session: TerminalSession) => {
+      if (reconnectingSessionIds.has(session.id) || closingSessionIds.has(session.id)) return;
+      setReconnectingSessionIds((current) => new Set(current).add(session.id));
+      setListError(null);
+      try {
+        await client.sshReconnect(session.id, session.projectPathKey);
+      } catch (err) {
+        const message = errorMessage(err);
+        if (message.includes("already in progress")) {
+          // The automatic reconnect loop owns the session right now; every
+          // attempt re-reads the saved settings, so nothing else to do.
+        } else if (message.includes("keyboard-interactive")) {
+          const recreate = await requestCloseSessionConfirm({
+            title: t("projectTools.sshTunnelReconnectKbiTitle"),
+            subtitle: t("projectTools.sshTunnelReconnectKbiDesc"),
+            detail: sessionEndpointLabel(session),
+            confirmLabel: t("projectTools.sshTunnelReconnectKbiConfirm"),
+            cancelLabel: t("projectTools.closeSshSessionCancel"),
+            tone: "warning",
+          });
+          if (recreate) {
+            await recreateSessionForKbi(session);
+          }
+        } else {
+          setListError(message);
+        }
+      } finally {
+        setReconnectingSessionIds((current) => {
+          if (!current.has(session.id)) return current;
+          const next = new Set(current);
+          next.delete(session.id);
+          return next;
+        });
+      }
+    },
+    [
+      client,
+      closingSessionIds,
+      reconnectingSessionIds,
+      recreateSessionForKbi,
+      requestCloseSessionConfirm,
+      t,
+    ],
   );
 
   const listActive = view === "list";
@@ -1058,6 +1157,9 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
                 const endpoint = sessionEndpointLabel(session);
                 const projectLabel = sessionProjectLabel(session);
                 const closing = closingSessionIds.has(session.id);
+                const reconnecting =
+                  reconnectingSessionIds.has(session.id) ||
+                  sshSessionStatus(session) === "reconnecting";
                 const sshStatus = sshSessionStatus(session);
                 const connected = sshSessionConnected(session);
                 return (
@@ -1127,6 +1229,16 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
                         </span>
                       </div>
                       <div className="flex shrink-0 items-center gap-1.5">
+                        <button
+                          type="button"
+                          className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/60 bg-background/70 text-muted-foreground transition-colors hover:border-amber-500/40 hover:bg-amber-500/10 hover:text-amber-600 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 dark:hover:text-amber-400"
+                          title={t("projectTools.sshTunnelReconnect")}
+                          aria-label={t("projectTools.sshTunnelReconnect")}
+                          disabled={reconnecting || closing}
+                          onClick={() => void handleReconnectSession(session)}
+                        >
+                          <RefreshCw className={cn("h-4 w-4", reconnecting && "animate-spin")} />
+                        </button>
                         <button
                           type="button"
                           className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/60 bg-background/70 text-muted-foreground transition-colors hover:border-emerald-500/40 hover:bg-emerald-500/10 hover:text-emerald-600 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 dark:hover:text-emerald-400"

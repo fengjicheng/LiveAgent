@@ -444,6 +444,11 @@ export const translations: Record<Locale, Record<string, string>> = {
     "projectTools.closeSshSessionContinue": "断开连接",
     "projectTools.closeSshSessionCancel": "取消",
     "projectTools.closeSshSessionClose": "关闭断开确认",
+    "projectTools.sshTunnelReconnect": "重新连接",
+    "projectTools.sshTunnelReconnectKbiTitle": "需要交互式认证",
+    "projectTools.sshTunnelReconnectKbiDesc":
+      "该主机使用交互式认证，无法原地重连。关闭当前会话并新建连接？",
+    "projectTools.sshTunnelReconnectKbiConfirm": "关闭并新建",
     "projectTools.sshTunnelConnected": "已连接",
     "projectTools.sshTunnelReconnecting": "重连中 {attempt}/{max}",
     "projectTools.sshTunnelDisconnected": "已断连",
@@ -746,6 +751,9 @@ export const translations: Record<Locale, Record<string, string>> = {
     "workspaceSshTerminal.title": "SSH 终端",
     "workspaceSshTerminal.empty": "未打开 SSH 连接",
     "workspaceSshTerminal.close": "关闭 SSH 终端",
+    "workspaceSshTerminal.reconnect": "重新连接 SSH",
+    "workspaceSshTerminal.reconnectKbiHint":
+      "该主机使用交互式认证，无法原地重连；请在 SSH 隧道面板中重新连接。",
     "workspaceSshTerminal.closeTab": "关闭 SSH 标签",
     "workspaceSshTerminal.sftpTab": "SFTP",
     "workspaceSftp.local": "本地项目",
@@ -1483,6 +1491,24 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.sshKnownHostResetSuccess": "已清除信任记录，下次连接会重新确认 host key。",
     "settings.sshKnownHostResetEmpty": "没有找到可清除的信任记录。",
     "settings.sshKnownHostResetFailed": "重置信任记录失败：{error}",
+    "settings.sshReconnectPromptTitle": "应用新的 SSH 配置？",
+    "settings.sshReconnectPromptDesc":
+      "该主机有 {count} 个活跃连接仍在使用旧配置。立即重连会中断正在运行的远程程序。",
+    "settings.sshReconnectPromptDetail": "选择「保持旧连接」则新配置将在下次连接或自动重连时生效。",
+    "settings.sshReconnectPromptConfirm": "立即重连 {count} 个会话",
+    "settings.sshReconnectPromptKeep": "保持旧连接",
+    "settings.sshReconnectKbiTitle": "配置已保存",
+    "settings.sshReconnectKbiNotice":
+      "该主机使用交互式认证，已建立的 {count} 个会话无法自动重连；请在 SSH 隧道面板中手动重新连接。",
+    "settings.sshReconnectKbiGotIt": "知道了",
+    "settings.sshReconnectResultSuccess": "已用新配置重连 {count} 个会话。",
+    "settings.sshReconnectResultPartial": "已重连 {reconnected}/{total} 个会话。",
+    "settings.sshReconnectResultKbi": "{count} 个会话需要交互式认证，请在 SSH 隧道面板中重连。",
+    "settings.sshReconnectResultHostKey":
+      "{count} 个会话需确认新的主机指纹，请重置信任记录或新建连接。",
+    "settings.sshReconnectSaveFailed": "设置保存失败，未执行重连。",
+    "settings.sshDeleteActiveWarning":
+      "删除将断开该主机的 {count} 个活跃 SSH 连接，此操作不可撤销。",
     "settings.sshAdvancedSettings": "高级设置",
     "settings.sshAdvancedProxy": "代理",
     "settings.sshProxyType": "代理类型",
@@ -2454,6 +2480,11 @@ export const translations: Record<Locale, Record<string, string>> = {
     "projectTools.closeSshSessionContinue": "Disconnect",
     "projectTools.closeSshSessionCancel": "Cancel",
     "projectTools.closeSshSessionClose": "Close disconnect confirmation",
+    "projectTools.sshTunnelReconnect": "Reconnect",
+    "projectTools.sshTunnelReconnectKbiTitle": "Interactive authentication required",
+    "projectTools.sshTunnelReconnectKbiDesc":
+      "This host uses keyboard-interactive authentication and cannot reconnect in place. Close this session and create a new connection?",
+    "projectTools.sshTunnelReconnectKbiConfirm": "Close and recreate",
     "projectTools.sshTunnelConnected": "Connected",
     "projectTools.sshTunnelReconnecting": "Reconnecting {attempt}/{max}",
     "projectTools.sshTunnelDisconnected": "Disconnected",
@@ -2766,6 +2797,9 @@ export const translations: Record<Locale, Record<string, string>> = {
     "workspaceSshTerminal.title": "SSH Terminal",
     "workspaceSshTerminal.empty": "No SSH connection open",
     "workspaceSshTerminal.close": "Close SSH terminal",
+    "workspaceSshTerminal.reconnect": "Reconnect SSH",
+    "workspaceSshTerminal.reconnectKbiHint":
+      "This host uses keyboard-interactive authentication and cannot reconnect in place; reconnect it from the SSH tunnel panel.",
     "workspaceSshTerminal.closeTab": "Close SSH tab",
     "workspaceSshTerminal.sftpTab": "SFTP",
     "workspaceSftp.local": "Local Project",
@@ -3538,6 +3572,27 @@ export const translations: Record<Locale, Record<string, string>> = {
       "Trust record cleared. The next connection will confirm the host key again.",
     "settings.sshKnownHostResetEmpty": "No trust record was found for this host.",
     "settings.sshKnownHostResetFailed": "Failed to reset trust record: {error}",
+    "settings.sshReconnectPromptTitle": "Apply the updated SSH settings?",
+    "settings.sshReconnectPromptDesc":
+      "{count} active connection(s) to this host still use the previous settings. Reconnecting now interrupts running remote programs.",
+    "settings.sshReconnectPromptDetail":
+      'Choose "Keep current connections" to apply the update on the next connect or automatic reconnect.',
+    "settings.sshReconnectPromptConfirm": "Reconnect {count} session(s) now",
+    "settings.sshReconnectPromptKeep": "Keep current connections",
+    "settings.sshReconnectKbiTitle": "Settings saved",
+    "settings.sshReconnectKbiNotice":
+      "This host uses keyboard-interactive authentication, so the {count} established session(s) cannot reconnect automatically; reconnect them from the SSH tunnel panel.",
+    "settings.sshReconnectKbiGotIt": "Got it",
+    "settings.sshReconnectResultSuccess":
+      "Reconnected {count} session(s) with the updated settings.",
+    "settings.sshReconnectResultPartial": "Reconnected {reconnected}/{total} session(s).",
+    "settings.sshReconnectResultKbi":
+      "{count} session(s) require keyboard-interactive authentication; reconnect them from the SSH tunnel panel.",
+    "settings.sshReconnectResultHostKey":
+      "{count} session(s) need the new host fingerprint confirmed; reset the trust record or create a new connection.",
+    "settings.sshReconnectSaveFailed": "Settings save failed; no sessions were reconnected.",
+    "settings.sshDeleteActiveWarning":
+      "Deleting will disconnect {count} active SSH connection(s) to this host. This cannot be undone.",
     "settings.sshAdvancedSettings": "Advanced settings",
     "settings.sshAdvancedProxy": "Proxy",
     "settings.sshProxyType": "Proxy type",

@@ -199,7 +199,7 @@ export function SettingsPage(props: SettingsPageProps) {
       case "agents":
         return <AgentsSection settings={settings} setSettings={setSettings} />;
       case "ssh":
-        return <SshSection settings={settings} setSettings={setSettings} />;
+        return <SshSection settings={settings} setSettings={setSettings} saveState={saveState} />;
       case "remote":
         return <RemoteSection settings={settings} setSettings={setSettings} />;
       case "memory":

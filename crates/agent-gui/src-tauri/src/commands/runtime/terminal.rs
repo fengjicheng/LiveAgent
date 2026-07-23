@@ -85,6 +85,14 @@ pub fn terminal_cancel_ssh_prompt(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn terminal_ssh_reconnect(
+    registry: State<'_, Arc<TerminalSessionRegistry>>,
+    session_id: String,
+) -> Result<TerminalSessionRecord, String> {
+    registry.inner().clone().ssh_reconnect(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn terminal_ssh_latency(
     registry: State<'_, Arc<TerminalSessionRegistry>>,
     session_id: String,
