@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "snapshotDate": "2026-11-03",
-  "generatedAt": "2026-11-03T14:38:07.132Z",
+  "snapshotDate": "2026-11-09",
+  "generatedAt": "2026-11-09T22:40:48.018Z",
   "generator": {
-    "commit": "0c9eac532b51afa36408db1c8c9b862ec15a1eb8",
+    "commit": "514ec76d6b1fa2e4dfa70a167c2bae9a7897a3fd",
     "sources": [
       "https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json",
       "https://models.dev/api.json"
@@ -33,6 +33,26 @@
       },
       {
         "id": "claude-fable-5-1",
+        "contextWindow": 1000000,
+        "maxOutputToken": 128000,
+        "inputModalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "thinking": {
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "off": true
+        }
+      },
+      {
+        "id": "claude-fable-5-2",
         "contextWindow": 1000000,
         "maxOutputToken": 128000,
         "inputModalities": [
@@ -345,7 +365,7 @@
     "google": [
       {
         "id": "deep-research-max-preview-04-2026",
-        "contextWindow": 131072,
+        "contextWindow": 1048576,
         "maxOutputToken": 65536,
         "inputModalities": [
           "text",
@@ -361,7 +381,7 @@
       },
       {
         "id": "deep-research-preview-04-2026",
-        "contextWindow": 131072,
+        "contextWindow": 1048576,
         "maxOutputToken": 65536,
         "inputModalities": [
           "text",
@@ -3512,5 +3532,5 @@
     "alibaba": 40,
     "tencent": 4
   },
-  "sha256": "421c6efec512aaf5a3d817717b9a0b3bc40e80cbc0ab02bc596c0d27625ebc31"
+  "sha256": "5da7363a666d66deb8b8cc8f114580749dd9703ae5e257c4020c74b8c17c9dbb"
 }
